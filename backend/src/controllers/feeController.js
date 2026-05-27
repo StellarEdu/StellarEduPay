@@ -115,6 +115,26 @@ async function getFeeByClass(req, res, next) {
 async function deleteFeeStructure(req, res, next) {
   try {
     const { className } = req.params;
+    const force = req.query.force === 'true';
+
+    const Student = require('../models/studentModel');
+    const affectedCount = await Student.countDocuments({
+      schoolId: req.schoolId,
+      class: className,
+      feePaid: false,
+      deletedAt: null,
+    });
+
+    if (affectedCount > 0 && !force) {
+      const err = new Error(
+        `${affectedCount} student(s) in class ${className} have unpaid fees. Use ?force=true to deactivate anyway.`
+      );
+      err.code = 'CONFLICT';
+      err.status = 409;
+      err.details = { affectedCount };
+      return next(err);
+    }
+
     const fee = await FeeStructure.findOneAndUpdate(
       { schoolId: req.schoolId, className: req.params.className },
       { isActive: false },
@@ -125,6 +145,16 @@ async function deleteFeeStructure(req, res, next) {
       err.code = 'NOT_FOUND';
       return next(err);
     }
+
+    if (affectedCount > 0) {
+      const logger = require('../utils/logger');
+      logger.warn('Fee structure deactivated with active student obligations', {
+        schoolId: req.schoolId,
+        className,
+        affectedStudents: affectedCount,
+      });
+    }
+
     // Invalidate fee caches
     del(KEYS.feesAll(), KEYS.feeByClass(className));
 
