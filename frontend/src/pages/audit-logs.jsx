@@ -48,8 +48,16 @@ export default function AuditLogsPage() {
     if (actionFilter) params.action = actionFilter;
     if (targetTypeFilter) params.targetType = targetTypeFilter;
     if (resultFilter) params.result = resultFilter;
-    if (startDate) params.startDate = startDate;
-    if (endDate) params.endDate = endDate;
+    // Convert local date strings (YYYY-MM-DD) to ISO 8601 UTC so the backend
+    // receives the correct boundary regardless of the user's timezone.
+    // startDate → start of that local day (T00:00:00 local → UTC)
+    // endDate   → end of that local day (T23:59:59.999 local → UTC)
+    if (startDate) params.startDate = new Date(startDate).toISOString();
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      params.endDate = end.toISOString();
+    }
 
     getAuditLogs(params)
       .then(({ data }) => {
