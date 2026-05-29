@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { flagDispute } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 /**
  * DisputeForm — lets a parent raise a dispute for a confirmed payment.
@@ -48,7 +49,7 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
       if (err.response?.status === 409 && data?.disputeId) {
         setExistingDisputeId(data.disputeId);
       } else {
-        setServerError(data?.error || "Failed to submit dispute. Please try again.");
+        setServerError(getErrorMessage(data?.code, data?.error) || "Failed to submit dispute. Please try again.");
       }
     } finally {
       setSubmitting(false);

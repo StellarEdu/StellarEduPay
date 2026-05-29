@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getFeeStructures, deleteFeeStructure, getStudents } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 /** Modal that asks the user to confirm deletion of a fee structure. */
 function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel }) {
@@ -83,7 +84,7 @@ export default function FeesPage() {
       await deleteFeeStructure(fee.className);
       setFees((prev) => prev.filter((f) => f.className !== fee.className));
     } catch (err) {
-      setDeleteError(err.response?.data?.error || "Failed to delete fee structure.");
+      setDeleteError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to delete fee structure.");
     }
   }
 

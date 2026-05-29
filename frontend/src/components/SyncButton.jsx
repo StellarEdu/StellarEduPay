@@ -7,6 +7,7 @@
  */
 import { useState } from "react";
 import { syncPayments } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 export default function SyncButton({ onSyncComplete, lastSyncTime }) {
   const [showModal, setShowModal] = useState(false);
@@ -21,7 +22,7 @@ export default function SyncButton({ onSyncComplete, lastSyncTime }) {
       setShowModal(false);
       onSyncComplete?.(data);
     } catch (err) {
-      setError(err.response?.data?.error || "Sync failed. Please try again.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Sync failed. Please try again.");
     } finally {
       setSyncing(false);
     }

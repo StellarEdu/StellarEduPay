@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getAuditLogs } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 function formatTimestamp(isoString) {
   if (!isoString) return "N/A";
@@ -67,7 +68,7 @@ export default function AuditLogsPage() {
         setPage(data.page);
       })
       .catch((err) => {
-        setError(err.response?.data?.error || "Failed to load audit logs. Please try again.");
+        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to load audit logs. Please try again.");
         console.error(err);
       })
       .finally(() => setLoading(false));

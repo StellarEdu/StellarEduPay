@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { verifyPayment } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const STATUS_STYLE = {
   valid:     { color: "#166534", bg: "#dcfce7" },
@@ -22,7 +23,7 @@ export default function VerifyPayment() {
       const res = await verifyPayment(txHash.trim());
       setResult(res.data);
     } catch (err) {
-      setError(err.response?.data?.error || "Verification failed. Check the transaction hash and try again.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Verification failed. Check the transaction hash and try again.");
       errorRef.current?.focus();
     } finally {
       setLoading(false);

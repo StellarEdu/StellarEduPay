@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { generateStellarPaymentUri } from "../utils/stellarUri";
 import { getStudent, getPaymentInstructions, getStudentPayments } from "../services/api";
 import DisputeForm from "./DisputeForm";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const STATUS_STYLE = {
   valid:     { color: "#166534", bg: "#dcfce7" },
@@ -52,7 +53,7 @@ export default function PaymentForm() {
       setInstructions(instrRes.data);
       setPayments(payRes.data?.payments ?? payRes.data ?? []);
     } catch (err) {
-      setError(err.response?.data?.error || "Student not found. Please check the ID and try again.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Student not found. Please check the ID and try again.");
       errorRef.current?.focus();
     } finally {
       setLoading(false);

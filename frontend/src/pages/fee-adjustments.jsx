@@ -5,6 +5,7 @@ import {
   updateFeeAdjustmentRule,
   deleteFeeAdjustmentRule,
 } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const SCHOOL_ID = process.env.NEXT_PUBLIC_SCHOOL_ID || "SCH001";
 
@@ -75,7 +76,7 @@ export default function FeeAdjustments() {
       cancelEdit();
       load();
     } catch (err) {
-      setFormError(err.response?.data?.error || "Save failed.");
+      setFormError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Save failed.");
     } finally {
       setSaving(false);
     }
