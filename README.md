@@ -26,6 +26,7 @@ A decentralized school fee payment system built on the Stellar blockchain networ
 - [Testing](#-testing)
 - [Project Structure](#-project-structure)
 - [Documentation](#-documentation)
+- [Changelog](#-changelog)
 - [Monitoring & Observability](#-monitoring--observability)
 - [Contributing](#-contributing)
 - [License](#-license)
@@ -1058,6 +1059,12 @@ Comprehensive documentation is available in the [`docs/`](docs/) directory:
 | [`docs/api-spec.md`](docs/api-spec.md) | Complete API reference with request/response examples |
 | [`docs/stellar-integration.md`](docs/stellar-integration.md) | Stellar-specific details: memo field, assets, testnet setup |
 | [`docs/payment-limits.md`](docs/payment-limits.md) | Payment limits feature: configuration, security, troubleshooting |
+
+---
+
+## 📋 Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for a complete history of changes, breaking changes, and migration guides.
 
 ---
 

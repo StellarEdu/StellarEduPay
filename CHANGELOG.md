@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to StellarEduPay will be documented in this file.
+All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,35 +8,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Per-class breakdown (`byClass`) in `GET /api/reports` response and CSV export (#433)
-- CPU and memory resource limits for all Docker Compose services (`backend`, `frontend`, `mongo`) with environment-variable overrides (#434)
-- This `CHANGELOG.md` to track changes between versions (#435)
+
+- **Student Quota Enforcement (#680)**: Schools can now enforce per-school student registration limits via the `maxStudents` field. Quota is checked on both single student registration and bulk imports. Returns `403 STUDENT_QUOTA_EXCEEDED` when limit is reached.
+- **Asset Validation in Payment Instructions (#682)**: `GET /api/payments/instructions/:studentId` now validates the optional `?asset=` query parameter against the school's accepted assets. Returns `400 ASSET_NOT_ACCEPTED` with a list of supported assets if the requested asset is not accepted.
+- **Comprehensive Fee Adjustment Engine Tests (#681)**: Added extensive test coverage for `feeAdjustmentEngine` rule interactions, including sequential application of multiple rules, clamping of negative fees, and deterministic behavior verification.
+
+### Changed
+
+- **School Model**: Added `maxStudents` field (Number, default: 10000) to enforce student registration quotas per school.
+- **Student Registration**: `POST /api/students` now checks school quota before creating a student.
+- **Bulk Student Import**: `POST /api/students/bulk` now enforces quota with partial result support—rows exceeding the quota are marked as failed with `STUDENT_QUOTA_EXCEEDED` code.
 
 ### Fixed
-- Moved `nodemon` from `dependencies` to `devDependencies` in `backend/package.json` to prevent it from being installed in production Docker images (#436)
-- Added `effectiveDate` support to `FeeStructure`, updated fee selection logic and scheduler to apply future fee structures automatically; `GET /api/fees` returns current and pending structures with `isPending` flag. (Closes #927)
 
-## [1.0.0] - 2026-04-21
+- **Payment Instructions Clarity**: Parents requesting payment instructions for unsupported assets now receive a clear error message with a list of accepted assets, preventing confusion when payments are rejected.
 
-### Added
-- Blockchain-based school fee payment system built on the Stellar network
-- Automatic payment reconciliation via Stellar transaction memo field (student ID)
-- Multi-asset support: XLM (native) and USDC (stablecoin)
-- Fee validation with `valid`, `overpaid`, `underpaid`, and `unknown` statuses
-- Configurable payment limits (`MIN_PAYMENT_AMOUNT`, `MAX_PAYMENT_AMOUNT`)
-- Background polling for new Stellar transactions (`transactionService`)
-- Automatic retry mechanism for failed verifications (`retryService`)
-- RESTful API for students, fees, payments, and reports
-- Payment idempotency to prevent duplicate transaction recording
-- Concurrent payment processor with queue-depth backpressure
-- TTL index on payment intents to expire stale records
-- Docker Compose setup with MongoDB authentication and automated backups
-- Comprehensive Jest test suite (unit + integration, no real network required)
-- QR code payment support with Stellar URI scheme
-- Dispute management endpoints
-- Soft-delete support for student records
-- Request logging middleware
-- CSP and CORS security headers via Helmet
-- SSE (Server-Sent Events) endpoint for real-time payment notifications
-- Migration runner for database schema changes
-- Testnet banner warning when running against Stellar testnet
+### Documentation
+
+- Added `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com) format.
+- Updated `README.md` to link to `CHANGELOG.md`.
+
+---
+
+## [1.0.0] - 2026-05-29
+
+### Initial Release
+
+- Decentralized school fee payment system built on Stellar blockchain
+- Multi-school support with isolated wallets and records
+- Automatic payment reconciliation via transaction memos
+- Support for XLM and USDC payments
+- Fee validation (exact, overpaid, underpaid detection)
+- Payment history and audit trails
+- Background polling for blockchain sync
+- Retry mechanism for failed verifications
+- RESTful API with comprehensive endpoints
+- Next.js frontend for payment submission and dashboard
+- MongoDB for persistent storage
+- Docker Compose for containerized deployment
+- Comprehensive test coverage with Jest
+
+---
+
+## Known Issues
+
+- Rate limit persistence requires Redis configuration; without it, counters reset on server restart
+- MongoDB replica set required for multi-document transactions (not supported on standalone instances)
+- Stellar Horizon API rate limits may cause temporary sync delays during high-volume periods
+
+---
+
+## Migration Guide
+
+### Upgrading to Unreleased
+
+#### Breaking Changes
+
+None in this release.
+
+#### Non-Breaking Changes
+
+1. **Student Quota**: If you have schools with more than 10,000 students, update the `maxStudents` field in the School document to reflect your actual limit.
+2. **Asset Validation**: Clients calling `GET /api/payments/instructions/:studentId?asset=USDC` will now receive a `400` error if USDC is not in the school's accepted assets. Update client code to handle this error gracefully.
+
+#### Migration Steps
+
+1. Update backend to latest version
+2. Run database migrations (if any)
+3. Restart backend services
+4. Update frontend to handle new error codes: `STUDENT_QUOTA_EXCEEDED`, `ASSET_NOT_ACCEPTED`
+
+---
+
+## Contributing
+
+When submitting a pull request that modifies API routes, models, or controllers, please:
+
+1. Add an entry to the `[Unreleased]` section of this `CHANGELOG.md`
+2. Use the format: `- **Feature Name (#issue-number)**: Description`
+3. Categorize under `Added`, `Changed`, `Fixed`, or `Deprecated`
+4. Include any breaking changes in a separate section
+
+CI will verify that `CHANGELOG.md` has been updated for PRs modifying:
+- `backend/src/routes/**`
+- `backend/src/models/**`
+- `backend/src/controllers/**`
+
+---
+
+## Release Process
+
+1. Update version in `package.json` following Semantic Versioning
+2. Move `[Unreleased]` section to a new version section with date
+3. Create a git tag: `git tag v1.2.3`
+4. Push tag: `git push origin v1.2.3`
+5. Create GitHub release with changelog excerpt
+
+---
+
+For more information, see [Keep a Changelog](https://keepachangelog.com) and [Semantic Versioning](https://semver.org).
