@@ -217,6 +217,52 @@ export default function StudentForm({ student, onClose, onSave }) {
             />
           </div>
 
+          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              style={{
+                padding: "0.75rem 1.5rem",
+                border: "1px solid var(--border)",
+                borderRadius: "6px",
+                background: "var(--bg)",
+                color: "var(--text)",
+                cursor: "pointer",
+                fontSize: "0.9rem",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                padding: "0.75rem 1.5rem",
+                border: "none",
+                borderRadius: "6px",
+                background: "var(--accent)",
+                color: "white",
+                cursor: loading ? "default" : "pointer",
+                fontSize: "0.9rem",
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading ? "Saving…" : "Save Changes"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+                color: "var(--text)",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
           <div style={{ marginBottom: "1.25rem" }}>
             <label style={{
               display: "block",
