@@ -15,6 +15,7 @@
 
 const Student = require('../models/studentModel');
 const School  = require('../models/schoolModel');
+const Payment = require('../models/paymentModel');
 const { sendFeeReminder, verifySmtp } = require('./notificationService');
 const config = require('../config');
 const logger = require('../utils/logger').child('ReminderService');
@@ -121,13 +122,27 @@ async function processReminders() {
       summary.eligible++;
 
       try {
+        // Fresh balance check — skip if student has actually paid in full
+        const paymentAgg = await Payment.aggregate([
+          { $match: { schoolId: school.schoolId, studentId: student.studentId, deletedAt: null } },
+          { $group: { _id: null, totalPaid: { $sum: '$amount' } } },
+        ]);
+        const totalPaid = paymentAgg.length ? paymentAgg[0].totalPaid : 0;
+        const remainingBalance = Math.max(0, (student.feeAmount || 0) - totalPaid);
+
+        if (remainingBalance <= 0) {
+          summary.skipped++;
+          logger.debug('Skipping reminder — already paid', { studentId: student.studentId, schoolId: school.schoolId });
+          continue;
+        }
+
         const result = await sendFeeReminder({
           to:               student.parentEmail,
           studentName:      student.name,
           studentId:        student.studentId,
           className:        student.class,
           feeAmount:        student.feeAmount,
-          remainingBalance: student.remainingBalance,
+          remainingBalance,
           schoolName:       school.name,
           reminderCount:    (student.reminderCount || 0) + 1,
         });

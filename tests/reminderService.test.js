@@ -21,6 +21,7 @@ const mockSendMail = jest.fn();
 const mockFindByIdAndUpdate = jest.fn();
 const mockStudentFind = jest.fn();
 const mockSchoolFind = jest.fn();
+const mockPaymentAggregate = jest.fn();
 
 jest.mock('nodemailer', () => ({
   createTransport: jest.fn(() => ({
@@ -36,6 +37,10 @@ jest.mock('../backend/src/models/studentModel', () => ({
 
 jest.mock('../backend/src/models/schoolModel', () => ({
   find: mockSchoolFind,
+}));
+
+jest.mock('../backend/src/models/paymentModel', () => ({
+  aggregate: mockPaymentAggregate,
 }));
 
 jest.mock('../backend/src/utils/logger', () => {
@@ -75,6 +80,7 @@ describe('reminderService — SMTP verification', () => {
     mockFindByIdAndUpdate.mockReset();
     mockStudentFind.mockReset();
     mockSchoolFind.mockReset();
+    mockPaymentAggregate.mockReset();
   });
 
   test('aborts run and does not mutate students when SMTP verify fails', async () => {
@@ -94,6 +100,8 @@ describe('reminderService — SMTP verification', () => {
     mockVerify.mockResolvedValue(true);
     mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
     mockStudentFind.mockResolvedValue([makeStudent()]);
+    // Student has unpaid balance
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 0 }]);
     mockSendMail.mockRejectedValue(new Error('connection refused'));
 
     const { processReminders } = require('../backend/src/services/reminderService');
@@ -108,6 +116,8 @@ describe('reminderService — SMTP verification', () => {
     mockVerify.mockResolvedValue(true);
     mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
     mockStudentFind.mockResolvedValue([makeStudent()]);
+    // Student has unpaid balance
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 0 }]);
     mockSendMail.mockResolvedValue({ messageId: 'msg-123' });
     mockFindByIdAndUpdate.mockResolvedValue({});
 
@@ -136,5 +146,51 @@ describe('getReminderStatus', () => {
     expect(status).toHaveProperty('schedulerRunning');
     expect(status).toHaveProperty('lastRunAt');
     expect(status).toHaveProperty('lastRunSummary');
+  });
+});
+
+// ── Issue #625: skip reminders for already-paid students ──────────────────────
+
+describe('reminderService — balance check (issue #625)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    mockVerify.mockReset();
+    mockSendMail.mockReset();
+    mockFindByIdAndUpdate.mockReset();
+    mockStudentFind.mockReset();
+    mockSchoolFind.mockReset();
+    mockPaymentAggregate.mockReset();
+  });
+
+  test('skips reminder when feePaid is false but remainingBalance === 0', async () => {
+    mockVerify.mockResolvedValue(true);
+    mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
+    // feePaid: false but totalPaid equals feeAmount
+    mockStudentFind.mockResolvedValue([makeStudent({ feeAmount: 250, feePaid: false })]);
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 250 }]);
+
+    const { processReminders } = require('../backend/src/services/reminderService');
+    const summary = await processReminders();
+
+    expect(summary.sent).toBe(0);
+    expect(summary.skipped).toBeGreaterThanOrEqual(1);
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('sends reminder when feePaid is false and remainingBalance > 0', async () => {
+    mockVerify.mockResolvedValue(true);
+    mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
+    mockStudentFind.mockResolvedValue([makeStudent({ feeAmount: 250, feePaid: false })]);
+    // Only partial payment made
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 100 }]);
+    mockSendMail.mockResolvedValue({ messageId: 'msg-456' });
+    mockFindByIdAndUpdate.mockResolvedValue({});
+
+    const { processReminders } = require('../backend/src/services/reminderService');
+    const summary = await processReminders();
+
+    expect(summary.sent).toBe(1);
+    expect(mockSendMail).toHaveBeenCalled();
   });
 });

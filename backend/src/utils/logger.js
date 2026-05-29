@@ -5,7 +5,43 @@
  *
  * Provides consistent logging with levels, timestamps, and context.
  * Supports runtime log level changes via setLevel() — no server restart needed.
+ *
+ * File transports use DailyRotateFile (winston-daily-rotate-file):
+ *   - logs/combined-%DATE%.log  — all levels
+ *   - logs/error-%DATE%.log     — errors only
+ * Rotation is controlled by LOG_MAX_SIZE (default: 100m) and
+ * LOG_MAX_FILES (default: 14d) environment variables.
  */
+
+const winston = require('winston');
+require('winston-daily-rotate-file');
+
+const _fileTransports = [
+  new winston.transports.DailyRotateFile({
+    filename:    'logs/combined-%DATE%.log',
+    datePattern: 'YYYY-MM-DD',
+    maxSize:     process.env.LOG_MAX_SIZE  || '100m',
+    maxFiles:    process.env.LOG_MAX_FILES || '14d',
+  }),
+  new winston.transports.DailyRotateFile({
+    filename:    'logs/error-%DATE%.log',
+    datePattern: 'YYYY-MM-DD',
+    level:       'error',
+    maxSize:     process.env.LOG_MAX_SIZE  || '100m',
+    maxFiles:    process.env.LOG_MAX_FILES || '14d',
+  }),
+];
+
+// Winston instance used solely for file rotation; console output is handled
+// by the existing structured logger below so the log format stays unchanged.
+const _winstonLogger = winston.createLogger({
+  level: 'debug',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json(),
+  ),
+  transports: _fileTransports,
+});
 
 const LOG_LEVELS = {
   ERROR: 0,
@@ -68,25 +104,33 @@ function formatMessage(level, message, ...args) {
 const logger = {
   error(message, ...args) {
     if (shouldLog('ERROR')) {
-      console.error(JSON.stringify(formatMessage('ERROR', message, ...args)));
+      const entry = formatMessage('ERROR', message, ...args);
+      console.error(JSON.stringify(entry));
+      _winstonLogger.error(message, entry);
     }
   },
 
   warn(message, ...args) {
     if (shouldLog('WARN')) {
-      console.warn(JSON.stringify(formatMessage('WARN', message, ...args)));
+      const entry = formatMessage('WARN', message, ...args);
+      console.warn(JSON.stringify(entry));
+      _winstonLogger.warn(message, entry);
     }
   },
 
   info(message, ...args) {
     if (shouldLog('INFO')) {
-      console.log(JSON.stringify(formatMessage('INFO', message, ...args)));
+      const entry = formatMessage('INFO', message, ...args);
+      console.log(JSON.stringify(entry));
+      _winstonLogger.info(message, entry);
     }
   },
 
   debug(message, ...args) {
     if (shouldLog('DEBUG')) {
-      console.log(JSON.stringify(formatMessage('DEBUG', message, ...args)));
+      const entry = formatMessage('DEBUG', message, ...args);
+      console.log(JSON.stringify(entry));
+      _winstonLogger.debug(message, entry);
     }
   },
 
