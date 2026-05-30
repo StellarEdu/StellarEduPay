@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDisputes, resolveDispute } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const STATUS_COLORS = {
   open:         { color: "#166534", bg: "#dcfce7" },
@@ -37,7 +38,7 @@ function ResolveForm({ dispute, onResolved }) {
       const res = await resolveDispute(dispute._id, { resolutionNote: note.trim(), status });
       onResolved(res.data);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to resolve dispute.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to resolve dispute.");
     } finally {
       setSubmitting(false);
     }
@@ -102,7 +103,7 @@ export default function DisputesPage() {
         setDisputes(res.data.disputes || []);
         setTotalPages(res.data.pagination?.totalPages || 1);
       } catch (err) {
-        setError(err.response?.data?.error || "Failed to load disputes.");
+        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to load disputes.");
       } finally {
         setLoading(false);
       }
