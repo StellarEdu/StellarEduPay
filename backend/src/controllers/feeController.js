@@ -75,24 +75,29 @@ async function createFeeStructure(req, res, next) {
 async function getAllFeeStructures(req, res, next) {
   try {
     const includeDeleted = String(req.query.includeDeleted).toLowerCase() === 'true';
+    // Authenticated admins see all fee structures (including inactive ones).
+    // Unauthenticated callers only see active fee structures.
+    const isAdmin = Boolean(req.admin);
     const cacheKey = KEYS.feesAll();
 
-    if (!includeDeleted) {
+    if (!includeDeleted && !isAdmin) {
       const cached = get(cacheKey);
       if (cached !== undefined) return res.json(cached);
     }
 
-    const query = FeeStructure.find({
+    const filter = {
       schoolId: req.schoolId,
-      isActive: true,
+      ...(isAdmin ? {} : { isActive: true }),
       ...(includeDeleted ? {} : { deletedAt: null }),
-    });
+    };
+
+    const query = FeeStructure.find(filter);
 
     if (includeDeleted) query.includeDeleted();
 
     const fees = await query.sort({ className: 1 });
 
-    if (!includeDeleted) set(cacheKey, fees, TTL.FEES);
+    if (!includeDeleted && !isAdmin) set(cacheKey, fees, TTL.FEES);
     res.json(fees);
   } catch (err) {
     next(err);
