@@ -150,7 +150,11 @@ const logger = {
   getLevel,
 };
 
+const { redactConfig, SENSITIVE_KEYS } = require('./redactConfig');
+
 module.exports = logger;
 module.exports.logger = logger;
 module.exports.setLevel = setLevel;
 module.exports.getLevel = getLevel;
+module.exports.redactConfig = redactConfig;
+module.exports.SENSITIVE_KEYS = SENSITIVE_KEYS;
