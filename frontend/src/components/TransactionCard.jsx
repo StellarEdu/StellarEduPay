@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { flagDispute } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const EXPLORER_BASE =
   process.env.NEXT_PUBLIC_STELLAR_EXPLORER_URL ||
@@ -73,7 +74,7 @@ export default function TransactionCard({
       setRaisedBy("");
       setReason("");
     } catch (err) {
-      setFormError(err.response?.data?.error || "Failed to submit dispute.");
+      setFormError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to submit dispute.");
     } finally {
       setSubmitting(false);
     }

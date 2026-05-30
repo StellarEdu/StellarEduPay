@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getReport } from "../services/api";
+import { getErrorMessage } from "../utils/errorMessages";
 
 export default function ReportDownload() {
   const [startDate, setStartDate] = useState("");
@@ -18,7 +19,7 @@ export default function ReportDownload() {
       const { data } = await getReport(params);
       setReport(data);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to generate report.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to generate report.");
     } finally {
       setLoading(false);
     }

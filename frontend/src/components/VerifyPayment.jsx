@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { verifyPayment } from "../services/api";
 import { parseStellarError } from "../utils/stellarErrors";
+import { getErrorMessage } from "../utils/errorMessages";
 
 const STATUS_STYLE = {
   valid:     { color: "#166534", bg: "#dcfce7" },
@@ -29,7 +30,7 @@ export default function VerifyPayment() {
         setError(stellar.message);
         setStellarStatusUrl(stellar.stellarStatusUrl);
       } else {
-        setError(err.response?.data?.error || "Verification failed. Check the transaction hash and try again.");
+        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Verification failed. Check the transaction hash and try again.");
         setStellarStatusUrl(null);
       }
       errorRef.current?.focus();
