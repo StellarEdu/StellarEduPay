@@ -4,7 +4,7 @@ import { generateStellarPaymentUri } from "../utils/stellarUri";
 import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
-import { IconCopy, IconCheck, IconAlertTriangle, IconSearch } from "./Icons";
+import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
 
 const STATUS_BADGE = {
   valid:     { cls: "badge badge-success", label: "Valid" },
@@ -59,6 +59,7 @@ export default function PaymentForm() {
   const [disputedTxs, setDisputedTxs]         = useState(new Set());
   const errorRef  = useRef(null);
   const debounceRef = useRef(null);
+  const qrRef = useRef(null);
 
   function handleStudentIdChange(e) {
     const value = e.target.value;
@@ -106,6 +107,37 @@ export default function PaymentForm() {
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopied(key);
     setTimeout(() => setCopied(null), 2000);
+  }
+
+  function downloadQrPng() {
+    const svg = qrRef.current?.querySelector("svg");
+    if (!svg) return;
+
+    const serializer = new XMLSerializer();
+    const svgText = serializer.serializeToString(svg);
+    const svgBlob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+    const image = new Image();
+
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      const padding = 24;
+      canvas.width = image.width + padding * 2;
+      canvas.height = image.height + padding * 2;
+
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, padding, padding);
+
+      const link = document.createElement("a");
+      link.download = `stellar-payment-${studentId || instructions?.memo || "qr"}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
+    image.src = url;
   }
 
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK === "testnet";
@@ -260,24 +292,38 @@ export default function PaymentForm() {
                 const nonNative = instructions.acceptedAssets?.find(
                   a => a.code !== "XLM" && a.type !== "native"
                 );
+                const paymentUri = generateStellarPaymentUri({
+                  destination: instructions.walletAddress,
+                  amount: instructions.feeAmount ?? student.feeAmount ?? 0,
+                  memo: instructions.memo,
+                  assetCode: nonNative?.code,
+                  assetIssuer: nonNative?.issuer,
+                });
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
                     <span className="pf-section-label" style={{ display: "block", marginBottom: "0.75rem" }}>
                       Scan with Stellar Wallet
                     </span>
-                    <div style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)" }}>
+                    <div ref={qrRef} style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)" }}>
                       <QRCodeSVG
-                        value={generateStellarPaymentUri({
-                          destination: instructions.walletAddress,
-                          amount: instructions.feeAmount ?? student.feeAmount ?? 0,
-                          memo: instructions.memo,
-                          assetCode: nonNative?.code,
-                          assetIssuer: nonNative?.issuer,
-                        })}
+                        value={paymentUri}
                         size={148}
                         role="img"
                         aria-label={`QR code for payment to ${instructions.walletAddress}`}
                       />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "center", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+                      <CopyButton text={paymentUri} copyKey="payment-uri" copied={copied} onCopy={copy} />
+                      <button
+                        type="button"
+                        onClick={downloadQrPng}
+                        className="btn btn-sm btn-ghost"
+                        aria-label="Download QR as PNG"
+                        style={{ gap: "0.3rem" }}
+                      >
+                        <IconDownload size={13} />
+                        Download QR
+                      </button>
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       Compatible with Lobstr, Solar, XBULL and any SEP-0007 wallet.

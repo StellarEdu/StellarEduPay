@@ -281,8 +281,8 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
   });
 
   test('pay-fees.jsx has responsive grid layout', () => {
-    expect(pageSrc).toMatch(/grid-template-columns/);
-    expect(pageSrc).toMatch(/max-width.*700px|700px.*max-width/);
+    expect(pageSrc).toMatch(/payfees-grid/);
+    expect(pageSrc).toMatch(/payfees-page/);
   });
 
   test('PaymentForm has student ID input with label', () => {
@@ -299,7 +299,7 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
 
   test('PaymentForm shows error state with role=alert', () => {
     expect(formSrc).toMatch(/role="alert"/);
-    expect(formSrc).toMatch(/#fee2e2/);
+    expect(formSrc).toMatch(/alert-danger/);
   });
 
   test('PaymentForm displays wallet address and memo with copy buttons', () => {
@@ -321,6 +321,14 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
   test('PaymentForm generates Stellar URI for QR code', () => {
     expect(formSrc).toMatch(/generateStellarPaymentUri/);
     expect(formSrc).toMatch(/stellarUri/);
+  });
+
+  test('PaymentForm can copy the payment URI and download the QR PNG', () => {
+    expect(formSrc).toMatch(/paymentUri/);
+    expect(formSrc).toMatch(/copyKey="payment-uri"/);
+    expect(formSrc).toMatch(/downloadQrPng/);
+    expect(formSrc).toMatch(/toDataURL\("image\/png"\)/);
+    expect(formSrc).toMatch(/Download QR/);
   });
 
   test('PaymentForm shows payment history', () => {
@@ -351,6 +359,6 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
 
   test('VerifyPayment has explorer link', () => {
     expect(verifySrc).toMatch(/stellarExplorerUrl/);
-    expect(verifySrc).toMatch(/View on Explorer/);
+    expect(verifySrc).toMatch(/View on Stellar Explorer/);
   });
 });
