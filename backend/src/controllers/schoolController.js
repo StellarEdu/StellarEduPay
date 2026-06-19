@@ -6,6 +6,7 @@ const School = require('../models/schoolModel');
 const { logAudit } = require('../services/auditService');
 const { verifyStellarAccountFunding } = require('../services/stellarAccountVerificationService');
 const { validateWebhookUrl } = require('../utils/validateWebhookUrl');
+const schoolCache = require('../services/schoolCacheInvalidator');
 
 function isValidTimezone(tz) {
   try {
@@ -224,6 +225,10 @@ async function updateSchool(req, res, next) {
       { new: true, runValidators: true }
     );
 
+    // Drop the stale lean copy on every replica so the rotated address /
+    // changed config is served within seconds, not after the 5-minute TTL.
+    schoolCache.invalidate(school);
+
     // Audit log — mark stellarAddress changes as high-severity
     if (req.auditContext) {
       await logAudit({
@@ -272,6 +277,9 @@ async function deactivateSchool(req, res, next) {
       e.code = 'NOT_FOUND';
       return next(e);
     }
+
+    // Drop the cached copy everywhere so deactivation blocks requests at once.
+    schoolCache.invalidate(school);
 
     // Audit log
     if (req.auditContext) {
@@ -322,6 +330,7 @@ async function deactivateSchoolEndpoint(req, res, next) {
       });
     }
 
+    schoolCache.invalidate(school);
     res.json({ message: `School "${school.name}" deactivated`, schoolId: school.schoolId, isActive: false });
   } catch (err) {
     next(err);
@@ -356,6 +365,7 @@ async function activateSchool(req, res, next) {
       });
     }
 
+    schoolCache.invalidate(school);
     res.json({ message: `School "${school.name}" activated`, schoolId: school.schoolId, isActive: true });
   } catch (err) {
     next(err);
@@ -402,6 +412,7 @@ async function registerWebhook(req, res, next) {
       });
     }
 
+    schoolCache.invalidate(school);
     res.json({ webhookUrl: school.webhookUrl });
   } catch (err) {
     next(err);
