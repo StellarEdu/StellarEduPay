@@ -22,11 +22,10 @@ const logger = require('../utils/logger').child('PaymentSavedSubscribers');
 // ── Webhook subscriber ────────────────────────────────────────────────────────
 
 async function onPaymentSavedWebhook(payment) {
-  const webhookUrl = process.env.PAYMENT_WEBHOOK_URL;
-  if (!webhookUrl) return;
-
   try {
     const school = await School.findOne({ schoolId: payment.schoolId }).lean();
+    const webhookUrl = (school && school.webhookUrl) || process.env.PAYMENT_WEBHOOK_URL;
+    if (!webhookUrl) return;
     const secret = school ? school.webhookSecret : null;
     await notifyPaymentConfirmed(webhookUrl, payment, null, secret);
   } catch (err) {

@@ -395,8 +395,21 @@ async function notifyPaymentSuspicious(webhookUrl, payment, reason, secret = nul
   }, secret);
 }
 
+/**
+ * Legacy fire-and-forget helper used by concurrentPaymentProcessor.
+ * Passes data as-is under the payment.confirmed event.
+ *
+ * @param {string} url
+ * @param {object} data
+ * @param {string|null} [secret]
+ */
+function sendPaymentWebhook(url, data, secret = null) {
+  return fireWebhook(url, 'payment.confirmed', data, secret);
+}
+
 module.exports = {
   fireWebhook,
+  sendPaymentWebhook,
   notifyPaymentConfirmed,
   notifyPaymentPending,
   notifyPaymentFailed,
