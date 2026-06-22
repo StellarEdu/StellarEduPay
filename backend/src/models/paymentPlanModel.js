@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 const installmentSchema = new mongoose.Schema(
   {
@@ -57,5 +58,7 @@ paymentPlanSchema.virtual('nextDueDate').get(function () {
   const unpaid = this.installments.find(inst => !inst.paid);
   return unpaid ? unpaid.dueDate : null;
 });
+
+paymentPlanSchema.plugin(tenantScope, { modelName: 'PaymentPlan' });
 
 module.exports = mongoose.model('PaymentPlan', paymentPlanSchema);

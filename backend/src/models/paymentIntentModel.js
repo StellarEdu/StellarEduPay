@@ -1,6 +1,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const tenantScope = require('../plugins/tenantScope');
 
 const paymentIntentSchema = new mongoose.Schema(
   {
@@ -35,5 +36,7 @@ paymentIntentSchema.index(
   { createdAt: 1 },
   { expireAfterSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS || '86400', 10) }
 );
+
+paymentIntentSchema.plugin(tenantScope, { modelName: 'PaymentIntent' });
 
 module.exports = mongoose.model("PaymentIntent", paymentIntentSchema);

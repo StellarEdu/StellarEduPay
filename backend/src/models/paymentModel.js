@@ -3,6 +3,7 @@
 const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
 const memoEncryption = require('../utils/memoEncryption');
+const tenantScope = require('../plugins/tenantScope');
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -58,6 +59,7 @@ const paymentSchema = new mongoose.Schema(
 );
 
 softDelete(paymentSchema);
+paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 
 // Indexes
 // Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).

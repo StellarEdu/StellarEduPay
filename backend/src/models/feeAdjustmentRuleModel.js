@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 const feeAdjustmentRuleSchema = new mongoose.Schema({
   schoolId: { type: String, required: true, index: true },
@@ -24,5 +25,7 @@ const feeAdjustmentRuleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 feeAdjustmentRuleSchema.index({ schoolId: 1, name: 1 }, { unique: true });
+
+feeAdjustmentRuleSchema.plugin(tenantScope, { modelName: 'FeeAdjustmentRule' });
 
 module.exports = mongoose.model('FeeAdjustmentRule', feeAdjustmentRuleSchema);

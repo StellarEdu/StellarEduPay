@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 /**
  * Dispute model — tracks disputed payments and their resolution lifecycle.
@@ -53,5 +54,7 @@ disputeSchema.index(
     partialFilterExpression: { status: { $in: ['open', 'under_review'] } },
   }
 );
+
+disputeSchema.plugin(tenantScope, { modelName: 'Dispute' });
 
 module.exports = mongoose.model('Dispute', disputeSchema);

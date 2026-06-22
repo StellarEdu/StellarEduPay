@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
+const tenantScope = require('../plugins/tenantScope');
 
 const feeCategorySchema = new mongoose.Schema(
   {
@@ -61,6 +62,7 @@ const studentSchema = new mongoose.Schema(
 
 // Apply soft delete utility
 softDelete(studentSchema);
+studentSchema.plugin(tenantScope, { modelName: 'Student' });
 
 // isOverdue: true when a deadline is set, the fee is unpaid, and the deadline has passed
 studentSchema.virtual('isOverdue').get(function () {
