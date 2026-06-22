@@ -21,6 +21,7 @@ const Student = require('../models/studentModel');
 const PaymentIntent = require('../models/paymentIntentModel');
 const PendingVerification = require('../models/pendingVerificationModel');
 const logger = require('../utils/logger');
+const { resolveCorrelationId } = require('../utils/correlationId');
 
 const PERMANENT_FAIL_CODES = [
   'TX_FAILED', 'MISSING_MEMO', 'INVALID_DESTINATION',
@@ -32,6 +33,7 @@ const PERMANENT_FAIL_CODES = [
  */
 async function processTransactionJob(job) {
   const { txHash, schoolId, school } = job.data;
+  const correlationId = resolveCorrelationId(job.data.correlationId, txHash);
 
   // Mark as processing in MongoDB so restart recovery knows it was in-flight
   await PendingVerification.findOneAndUpdate(
@@ -42,7 +44,7 @@ async function processTransactionJob(job) {
   // Skip if already recorded
   const existing = await Payment.findOne({ txHash, schoolId, deletedAt: null });
   if (existing) {
-    logger.info('[TxQueueService] Transaction already processed, skipping', { txHash });
+    logger.info('[TxQueueService] Transaction already processed, skipping', { txHash, correlationId });
     await markResolved(txHash);
     return { skipped: true, txHash };
   }
@@ -72,6 +74,7 @@ async function processTransactionJob(job) {
     schoolId,
     studentId:           result.studentId || result.memo,
     txHash:              result.hash,
+    correlationId,
     amount:              result.amount,
     feeAmount:           result.feeAmount,
     feeValidationStatus: result.feeValidation.status,
@@ -89,14 +92,15 @@ async function processTransactionJob(job) {
   // Mark durable record resolved
   await markResolved(txHash);
 
-  logger.info('[TxQueueService] Transaction processed successfully', { txHash });
-  return { success: true, txHash, studentId: result.studentId || result.memo };
+  logger.info('[TxQueueService] Transaction processed successfully', { txHash, correlationId });
+  return { success: true, txHash, correlationId, studentId: result.studentId || result.memo };
 }
 
 /**
  * Processor wrapper: permanent errors are not retried; mark dead in MongoDB.
  */
 async function jobProcessor(job) {
+  const correlationId = resolveCorrelationId(job.data.correlationId, job.data.txHash);
   try {
     return await processTransactionJob(job);
   } catch (err) {
@@ -106,6 +110,7 @@ async function jobProcessor(job) {
         schoolId:  job.data.schoolId,
         studentId: 'unknown',
         txHash:    job.data.txHash,
+        correlationId,
         amount:    0,
         status:    'FAILED',
         feeValidationStatus: 'unknown',

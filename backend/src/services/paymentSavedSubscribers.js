@@ -30,7 +30,7 @@ async function onPaymentSavedWebhook(payment) {
     const secret = school ? school.webhookSecret : null;
     await notifyPaymentConfirmed(webhookUrl, payment, null, secret);
   } catch (err) {
-    logger.error('Webhook subscriber failed', { txHash: payment.txHash, error: err.message });
+    logger.error('Webhook subscriber failed', { txHash: payment.txHash, correlationId: payment.correlationId, error: err.message });
   }
 }
 
@@ -40,7 +40,7 @@ async function onPaymentSavedReceipt(payment) {
   try {
     await createReceipt(payment);
   } catch (err) {
-    logger.error('Receipt subscriber failed', { txHash: payment.txHash, error: err.message });
+    logger.error('Receipt subscriber failed', { txHash: payment.txHash, correlationId: payment.correlationId, error: err.message });
   }
 }
 
@@ -63,6 +63,7 @@ async function onPaymentSavedCancelReminder(payment) {
   } catch (err) {
     logger.error('Reminder-cancellation subscriber failed', {
       txHash: payment.txHash,
+      correlationId: payment.correlationId,
       error: err.message,
     });
   }

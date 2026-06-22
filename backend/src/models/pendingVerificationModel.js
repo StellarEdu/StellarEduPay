@@ -13,6 +13,8 @@ const pendingVerificationSchema = new mongoose.Schema(
     schoolId: { type: String, required: true, index: true },
     txHash: { type: String, required: true, unique: true, index: true },
     studentId: { type: String, default: null },
+    // Correlation ID for tracing this job across the async pipeline.
+    correlationId: { type: String, default: null, index: true },
     attempts: { type: Number, default: 0 },
     lastAttemptAt: { type: Date, default: null },
     nextRetryAt: { type: Date, default: Date.now, index: true },

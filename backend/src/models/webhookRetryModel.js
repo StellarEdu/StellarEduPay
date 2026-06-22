@@ -18,6 +18,9 @@ const webhookRetrySchema = new mongoose.Schema(
     // Delivery tracking for deduplication
     deliveryId: { type: String, required: true, index: true, unique: true },
 
+    // Correlation ID for tracing this delivery back to its originating payment.
+    correlationId: { type: String, default: null, index: true },
+
     // Retry tracking
     status: {
       type: String,

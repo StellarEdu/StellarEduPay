@@ -62,11 +62,13 @@ function getBackoffDelay(attemptNumber) {
  * @returns {Promise<{success: boolean, statusCode?: number, error?: string, queued?: boolean, deliveryId: string}>}
  */
 async function fireWebhook(url, event, payload, secret = null, deliveryId = null) {
+  const correlationId = payload?.correlationId || null;
+
   if (!url) return { success: false, error: 'No webhook URL configured', deliveryId: null };
 
   const urlValidation = await validateWebhookUrl(url);
   if (!urlValidation.valid) {
-    logger.error('Webhook delivery blocked: URL failed SSRF validation', { url, reason: urlValidation.reason });
+    logger.error('Webhook delivery blocked: URL failed SSRF validation', { url, correlationId, reason: urlValidation.reason });
     return { success: false, error: 'Invalid or disallowed webhook URL', deliveryId: null };
   }
 
@@ -87,6 +89,10 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
     'X-StellarEduPay-Delivery-ID': id,
   };
 
+  if (correlationId) {
+    headers['X-StellarEduPay-Correlation-Id'] = correlationId;
+  }
+
   // Sign the payload when a secret is provided
   if (secret) {
     headers['X-StellarEduPay-Signature'] = `sha256=${generateSignature(body, secret)}`;
@@ -105,6 +111,7 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
       url,
       event,
       deliveryId: id,
+      correlationId,
       statusCode: response.status,
       durationMs: duration,
     });
@@ -122,6 +129,7 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
       url,
       event,
       deliveryId: id,
+      correlationId,
       error: errorMessage,
       durationMs: duration,
     });
@@ -131,7 +139,7 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
       await queueWebhookRetry(url, event, payload, errorMessage, secret, id);
       return { success: false, error: errorMessage, queued: true, deliveryId: id };
     } catch (queueErr) {
-      logger.error(`Failed to queue webhook retry`, { url, event, error: queueErr.message });
+      logger.error(`Failed to queue webhook retry`, { url, event, correlationId, error: queueErr.message });
       return { success: false, error: errorMessage, queued: false, deliveryId: id };
     }
   }
@@ -150,13 +158,14 @@ async function fireWebhook(url, event, payload, secret = null, deliveryId = null
 async function queueWebhookRetry(url, event, payload, error, secret = null, deliveryId = null) {
   const nextRetryAt = new Date(Date.now() + getBackoffDelay(0)); // First retry: 1 min
   const id = deliveryId || uuidv4();
-  
+
   await WebhookRetry.create({
     url,
     event,
     payload,
     secret: secret || null,
     deliveryId: id,
+    correlationId: payload?.correlationId || null,
     status: 'pending',
     attemptCount: 0,
     maxAttempts: 3,
@@ -201,9 +210,11 @@ async function processPendingRetries() {
  * @param {object} retry - WebhookRetry document
  */
 async function retryWebhook(retry) {
+  const correlationId = retry.correlationId || retry.payload?.correlationId || null;
+
   const urlValidation = await validateWebhookUrl(retry.url);
   if (!urlValidation.valid) {
-    logger.error('Webhook retry blocked: URL failed SSRF validation', { url: retry.url, reason: urlValidation.reason });
+    logger.error('Webhook retry blocked: URL failed SSRF validation', { url: retry.url, correlationId, reason: urlValidation.reason });
     await WebhookRetry.updateOne(
       { _id: retry._id },
       { $set: { status: 'failed', lastError: 'Invalid or disallowed webhook URL', lastAttemptAt: new Date() } }
@@ -229,6 +240,10 @@ async function retryWebhook(retry) {
     'X-StellarEduPay-Delivery-ID': retry.deliveryId,
   };
 
+  if (correlationId) {
+    headers['X-StellarEduPay-Correlation-Id'] = correlationId;
+  }
+
   if (retry.secret) {
     headers['X-StellarEduPay-Signature'] = `sha256=${generateSignature(body, retry.secret)}`;
   }
@@ -245,6 +260,7 @@ async function retryWebhook(retry) {
       url: retry.url,
       event: retry.event,
       deliveryId: retry.deliveryId,
+      correlationId,
       attemptNumber,
       statusCode: response.status,
       durationMs: duration
@@ -273,6 +289,7 @@ async function retryWebhook(retry) {
       url: retry.url,
       event: retry.event,
       deliveryId: retry.deliveryId,
+      correlationId,
       attemptNumber,
       error: errorMessage,
       durationMs: duration
@@ -305,6 +322,7 @@ async function retryWebhook(retry) {
         url: retry.url,
         event: retry.event,
         deliveryId: retry.deliveryId,
+        correlationId,
         payload: retry.payload,
         lastError: errorMessage,
       });
@@ -342,6 +360,7 @@ async function retryWebhook(retry) {
 async function notifyPaymentConfirmed(webhookUrl, payment, student, secret = null) {
   return fireWebhook(webhookUrl, 'payment.confirmed', {
     transactionHash: payment.transactionHash || payment.txHash,
+    correlationId: payment.correlationId,
     studentId: payment.studentId,
     amount: payment.amount,
     assetCode: payment.assetCode || 'XLM',
@@ -360,6 +379,7 @@ async function notifyPaymentConfirmed(webhookUrl, payment, student, secret = nul
 async function notifyPaymentPending(webhookUrl, payment, secret = null) {
   return fireWebhook(webhookUrl, 'payment.pending', {
     transactionHash: payment.transactionHash || payment.txHash,
+    correlationId: payment.correlationId,
     studentId: payment.studentId,
     amount: payment.amount,
     assetCode: payment.assetCode || 'XLM',
@@ -374,6 +394,7 @@ async function notifyPaymentPending(webhookUrl, payment, secret = null) {
 async function notifyPaymentFailed(webhookUrl, payment, reason, secret = null) {
   return fireWebhook(webhookUrl, 'payment.failed', {
     transactionHash: payment.transactionHash || payment.txHash,
+    correlationId: payment.correlationId,
     studentId: payment.studentId,
     amount: payment.amount || 0,
     reason,
@@ -387,6 +408,7 @@ async function notifyPaymentFailed(webhookUrl, payment, reason, secret = null) {
 async function notifyPaymentSuspicious(webhookUrl, payment, reason, secret = null) {
   return fireWebhook(webhookUrl, 'payment.suspicious', {
     transactionHash: payment.transactionHash || payment.txHash,
+    correlationId: payment.correlationId,
     studentId: payment.studentId,
     amount: payment.amount,
     reason,

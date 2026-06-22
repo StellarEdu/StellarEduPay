@@ -154,6 +154,12 @@ function fanout(schoolId, event, data) {
   const set = clients.get(schoolId);
   if (!set || set.size === 0) return;
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  logger.debug('SSE event fanned out', {
+    schoolId,
+    event,
+    correlationId: data?.correlationId || null,
+    connections: set.size,
+  });
   for (const res of set) {
     try {
       res.write(payload);

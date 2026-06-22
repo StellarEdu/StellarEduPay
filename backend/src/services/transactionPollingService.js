@@ -13,6 +13,7 @@ const { emit: sseEmit } = require('./sseService');
 const lock = require('./distributedLock');
 const config = require('../config');
 const logger = require('../utils/logger').child('TransactionPollingService');
+const { deriveCorrelationId } = require('../utils/correlationId');
 
 let pollingInterval = null;
 let isPolling = false;
@@ -35,6 +36,7 @@ let currentIntervalMs = SYNC_INTERVAL_MS;
  */
 async function processTransaction(tx, school) {
   const { schoolId, stellarAddress } = school;
+  const correlationId = deriveCorrelationId(tx.hash);
 
   // Cheap optimisation only: skip work for transactions we've clearly already
   // recorded. This is NOT the dedup guarantee — it is a read-then-write race
@@ -58,11 +60,12 @@ async function processTransaction(tx, school) {
   // Validate payment amount is within configured limits
   const limitValidation = validatePaymentAmount(paymentAmount);
   if (!limitValidation.valid) {
-    logger.warn('Payment outside limits', { 
-      txHash: tx.hash, 
-      schoolId, 
+    logger.warn('Payment outside limits', {
+      txHash: tx.hash,
+      correlationId,
+      schoolId,
       amount: paymentAmount,
-      error: limitValidation.error 
+      error: limitValidation.error
     });
     return { processed: false, reason: 'amount_limit_exceeded' };
   }
@@ -70,7 +73,7 @@ async function processTransaction(tx, school) {
   // Find student by memo (studentId)
   const student = await Student.findOne({ schoolId, studentId: memo });
   if (!student) {
-    logger.warn('Student not found for memo', { txHash: tx.hash, schoolId, memo });
+    logger.warn('Student not found for memo', { txHash: tx.hash, correlationId, schoolId, memo });
     return { processed: false, reason: 'student_not_found' };
   }
 
@@ -123,6 +126,7 @@ async function processTransaction(tx, school) {
     studentId: memo,
     txHash: tx.hash,
     transactionHash: tx.hash,
+    correlationId,
     amount: paymentAmount,
     feeAmount: student.feeAmount,
     feeValidationStatus: cumulativeStatus,
@@ -162,6 +166,7 @@ async function processTransaction(tx, school) {
 
     sseEmit(schoolId, 'payment', {
       txHash: tx.hash,
+      correlationId,
       studentId: memo,
       amount: paymentAmount,
       feeValidationStatus: cumulativeStatus,
@@ -171,6 +176,7 @@ async function processTransaction(tx, school) {
 
     logger.info('Transaction auto-detected and recorded', {
       txHash: tx.hash,
+      correlationId,
       schoolId,
       studentId: memo,
       amount: paymentAmount,
@@ -184,7 +190,7 @@ async function processTransaction(tx, school) {
     if (error.code === 11000) {
       return { processed: false, reason: 'duplicate' };
     }
-    logger.error('Failed to record payment', { error: error.message, txHash: tx.hash });
+    logger.error('Failed to record payment', { error: error.message, txHash: tx.hash, correlationId });
     throw error;
   } finally {
     await session.endSession();

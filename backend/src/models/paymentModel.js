@@ -16,6 +16,11 @@ const paymentSchema = new mongoose.Schema(
     // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash } below
     txHash: { type: String, required: true, index: true },
     amount: { type: Number, required: true },
+
+    // Correlation ID tying this payment to its full async lifecycle (polling
+    // -> queue -> processor -> webhook -> SSE). Deterministically derived
+    // from txHash — see utils/correlationId.js.
+    correlationId: { type: String, default: null, index: true },
     feeAmount: { type: Number, default: null },
     feeCategory: { type: String, default: null, index: true },
     feeValidationStatus: { type: String, enum: ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'], default: 'unknown' },
