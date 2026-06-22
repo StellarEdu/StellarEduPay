@@ -74,6 +74,7 @@ const paymentSchema = new mongoose.Schema(
 );
 
 softDelete(paymentSchema);
+paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 
 // Indexes
 // Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).

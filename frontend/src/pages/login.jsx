@@ -2,6 +2,7 @@ import Head from 'next/head';
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAdminAuth } from '../hooks/useAdminAuth';
+import { getErrorMessage } from '../utils/errorMessages';
 
 // Only honour same-origin, absolute internal paths as a post-login destination.
 // Anything else (external URLs, protocol-relative "//evil.com", missing) falls
@@ -32,7 +33,7 @@ export default function LoginPage() {
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Login failed.'); return; }
+      if (!res.ok) { setError(getErrorMessage(data.code, data.error)); return; }
       login();
       router.push(safeReturnTo(router.query.returnTo));
     } catch {
@@ -142,6 +143,17 @@ export default function LoginPage() {
         .login-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
         .login-btn:active:not(:disabled) { transform: scale(0.99); }
         .login-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .login-btn-inner { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+        .login-spinner {
+          width: 1em; height: 1em;
+          border: 2px solid rgba(255,255,255,0.4);
+          border-top-color: #fff;
+          border-radius: 50%;
+          animation: spin 0.7s linear infinite;
+          flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .login-input:disabled { opacity: 0.6; cursor: not-allowed; }
         .login-footer {
           text-align: center;
           margin-top: 1.5rem;
@@ -183,6 +195,7 @@ export default function LoginPage() {
                 autoComplete="username"
                 autoFocus
                 placeholder="admin"
+                disabled={loading}
               />
             </div>
 
@@ -197,6 +210,7 @@ export default function LoginPage() {
                 required
                 autoComplete="current-password"
                 placeholder="••••••••"
+                disabled={loading}
               />
             </div>
 
@@ -206,8 +220,11 @@ export default function LoginPage() {
               </div>
             )}
 
-            <button className="login-btn" type="submit" disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign in →'}
+            <button className="login-btn" type="submit" disabled={loading} aria-busy={loading}>
+              <span className="login-btn-inner">
+                {loading && <span className="login-spinner" aria-hidden="true" />}
+                {loading ? 'Signing in…' : 'Sign in →'}
+              </span>
             </button>
           </form>
 

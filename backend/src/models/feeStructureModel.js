@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
+const tenantScope = require('../plugins/tenantScope');
 
 const feeStructureSchema = new mongoose.Schema(
   {
@@ -21,5 +22,6 @@ feeStructureSchema.index({ schoolId: 1, className: 1 }, { unique: true });
 feeStructureSchema.index({ schoolId: 1, className: 1, isActive: 1 });
 feeStructureSchema.index({ schoolId: 1, isActive: 1 });
 feeStructureSchema.plugin(softDelete);
+feeStructureSchema.plugin(tenantScope, { modelName: 'FeeStructure' });
 
 module.exports = mongoose.model('FeeStructure', feeStructureSchema);

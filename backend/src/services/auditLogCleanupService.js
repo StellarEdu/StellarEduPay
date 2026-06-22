@@ -10,7 +10,8 @@ let _timer = null;
 async function cleanupExpiredLogs() {
   try {
     const expiry = new Date(Date.now() - RETENTION_DAYS * 86400000);
-    const result = await AuditLog.deleteMany({ createdAt: { $lt: expiry } }).limit(1000);
+    // Cross-school cleanup by design: TTL enforcement must span all tenants.
+    const result = await AuditLog.deleteMany({ createdAt: { $lt: expiry } }).bypassTenantScope().limit(1000);
     if (result.deletedCount > 0) logger.info('AUDIT_LOG_CLEANUP', { deletedCount: result.deletedCount });
   } catch (err) {
     logger.error('AUDIT_LOG_CLEANUP_FAILED', { error: err.message });

@@ -119,12 +119,13 @@ async function queueFailedTransaction(transactionHash, options = {}) {
       };
     }
     
-    // Also store in MongoDB for tracking and potential recovery
+    // Also store in MongoDB for tracking and potential recovery.
+    // Bypass: admin retry queue is cross-school; txHash is globally unique so no leak risk.
     await PendingVerification.findOneAndUpdate(
       { txHash: transactionHash },
       {
-        $setOnInsert: { 
-          txHash: transactionHash, 
+        $setOnInsert: {
+          txHash: transactionHash,
           studentId,
           memo,
         },
@@ -137,7 +138,7 @@ async function queueFailedTransaction(transactionHash, options = {}) {
         },
         $inc: { attempts: 1 },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, _bypassTenantScope: true }
     );
     
     // Add to BullMQ queue
@@ -176,6 +177,7 @@ async function getRetryQueueStats() {
     ]);
     
     // Get MongoDB pending verification stats
+    // System-wide stats aggregate: intentionally spans all schools.
     const mongoStats = await PendingVerification.aggregate([
       {
         $group: {
@@ -183,7 +185,7 @@ async function getRetryQueueStats() {
           count: { $sum: 1 },
         },
       },
-    ]);
+    ]).option({ _bypassTenantScope: true });
     
     return {
       bullmq: mainStats,

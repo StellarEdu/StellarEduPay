@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 const auditLogSchema = new mongoose.Schema(
   {
@@ -35,5 +36,7 @@ const ttlDays = parseInt(process.env.AUDIT_LOG_RETENTION_DAYS || '730', 10);
 const ttlSeconds = ttlDays * 24 * 60 * 60;
 const jitterSeconds = Math.floor(Math.random() * 3600) - 1800; // ±30 minutes
 auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: ttlSeconds + jitterSeconds });
+
+auditLogSchema.plugin(tenantScope, { modelName: 'AuditLog' });
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);

@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const tenantScope = require('../plugins/tenantScope');
 
 const studentFeeHistorySchema = new mongoose.Schema(
   {
@@ -18,5 +19,7 @@ const studentFeeHistorySchema = new mongoose.Schema(
 );
 
 studentFeeHistorySchema.index({ studentId: 1, schoolId: 1 });
+
+studentFeeHistorySchema.plugin(tenantScope, { modelName: 'StudentFeeHistory' });
 
 module.exports = mongoose.model('StudentFeeHistory', studentFeeHistorySchema);

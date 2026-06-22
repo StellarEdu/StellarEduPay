@@ -55,7 +55,7 @@ async function queueForRetry(
   schoolId,
 ) {
   await PendingVerification.findOneAndUpdate(
-    { txHash },
+    { txHash, schoolId },
     {
       $setOnInsert: { txHash, studentId, schoolId },
       $set: {
@@ -81,10 +81,11 @@ async function processPendingVerifications() {
   _running = true;
 
   try {
+    // Background worker: intentionally spans all schools to drain the retry queue.
     const due = await PendingVerification.find({
       status: "pending",
       nextRetryAt: { $lte: new Date() },
-    }).limit(50);
+    }).bypassTenantScope().limit(50);
 
     if (due.length === 0) {
       _running = false;
@@ -101,11 +102,10 @@ async function processPendingVerifications() {
     logger.info(`Processing ${due.length} pending verification(s)`);
 
     for (const item of due) {
-      await PendingVerification.findByIdAndUpdate(item._id, {
-        status: "processing",
-        lastAttemptAt: new Date(),
-        $inc: { attempts: 1 },
-      });
+      await PendingVerification.findOneAndUpdate(
+        { _id: item._id, schoolId: item.schoolId },
+        { status: "processing", lastAttemptAt: new Date(), $inc: { attempts: 1 } },
+      );
 
       try {
         // Look up the school to get the correct wallet address for verification
@@ -114,10 +114,10 @@ async function processPendingVerifications() {
           isActive: true,
         }).lean();
         if (!school) {
-          await PendingVerification.findByIdAndUpdate(item._id, {
-            status: "dead_letter",
-            lastError: `School ${item.schoolId} not found or inactive`,
-          });
+          await PendingVerification.findOneAndUpdate(
+            { _id: item._id, schoolId: item.schoolId },
+            { status: "dead_letter", lastError: `School ${item.schoolId} not found or inactive` },
+          );
           continue;
         }
 
@@ -127,11 +127,13 @@ async function processPendingVerifications() {
         );
 
         if (!result) {
-          await PendingVerification.findByIdAndUpdate(item._id, {
-            status: "dead_letter",
-            lastError:
-              "verifyTransaction returned null — transaction is permanently invalid",
-          });
+          await PendingVerification.findOneAndUpdate(
+            { _id: item._id, schoolId: item.schoolId },
+            {
+              status: "dead_letter",
+              lastError: "verifyTransaction returned null — transaction is permanently invalid",
+            },
+          );
           logger.warn("Dead-lettered transaction — permanently invalid", {
             txHash: item.txHash,
           });
@@ -152,11 +154,10 @@ async function processPendingVerifications() {
           confirmedAt: result.date ? new Date(result.date) : new Date(),
         });
 
-        await PendingVerification.findByIdAndUpdate(item._id, {
-          status: "resolved",
-          resolvedAt: new Date(),
-          lastError: null,
-        });
+        await PendingVerification.findOneAndUpdate(
+          { _id: item._id, schoolId: item.schoolId },
+          { status: "resolved", resolvedAt: new Date(), lastError: null },
+        );
 
         logger.info("Transaction resolved", {
           txHash: item.txHash,
@@ -175,10 +176,10 @@ async function processPendingVerifications() {
           !err.code || err.code === "STELLAR_NETWORK_ERROR";
 
         if (isPermanentError || attempts >= MAX_ATTEMPTS) {
-          await PendingVerification.findByIdAndUpdate(item._id, {
-            status: "dead_letter",
-            lastError: err.message,
-          });
+          await PendingVerification.findOneAndUpdate(
+            { _id: item._id, schoolId: item.schoolId },
+            { status: "dead_letter", lastError: err.message },
+          );
 
           // Create a FAILED Payment audit record for on-chain failures
           if (err.code === "TX_FAILED") {
@@ -204,29 +205,25 @@ async function processPendingVerifications() {
 
           logger.error("Dead-lettered transaction", {
             txHash: item.txHash,
-            reason: isPermanentError
-              ? "permanent error"
-              : "max attempts reached",
+            reason: isPermanentError ? "permanent error" : "max attempts reached",
             error: err.message,
             code: err.code,
           });
         } else if (isStellarError) {
-          await PendingVerification.findByIdAndUpdate(item._id, {
-            status: "pending",
-            lastError: err.message,
-            nextRetryAt: nextRetryDelay(attempts),
-          });
+          await PendingVerification.findOneAndUpdate(
+            { _id: item._id, schoolId: item.schoolId },
+            { status: "pending", lastError: err.message, nextRetryAt: nextRetryDelay(attempts) },
+          );
           logger.warn("Rescheduled transaction after Stellar error", {
             txHash: item.txHash,
             attempt: attempts,
             error: err.message,
           });
         } else {
-          await PendingVerification.findByIdAndUpdate(item._id, {
-            status: "pending",
-            lastError: err.message,
-            nextRetryAt: nextRetryDelay(attempts),
-          });
+          await PendingVerification.findOneAndUpdate(
+            { _id: item._id, schoolId: item.schoolId },
+            { status: "pending", lastError: err.message, nextRetryAt: nextRetryDelay(attempts) },
+          );
           logger.error("Unknown error processing transaction", {
             txHash: item.txHash,
             error: err.message,
