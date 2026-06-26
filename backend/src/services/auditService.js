@@ -45,6 +45,7 @@ async function logAudit({
   errorMessage = null,
   ipAddress = null,
   userAgent = null,
+  severity = null,
 }) {
   try {
     await AuditLog.create({
@@ -58,6 +59,7 @@ async function logAudit({
       errorMessage,
       ipAddress,
       userAgent,
+      ...(severity ? { severity } : {}),
     });
   } catch (err) {
     // Do NOT re-throw — audit failure must not break the primary operation

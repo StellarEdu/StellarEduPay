@@ -109,6 +109,19 @@ const schoolSchema = new mongoose.Schema(
       default: 10000,
       min: [1, 'maxStudents must be at least 1'],
     },
+    /**
+     * MFA (TOTP) protection for school admin operations.
+     * mfaSecret is AES-256-GCM encrypted; key is derived from JWT_SECRET.
+     * mfaBackupCodes holds SHA-256 hashes — each code is single-use.
+     */
+    mfaEnabled: { type: Boolean, default: false },
+    mfaSecret: { type: String, default: null },
+    mfaBackupCodes: [
+      {
+        hash: { type: String, required: true },
+        used: { type: Boolean, default: false },
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -122,6 +135,8 @@ schoolSchema.set('toJSON', {
     delete ret.jwtSecret;
     delete ret.webhookSecret;
     delete ret.internalNotes;
+    delete ret.mfaSecret;
+    delete ret.mfaBackupCodes;
     return ret;
   },
 });

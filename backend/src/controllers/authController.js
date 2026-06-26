@@ -1,17 +1,19 @@
 'use strict';
 
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
-const { getRedisClient } = require('../config/redisClient');
+const { getRedisClient, isRedisReady } = require('../config/redisClient');
+const { get, set, del } = require('../cache');
+const { sendAdminAlert } = require('../services/alertService');
 
-/**
- * Constant-time string comparison to prevent timing attacks.
- */
+// ── Constant-time string comparison ───────────────────────────────────────────
+
 function safeEqual(a, b) {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
   if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(bufA, bufA); // run anyway to avoid short-circuit timing leak
+    crypto.timingSafeEqual(bufA, bufA); // consume equal time
     return false;
   }
   return crypto.timingSafeEqual(bufA, bufB);
@@ -19,7 +21,7 @@ function safeEqual(a, b) {
 
 // ── Refresh token store (Redis when available, in-process Map otherwise) ──────
 
-let _store; // lazy-initialised
+let _store;
 
 function getStore() {
   if (_store) return _store;
@@ -42,50 +44,91 @@ function getStore() {
       logger.warn('[AuthController] Redis unavailable — falling back to in-memory refresh token store');
       const map = new Map();
       _store = {
-        async set(token, ttlSeconds) {
-          map.set(token, Date.now() + ttlSeconds * 1000);
-        },
+        async set(token, ttlSeconds) { map.set(token, Date.now() + ttlSeconds * 1000); },
         async has(token) {
           const exp = map.get(token);
           if (!exp) return false;
           if (Date.now() > exp) { map.delete(token); return false; }
           return true;
         },
-        async del(token) {
-          map.delete(token);
-        },
+        async del(token) { map.delete(token); },
       };
     }
   } else {
-    // In-process fallback — counters reset on restart (acceptable for single-process/dev)
     const map = new Map();
     _store = {
-      async set(token, ttlSeconds) {
-        map.set(token, Date.now() + ttlSeconds * 1000);
-      },
+      async set(token, ttlSeconds) { map.set(token, Date.now() + ttlSeconds * 1000); },
       async has(token) {
         const exp = map.get(token);
         if (!exp) return false;
         if (Date.now() > exp) { map.delete(token); return false; }
         return true;
       },
-      async del(token) {
-        map.delete(token);
-      },
+      async del(token) { map.delete(token); },
     };
   }
 
   return _store;
 }
 
-// Exposed for testing
 function _resetStore() { _store = null; }
 
+// ── Per-account login lockout ─────────────────────────────────────────────────
+// Counters are shared across replicas via Redis when available; the in-process
+// node-cache acts as a write-through layer so lock checks remain synchronous
+// on the hot path (the test suite also benefits from this sync behaviour).
+
+const LOGIN_FAIL_WINDOW = 900;   // 15 min window
+const LOGIN_FAIL_THRESHOLD = 5;  // lock after 5 failures
+const LOGIN_LOCK_TTL = 900;      // lock duration: 15 min
+
+function loginLockKey(id) { return `loginLock:${id}`; }
+function loginFailKey(id) { return `loginFail:${id}`; }
+
+function isLockedOut(loginId) {
+  // Sync in-memory check (fast path, no I/O)
+  return Boolean(get(loginLockKey(loginId)));
+}
+
+async function recordLoginFailure(loginId) {
+  const fk = loginFailKey(loginId);
+  const lk = loginLockKey(loginId);
+
+  // Update in-memory counter
+  const prevCount = get(fk) || 0;
+  const newCount = prevCount + 1;
+  set(fk, newCount, LOGIN_FAIL_WINDOW);
+
+  const redis = getRedisClient();
+  if (redis && isRedisReady()) {
+    try {
+      const count = await redis.incr(fk);
+      if (count === 1) await redis.expire(fk, LOGIN_FAIL_WINDOW);
+      if (count >= LOGIN_FAIL_THRESHOLD) {
+        await redis.set(lk, '1', 'EX', LOGIN_LOCK_TTL);
+        set(lk, true, LOGIN_LOCK_TTL); // mirror to in-memory for sync reads
+        await sendAdminAlert(`Login lockout triggered for "${loginId}"`, { loginId, failCount: count });
+      }
+    } catch (e) {
+      logger.warn('[AuthController] Redis error tracking login failure', { error: e.message });
+    }
+  } else if (newCount >= LOGIN_FAIL_THRESHOLD) {
+    set(lk, true, LOGIN_LOCK_TTL);
+    await sendAdminAlert(`Login lockout triggered for "${loginId}"`, { loginId, failCount: newCount });
+  }
+}
+
+function clearLoginFailures(loginId) {
+  const fk = loginFailKey(loginId);
+  const lk = loginLockKey(loginId);
+  del(fk, lk);
+  const redis = getRedisClient();
+  if (redis && isRedisReady()) {
+    redis.del(fk, lk).catch(() => {});
+  }
+}
+
 // ── Cookies ───────────────────────────────────────────────────────────────────
-// The access token rides in the `admin_token` cookie (sent on every API call),
-// while the refresh token rides in `admin_refresh_token`, scoped to the auth
-// routes so it is never transmitted to ordinary endpoints. Both are HttpOnly so
-// JS — and therefore an XSS payload — can never read them.
 
 const ACCESS_COOKIE = 'admin_token';
 const REFRESH_COOKIE = 'admin_refresh_token';
@@ -116,7 +159,6 @@ function refreshCookieOptions(ttlSeconds) {
 function parseTTL(envVar, defaultSeconds) {
   const val = process.env[envVar];
   if (!val) return defaultSeconds;
-  // Accept plain seconds or strings like "8h", "30d"
   const match = val.match(/^(\d+)([smhd]?)$/);
   if (!match) return defaultSeconds;
   const n = parseInt(match[1], 10);
@@ -125,75 +167,204 @@ function parseTTL(envVar, defaultSeconds) {
   return n * (multipliers[unit] ?? 1);
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// ── Login handler ─────────────────────────────────────────────────────────────
 
 /**
  * POST /api/auth/login
- * Returns { token, expiresIn, refreshToken, refreshExpiresIn }
+ *
+ * Accepts { username, password } for the env super-admin (break-glass) and
+ * { email, password, mfaCode? } for DB-registered school users.
+ *
+ * Per-account lockout is enforced via an in-memory counter (Redis-backed when
+ * REDIS_HOST is set) keyed by the normalised login identifier.
+ *
+ * When a school has MFA enabled and the caller provides a valid password but
+ * no mfaCode, the response is { requiresMfa: true } (HTTP 200) so the client
+ * can prompt for the second factor before re-submitting.
  */
 async function handleLogin(req, res) {
-  const { username, password } = req.body || {};
+  const { username, email, password, mfaCode } = req.body || {};
+  const loginId = ((email || username) || '').trim().toLowerCase();
 
-  const expectedUsername = process.env.ADMIN_USERNAME;
-  const expectedPassword = process.env.ADMIN_PASSWORD;
-
-  if (!expectedUsername || !expectedPassword) {
-    return res.status(500).json({
-      error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
-      code: 'AUTH_MISCONFIGURED',
+  // ── Per-account lockout (sync fast-path via in-process cache) ──────────────
+  if (isLockedOut(loginId)) {
+    return res.status(429).json({
+      error: 'Too many failed login attempts. Account temporarily locked.',
+      code: 'ACCOUNT_LOCKED',
     });
   }
 
-  if (
-    !username ||
-    !password ||
-    !safeEqual(username, expectedUsername) ||
-    !safeEqual(password, expectedPassword)
-  ) {
-    return res.status(401).json({
-      error: 'Invalid credentials.',
-      code: 'INVALID_CREDENTIALS',
+  // ── ENV super-admin path (username-based, backward-compatible) ─────────────
+  // When only `username` is supplied (no `email`), we bypass the DB and check
+  // against ADMIN_USERNAME / ADMIN_PASSWORD_HASH (or legacy ADMIN_PASSWORD).
+  // This preserves the existing authLogin.test.js contract and keeps the hot
+  // path synchronous so tests can call handleLogin without await.
+  if (!email) {
+    const envUsername = process.env.ADMIN_USERNAME;
+    const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
+    const envPassword = process.env.ADMIN_PASSWORD;
+
+    if (!envUsername || (!envPassword && !envPasswordHash)) {
+      return res.status(500).json({
+        error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
+        code: 'AUTH_MISCONFIGURED',
+      });
+    }
+
+    const usernameMatch = loginId ? safeEqual(loginId, envUsername) : false;
+    let credValid = false;
+
+    if (envPasswordHash) {
+      // Async bcrypt path — used when ADMIN_PASSWORD_HASH is configured
+      credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
+    } else {
+      // Legacy sync path — used when only ADMIN_PASSWORD is set (no await needed)
+      credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
+    }
+
+    if (!credValid) {
+      recordLoginFailure(loginId).catch(() => {});
+      return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+    }
+
+    // Success — clear failure counter (fire-and-forget)
+    clearLoginFailures(loginId);
+
+    const jwt = require('jsonwebtoken');
+    const secret = process.env.JWT_SECRET;
+    const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+    const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+
+    // Preserve backward-compat JWT shape; append new fields for new consumers
+    const token = jwt.sign(
+      { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] },
+      secret,
+      { expiresIn: accessTTL }
+    );
+
+    const refreshToken = crypto.randomBytes(40).toString('hex');
+    getStore().set(refreshToken, refreshTTL).catch(() => {});
+
+    res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+    res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
+
+    return res.json({
+      isAdmin: true,
+      expiresIn: accessTTL,
+      refreshToken,
+      refreshExpiresIn: refreshTTL,
     });
   }
+
+  // ── DB user path (email-based login for school operators) ──────────────────
+  let user;
+  try {
+    const User = require('../models/userModel');
+    user = await User.findOne({ email: loginId, isActive: true });
+  } catch (err) {
+    logger.error('[AuthController] DB lookup failed during login', { error: err.message });
+    return res.status(503).json({ error: 'Authentication service unavailable.', code: 'AUTH_DB_ERROR' });
+  }
+
+  if (!user) {
+    // Consume time to avoid user-enumeration via timing
+    await bcrypt.compare(password || '', '$2a$10$dummyhashtopreventtimingattacks000000000000000000000000');
+    recordLoginFailure(loginId).catch(() => {});
+    return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  const credValid = Boolean(password) && await bcrypt.compare(password, user.passwordHash);
+  if (!credValid) {
+    recordLoginFailure(loginId).catch(() => {});
+    return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  // ── MFA check: user-level TOTP first, school-level as fallback ─────────────
+  // User-level MFA takes priority so each admin/owner has their own second factor
+  // independent of whether the school has MFA configured.
+  {
+    const { verifyTotpCode, verifyBackupCode } = require('./mfaController');
+
+    if (user.mfaEnabled && user.mfaSecret) {
+      if (!mfaCode) {
+        return res.status(200).json({ requiresMfa: true });
+      }
+      const totpValid = verifyTotpCode(user.mfaSecret, mfaCode);
+      if (!totpValid) {
+        const bcIdx = verifyBackupCode(user.mfaBackupCodes || [], mfaCode);
+        if (bcIdx === -1) {
+          recordLoginFailure(loginId).catch(() => {});
+          return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
+        }
+        const User = require('../models/userModel');
+        User.findByIdAndUpdate(user._id, { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }).catch(() => {});
+      }
+    } else if (user.schoolId) {
+      // Fall back to school-level TOTP when the user has no personal MFA enrolled
+      const School = require('../models/schoolModel');
+      let school;
+      try {
+        school = await School.findOne({ schoolId: user.schoolId, isActive: true });
+      } catch {
+        school = null;
+      }
+
+      if (school?.mfaEnabled && school.mfaSecret) {
+        if (!mfaCode) {
+          return res.status(200).json({ requiresMfa: true });
+        }
+        const totpValid = verifyTotpCode(school.mfaSecret, mfaCode);
+        if (!totpValid) {
+          const bcIdx = verifyBackupCode(school.mfaBackupCodes, mfaCode);
+          if (bcIdx === -1) {
+            recordLoginFailure(loginId).catch(() => {});
+            return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
+          }
+          school.mfaBackupCodes[bcIdx].used = true;
+          School.findOneAndUpdate(
+            { schoolId: user.schoolId },
+            { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }
+          ).catch(() => {});
+        }
+      }
+    }
+  }
+
+  // ── Issue JWT for school user ──────────────────────────────────────────────
+  clearLoginFailures(loginId);
 
   const jwt = require('jsonwebtoken');
   const secret = process.env.JWT_SECRET;
+  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);   // default 8h
-  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400); // default 30d
-
-  const token = jwt.sign({ role: 'admin', username }, secret, { expiresIn: accessTTL });
+  const token = jwt.sign(
+    {
+      role: 'user',
+      userId: user._id.toString(),
+      schoolId: user.schoolId,
+      roles: user.roles,
+    },
+    secret,
+    { expiresIn: accessTTL }
+  );
 
   const refreshToken = crypto.randomBytes(40).toString('hex');
-
-  // Store refresh token (non-blocking — fire and forget; failure means token won't be usable)
   getStore().set(refreshToken, refreshTTL).catch(() => {});
 
   res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
   res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
-  // refreshToken is still returned in the body for non-browser API clients that
-  // cannot use cookies; browser clients rely on the HttpOnly cookie above.
   return res.json({
-    isAdmin: true,
+    token,
     expiresIn: accessTTL,
     refreshToken,
     refreshExpiresIn: refreshTTL,
   });
 }
 
-/**
- * POST /api/auth/refresh
- * Token source: the HttpOnly `admin_refresh_token` cookie (browser flow), with
- * a `{ refreshToken }` body fallback for non-browser API clients.
- *
- * Refreshes the access token AND rotates the refresh token: the presented token
- * is invalidated and a fresh one issued, so a leaked refresh token is usable at
- * most once. Sets new `admin_token` and `admin_refresh_token` cookies and also
- * returns the new tokens in the body for API clients.
- *
- * Returns { token, expiresIn, refreshToken, refreshExpiresIn }.
- */
+// ── Refresh ───────────────────────────────────────────────────────────────────
+
 async function handleRefresh(req, res) {
   const refreshToken = req.cookies?.[REFRESH_COOKIE] || (req.body && req.body.refreshToken);
 
@@ -204,7 +375,6 @@ async function handleRefresh(req, res) {
   const store = getStore();
   const valid = await store.has(refreshToken);
   if (!valid) {
-    // Clear the stale cookie so the browser stops presenting a dead token.
     res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
     return res.status(401).json({ error: 'Invalid or expired refresh token.', code: 'INVALID_REFRESH_TOKEN' });
   }
@@ -214,8 +384,6 @@ async function handleRefresh(req, res) {
   const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-  // Rotate: mint a new refresh token, then invalidate the one just used. Storing
-  // the new token before deleting the old avoids a window with neither valid.
   const newRefreshToken = crypto.randomBytes(40).toString('hex');
   await store.set(newRefreshToken, refreshTTL);
   await store.del(refreshToken);
@@ -233,11 +401,8 @@ async function handleRefresh(req, res) {
   });
 }
 
-/**
- * POST /api/auth/logout
- * Body: { refreshToken }
- * Invalidates the refresh token.
- */
+// ── Logout ────────────────────────────────────────────────────────────────────
+
 async function handleLogout(req, res) {
   const refreshToken = req.cookies?.[REFRESH_COOKIE] || (req.body && req.body.refreshToken);
 
@@ -245,16 +410,14 @@ async function handleLogout(req, res) {
     await getStore().del(refreshToken);
   }
 
-  res.clearCookie(ACCESS_COOKIE, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/' });
-  res.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: REFRESH_COOKIE_PATH });
+  const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
+  res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
+  res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
   return res.json({ message: 'Logged out.' });
 }
 
-/**
- * GET /api/auth/me
- * Returns { isAdmin: true } when the request carries a valid admin cookie/token.
- * Used by the frontend to check auth state on page load.
- */
+// ── Me ────────────────────────────────────────────────────────────────────────
+
 function handleMe(req, res) {
   return res.json({ isAdmin: true });
 }

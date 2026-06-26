@@ -452,35 +452,6 @@ function setupEventListeners() {
     jobMetrics.queueHealth = 'unhealthy';
   }
 }
-  
-  events.on('active', ({ jobId, prev }) => {
-    logEvent('EVENT_ACTIVE', { jobId, previousState: prev });
-  });
-  
-  events.on('completed', ({ jobId, returnvalue }) => {
-    logEvent('EVENT_COMPLETED', { jobId, result: returnvalue });
-  });
-  
-  events.on('failed', ({ jobId, failedReason }) => {
-    logEvent('EVENT_FAILED', { jobId, reason: failedReason });
-  });
-  
-  events.on('stalled', ({ jobId }) => {
-    logEvent('EVENT_STALLED', { jobId });
-  });
-  
-  events.on('retries-exhausted', ({ jobId }) => {
-    logEvent('EVENT_RETRIES_EXHAUSTED', { jobId });
-  });
-  
-  events.on('progress', ({ jobId, progress }) => {
-    logEvent('EVENT_PROGRESS', { jobId, progress });
-  });
-  
-  logEvent('EVENT_LISTENERS_SETUP', {
-    queueName: QUEUE_NAMES.TRANSACTION_RETRY,
-  });
-}
 
 /**
  * Add a transaction to the retry queue
