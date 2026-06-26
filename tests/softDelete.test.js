@@ -179,4 +179,29 @@ describe('softDelete utility — query filter (issue #390)', () => {
       expect(typeof schema.statics.restore).toBe('function');
     });
   });
+
+  describe('activeFilter() static method', () => {
+    it('returns a filter with deletedAt: null when no filter is provided', () => {
+      const schema = new mongoose.Schema({ name: String });
+      softDelete(schema);
+      const Model = mongoose.model('TestActiveFilter', schema);
+      expect(Model.activeFilter()).toEqual({ deletedAt: null });
+    });
+
+    it('merges deletedAt: null into an existing filter', () => {
+      const schema = new mongoose.Schema({ name: String });
+      softDelete(schema);
+      const Model = mongoose.model('TestActiveFilterMerge', schema);
+      expect(Model.activeFilter({ schoolId: 'SCH001', status: 'SUCCESS' }))
+        .toEqual({ schoolId: 'SCH001', status: 'SUCCESS', deletedAt: null });
+    });
+
+    it('overrides deletedAt if already present in the input filter', () => {
+      const schema = new mongoose.Schema({ name: String });
+      softDelete(schema);
+      const Model = mongoose.model('TestActiveFilterOverride', schema);
+      expect(Model.activeFilter({ deletedAt: { $ne: null } }))
+        .toEqual({ deletedAt: null });
+    });
+  });
 });

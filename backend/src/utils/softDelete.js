@@ -47,6 +47,20 @@ const softDelete = (schema) => {
     return await this.updateMany(filter, { deletedAt: null });
   };
 
+  /**
+   * .activeFilter() — return a filter object merged with { deletedAt: null }.
+   *
+   * Use this for operations the pre-hook does not cover (aggregate, distinct)
+   * so that soft-deleted documents are always excluded from default reads.
+   *
+   * Usage:
+   *   const match = Payment.activeFilter({ schoolId, status: 'SUCCESS' });
+   *   Payment.aggregate([{ $match: match }, ...]);
+   */
+  schema.statics.activeFilter = function (filter = {}) {
+    return { ...filter, deletedAt: null };
+  };
+
   // ── Query helper ────────────────────────────────────────────────────────────
 
   /**

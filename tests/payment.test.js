@@ -88,6 +88,7 @@ jest.mock('../backend/src/models/paymentModel', () => {
     create: jest.fn().mockResolvedValue({}),
     aggregate: jest.fn().mockResolvedValue([]),
     countDocuments: jest.fn((filter) => Promise.resolve(mockPayments.filter((p) => matchesFilter(p, filter)).length)),
+    activeFilter: jest.fn((filter = {}) => ({ ...filter, deletedAt: null })),
   };
 });
 
@@ -529,6 +530,22 @@ describe('Payment API', () => {
     const etag = first.headers['etag'];
     const second = await testApi.get('/api/payments/accepted-assets').set('If-None-Match', etag);
     expect(second.status).toBe(304);
+  });
+
+  test('GET /api/payments/ — excludes soft-deleted payments', async () => {
+    const Payment = require('../backend/src/models/paymentModel');
+    Payment.find.mockClear();
+    Payment.countDocuments.mockClear();
+
+    const res = await testApi.get('/api/payments/');
+    expect(res.status).toBe(200);
+
+    // Assert the query filter includes deletedAt: null
+    const findCallArgs = Payment.find.mock.calls[0][0];
+    expect(findCallArgs).toHaveProperty('deletedAt', null);
+
+    const countCallArgs = Payment.countDocuments.mock.calls[0][0];
+    expect(countCallArgs).toHaveProperty('deletedAt', null);
   });
 });
 

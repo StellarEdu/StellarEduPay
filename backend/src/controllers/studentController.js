@@ -495,7 +495,7 @@ async function getPaymentSummary(req, res, next) {
     const [students, payments] = await Promise.all([
       Student.find({ schoolId: req.schoolId }).lean(),
       Payment.aggregate([
-        { $match: { schoolId: req.schoolId, status: 'SUCCESS', isSuspicious: { $ne: true } } },
+        { $match: { schoolId: req.schoolId, status: 'SUCCESS', isSuspicious: { $ne: true }, deletedAt: null } },
         { $group: { _id: '$studentId', totalPaid: { $sum: '$amount' } } },
       ]),
     ]);

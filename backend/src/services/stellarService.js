@@ -762,6 +762,7 @@ async function finalizeConfirmedPayments(schoolId) {
           studentId: payment.studentId,
           confirmationStatus: "confirmed",
           isSuspicious: false,
+          deletedAt: null,
         },
       },
       { $group: { _id: null, total: { $sum: "$amount" } } },
@@ -783,6 +784,7 @@ async function finalizeConfirmedPayments(schoolId) {
             feeCategory: { $ne: null },
             confirmationStatus: "confirmed",
             isSuspicious: false,
+            deletedAt: null,
           },
         },
         {
