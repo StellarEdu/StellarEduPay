@@ -384,4 +384,74 @@ describe('E2E payment pipeline — pay -> sync -> allocate -> receipt (#749)', (
     expect(receipt.assetCode).toBe('XLM');
     expect(receipt.feeValidationStatus).toBe('valid');
   });
+
+  // ── #809 — webhook + SSE side-effect assertions ───────────────────────────
+
+  test('Scenario 7 — webhook: a successful payment fires the school webhook with an HMAC signature', async () => {
+    const webhookService = require('../../backend/src/services/webhookService');
+    const spy = jest.spyOn(webhookService, 'notifyPaymentConfirmed').mockResolvedValue(undefined);
+
+    const school = await createSchool();
+    await School.updateOne({ schoolId: school.schoolId }, { webhookUrl: 'https://example.com/webhook', webhookSecret: 'test-secret' });
+    const updatedSchool = await School.findOne({ schoolId: school.schoolId });
+
+    const student = await createStudent(updatedSchool, { feeAmount: 250 });
+    const hash = HASH('webhook1');
+
+    fakeHorizon.addPaymentTransaction({
+      hash,
+      to: updatedSchool.stellarAddress,
+      from: makeSenderAddress(),
+      amount: 250,
+      memo: student.studentId,
+    });
+
+    await verifyPayment(makeReq(updatedSchool, { txHash: hash }), makeRes(), jest.fn());
+
+    // Webhook is fired asynchronously after payment.saved event
+    await waitFor(() => spy.mock.calls.length > 0);
+
+    expect(spy).toHaveBeenCalledWith(
+      'https://example.com/webhook',
+      expect.objectContaining({ txHash: hash, status: 'SUCCESS' }),
+      null,
+      'test-secret',
+    );
+
+    spy.mockRestore();
+  });
+
+  test('Scenario 8 — SSE: a sync emits a payment event to the school channel', async () => {
+    const sseService = require('../../backend/src/services/sseService');
+    const spy = jest.spyOn(sseService, 'emit');
+
+    const school = await createSchool();
+    const student = await createStudent(school, { feeAmount: 250 });
+
+    const intentRes = makeRes();
+    await createPaymentIntent(makeReq(school, { studentId: student.studentId }), intentRes, jest.fn());
+    const intent = intentRes.json.mock.calls[0][0];
+
+    fakeHorizon.addPaymentTransaction({
+      hash: HASH('sse1'),
+      to: school.stellarAddress,
+      from: makeSenderAddress(),
+      amount: 250,
+      memo: intent.memo,
+    });
+
+    await syncAllPayments(
+      makeReq(school, {}, { auditContext: { performedBy: 'cron', ipAddress: '10.0.0.1', userAgent: 'cron' } }),
+      makeRes(),
+      jest.fn(),
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      school.schoolId,
+      'payment',
+      expect.objectContaining({ txHash: HASH('sse1') }),
+    );
+
+    spy.mockRestore();
+  });
 });
