@@ -39,11 +39,10 @@ export default function ReportDownload() {
     if (endDate)   params.endDate   = endDate;
 
     try {
-      const token = localStorage.getItem("token");
       const query = new URLSearchParams({ ...params, format: "csv" }).toString();
       const url = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/reports?${query}`;
       const response = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to download CSV");
       const blob = await response.blob();

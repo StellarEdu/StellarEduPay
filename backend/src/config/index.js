@@ -137,18 +137,22 @@ const STELLAR_TIMEOUT_MS = parseInt(
 );
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-// Secret used to sign/verify admin JWTs.
+// Secret used to sign/verify admin JWTs. Must be at least 32 characters.
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
+const JWT_SECRET_MIN_LENGTH = 32;
+if (!JWT_SECRET || JWT_SECRET.length < JWT_SECRET_MIN_LENGTH) {
+  const reason = !JWT_SECRET
+    ? 'JWT_SECRET is not set'
+    : `JWT_SECRET is too short (${JWT_SECRET.length} chars; minimum ${JWT_SECRET_MIN_LENGTH})`;
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
-      '[Config] JWT_SECRET is required in production. ' +
-      'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"'
+      `[Config] ${reason}. ` +
+      "Generate a strong secret with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
     );
   } else {
     console.warn(
-      '[Config] WARNING: JWT_SECRET is not set. Admin authentication is non-functional. ' +
-      'Set JWT_SECRET in your .env file before deploying to production.'
+      `[Config] WARNING: ${reason}. Admin authentication is insecure. ` +
+      'Set a strong JWT_SECRET before deploying to production.'
     );
   }
 }
