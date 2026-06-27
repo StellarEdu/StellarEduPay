@@ -419,7 +419,13 @@ async function handleLogout(req, res) {
 // ── Me ────────────────────────────────────────────────────────────────────────
 
 function handleMe(req, res) {
-  return res.json({ isAdmin: true });
+  const p = req.admin;
+  return res.json({
+    userId:   p.userId   || p.sub || null,
+    schoolId: p.schoolId || null,
+    roles:    Array.isArray(p.roles) ? p.roles : (p.role ? [p.role] : []),
+    exp:      p.exp      || null,
+  });
 }
 
 module.exports = { handleLogin, handleRefresh, handleLogout, handleMe, _resetStore };
