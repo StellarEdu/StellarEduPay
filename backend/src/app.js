@@ -50,6 +50,7 @@ const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandl
 const { requestLogger } = require('./middleware/requestLogger');
 const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRequestHandler');
 const { requireAdminAuth } = require('./middleware/auth');
+const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
 const { healthCheck, healthLive, healthReady } = require('./controllers/healthController');
 const logger = require('./utils/logger');
@@ -92,6 +93,22 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: config.MAX_BODY_SIZE }));
 app.use(requestLogger());
+
+// ── Cache-Control: no-store on auth and sensitive data routes ─────────────────
+// Prevents intermediaries (CDNs, shared proxies) from caching tokens,
+// payment data, audit logs, and other sensitive JSON responses.
+const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders)\b/;
+app.use((req, res, next) => {
+  if (SENSITIVE_PATH_RE.test(req.path)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+  }
+  next();
+});
+
+// ── JSON depth / array-bomb guard + query-param de-pollution ──────────────────
+app.use(jsonDepthGuard);
+app.use(deduplicateQueryParams);
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({
   circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 30000, halfOpenSuccessThreshold: 2 },
