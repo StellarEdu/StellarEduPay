@@ -419,4 +419,88 @@ async function registerWebhook(req, res, next) {
   }
 }
 
-module.exports = { createSchool, getAllSchools, getSchool, updateSchool, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook };
+// GET /api/schools/:schoolSlug/settings
+async function getSchoolSettings(req, res, next) {
+  try {
+    const { getSchoolSettings } = require('../services/schoolSettingsService');
+    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
+    const settings = await getSchoolSettings(school.schoolId);
+    res.json({ settings });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PATCH /api/schools/:schoolSlug/settings
+async function updateSchoolSettings(req, res, next) {
+  try {
+    const { setSchoolSetting, SETTING_KEYS } = require('../services/schoolSettingsService');
+    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
+
+    const updated = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      if (SETTING_KEYS.has(key)) {
+        await setSchoolSetting(school.schoolId, key, value);
+        updated[key] = value;
+      }
+    }
+
+    if (req.auditContext) {
+      const { logAudit } = require('../services/auditService');
+      await logAudit({
+        schoolId: school.schoolId,
+        action: 'school_settings_update',
+        performedBy: req.auditContext.performedBy,
+        targetId: school.schoolId,
+        targetType: 'school',
+        details: { updated },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    res.json({ updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/schools/:schoolSlug/settings/:key
+async function clearSchoolSetting(req, res, next) {
+  try {
+    const { clearSchoolSetting, SETTING_KEYS } = require('../services/schoolSettingsService');
+    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
+
+    const { key } = req.params;
+    if (!SETTING_KEYS.has(key)) {
+      return res.status(400).json({ error: `Unknown setting key: ${key}`, code: 'INVALID_SETTING_KEY' });
+    }
+
+    await clearSchoolSetting(school.schoolId, key);
+
+    if (req.auditContext) {
+      const { logAudit } = require('../services/auditService');
+      await logAudit({
+        schoolId: school.schoolId,
+        action: 'school_settings_clear',
+        performedBy: req.auditContext.performedBy,
+        targetId: school.schoolId,
+        targetType: 'school',
+        details: { key },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    res.json({ message: `Setting "${key}" cleared for school`, schoolSlug: req.params.schoolSlug });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { createSchool, getAllSchools, getSchool, updateSchool, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };
