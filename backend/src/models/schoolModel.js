@@ -127,6 +127,26 @@ const schoolSchema = new mongoose.Schema(
      */
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String, default: null },
+    /**
+     * Per-school maintenance mode. When true, the school's API endpoints
+     * return 503 Service Unavailable. Overrides the global maintenance mode
+     * in SystemConfig for this school only.
+     */
+    maintenanceMode: { type: Boolean, default: false },
+    /**
+     * Per-school settings overrides. Each key overrides the corresponding
+     * SystemConfig global default for this school only.
+     *
+     * Supported keys:
+     *   maxSyncBatchSize   — max transactions per polling cycle (number)
+     *   reminderEnabled    — enable/disable fee reminder emails (boolean)
+     *   reminderIntervalMs — how often reminder scheduler runs (number, ms)
+     *   betaFeatures       — array of opted-in beta feature flags (string[])
+     */
+    settings: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     mfaBackupCodes: [
       {
         hash: { type: String, required: true },
