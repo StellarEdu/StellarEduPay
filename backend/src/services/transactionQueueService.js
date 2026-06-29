@@ -22,6 +22,7 @@ const PaymentIntent = require('../models/paymentIntentModel');
 const PendingVerification = require('../models/pendingVerificationModel');
 const logger = require('../utils/logger');
 const { resolveCorrelationId } = require('../utils/correlationId');
+const { captureFiatSnapshot } = require('./currencyConversionService');
 
 const PERMANENT_FAIL_CODES = [
   'TX_FAILED', 'MISSING_MEMO', 'INVALID_DESTINATION',
@@ -70,6 +71,12 @@ async function processTransactionJob(job) {
   if (!studentObj) throw Object.assign(new Error('Associated student not found'), { code: 'NOT_FOUND' });
 
   const now = new Date();
+  // #883 — capture fiat rate at confirmation time (best-effort)
+  const fiatSnapshot = await captureFiatSnapshot(
+    result.amount,
+    result.assetCode || 'XLM',
+    process.env.DEFAULT_FIAT_CURRENCY || 'USD',
+  );
   await recordPayment({
     schoolId,
     studentId:           result.studentId || result.memo,
@@ -87,6 +94,7 @@ async function processTransactionJob(job) {
     confirmationStatus:  'confirmed',
     confirmedAt:         result.date ? new Date(result.date) : now,
     verifiedAt:          now,
+    fiatSnapshot,
   });
 
   // Mark durable record resolved

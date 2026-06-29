@@ -83,6 +83,18 @@ const paymentSchema = new mongoose.Schema(
 
     // Soft Delete
     deletedAt: { type: Date, default: null, index: true },
+
+    // #883 — Fiat snapshot: rate locked at confirmation time.
+    // Storing this prevents historical report totals from drifting as exchange
+    // rates move. Reports use this field; a separate "current-rate" mode can
+    // convert on-the-fly by ignoring fiatSnapshot.
+    fiatSnapshot: {
+      fiatAmount:   { type: Number, default: null },  // crypto_amount × fiatRate
+      fiatCurrency: { type: String, default: null },  // e.g. 'USD'
+      fiatRate:     { type: Number, default: null },  // rate at confirmation
+      rateSource:   { type: String, default: null },  // 'coingecko' | 'coinbase' | etc.
+      rateTimestamp:{ type: Date,   default: null },  // when the rate was fetched
+    },
   },
   {
     timestamps: true,

@@ -14,6 +14,7 @@ const lock = require('./distributedLock');
 const config = require('../config');
 const logger = require('../utils/logger').child('TransactionPollingService');
 const { deriveCorrelationId } = require('../utils/correlationId');
+const { captureFiatSnapshot } = require('./currencyConversionService');
 
 let pollingInterval = null;
 let isPolling = false;
@@ -151,6 +152,10 @@ async function processTransaction(tx, school) {
     confirmedAt: txDate,
     referenceCode: await generateReferenceCode(),
     networkFee,
+    // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
+    fiatSnapshot: isConfirmed && !isSuspicious
+      ? await captureFiatSnapshot(paymentAmount, assetCode || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
+      : null,
   };
 
   const session = await mongoose.connection.startSession();

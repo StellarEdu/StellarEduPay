@@ -312,10 +312,37 @@ const convertXlmToLocal  = (a, c = "USD") => convertToLocalCurrency(a, "XLM", c)
 const formatWithConversion = (a, c = "USD") => formatWithLocalEquivalent(a, "XLM", c);
 const attachConversion   = (o, c = "USD") => enrichPaymentWithConversion(o, c);
 
+/**
+ * #883 — Capture a fiat snapshot at payment confirmation time.
+ * Returns a plain object suitable for embedding in the payment document.
+ * Never throws — returns null if the rate is unavailable so the payment
+ * save is never blocked by a price-feed failure.
+ *
+ * @param {number} amount      - Crypto amount (XLM or USDC)
+ * @param {string} assetCode   - 'XLM' | 'USDC'
+ * @param {string} currency    - Target fiat currency code, e.g. 'USD'
+ */
+async function captureFiatSnapshot(amount, assetCode = "XLM", currency = "USD") {
+  try {
+    const result = await convertToLocalCurrency(amount, assetCode, currency);
+    if (!result || !result.available || result.localAmount === null) return null;
+    return {
+      fiatAmount:    result.localAmount,
+      fiatCurrency:  result.currency,
+      fiatRate:      result.rate,
+      rateSource:    null,       // provider name not exposed here; ok for snapshot
+      rateTimestamp: result.rateTimestamp ? new Date(result.rateTimestamp) : new Date(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   convertToLocalCurrency,
   enrichPaymentWithConversion,
   formatWithLocalEquivalent,
+  captureFiatSnapshot,
   getCachedRates,
   resetCache,
   fetchXlmRate,
