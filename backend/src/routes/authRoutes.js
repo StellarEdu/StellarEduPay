@@ -2,7 +2,7 @@
 
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { handleLogin, handleRefresh, handleLogout, handleMe } = require('../controllers/authController');
+const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession } = require('../controllers/authController');
 const {
   setupMfa, verifyAndEnableMfa, disableMfa,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
@@ -25,6 +25,10 @@ router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
 router.get('/me', requireAdminAuth, handleMe);
+
+// ── Session management ────────────────────────────────────────────────────────
+router.get('/sessions', requireAdminAuth, handleListSessions);
+router.delete('/sessions/:sessionId', requireAdminAuth, handleRevokeSession);
 
 // ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
 router.post('/mfa/setup',   requireAdminAuth, setupMfa);

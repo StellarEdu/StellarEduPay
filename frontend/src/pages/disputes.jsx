@@ -196,11 +196,7 @@ export default function DisputesPage() {
   const [draftStudent, setDraftStudent]   = useState("");
   const [expanded, setExpanded]       = useState(null);
 
-  useEffect(() => {
-    if (typeof window !== "undefined" && !localStorage.getItem("token")) {
-      window.location.href = "/";
-    }
-  }, []);
+  // Auth is cookie-based; the axios interceptor in api.js handles 401 → /login redirect.
 
   const fetchDisputes = useCallback(async (p = page) => {
     setLoading(true);

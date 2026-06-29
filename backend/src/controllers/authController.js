@@ -19,7 +19,139 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-// ── Refresh token store (Redis when available, in-process Map otherwise) ──────
+// ── Token & session store ─────────────────────────────────────────────────────
+// Redis keys:
+//   refresh:token:<token>    → JSON metadata ({ familyId, sessionId, userId, role, ... })
+//   refresh:consumed:<token> → familyId string (300s reuse-detection window)
+//   refresh:revoked:<fid>    → '1' (TTL: refresh token max TTL)
+//   session:<sid>            → JSON session record
+//   sessions:user:<uid>      → Redis set of active sessionIds
+
+function makeRedisStore(client) {
+  return {
+    async setToken(token, ttlSeconds, meta) {
+      await client.set(`refresh:token:${token}`, JSON.stringify(meta), 'EX', ttlSeconds);
+    },
+    async getToken(token) {
+      const raw = await client.get(`refresh:token:${token}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    },
+    async delToken(token) {
+      await client.del(`refresh:token:${token}`);
+    },
+    async markConsumed(token, familyId, ttlSeconds = 300) {
+      await client.set(`refresh:consumed:${token}`, familyId, 'EX', ttlSeconds);
+    },
+    async getConsumedFamily(token) {
+      return client.get(`refresh:consumed:${token}`);
+    },
+    async revokeFamily(familyId, ttlSeconds) {
+      await client.set(`refresh:revoked:${familyId}`, '1', 'EX', ttlSeconds);
+    },
+    async isFamilyRevoked(familyId) {
+      return (await client.exists(`refresh:revoked:${familyId}`)) === 1;
+    },
+    async setSession(sessionId, data, ttlSeconds) {
+      await client.set(`session:${sessionId}`, JSON.stringify(data), 'EX', ttlSeconds);
+      if (data.userId) {
+        await client.sadd(`sessions:user:${data.userId}`, sessionId);
+        await client.expire(`sessions:user:${data.userId}`, ttlSeconds);
+      }
+    },
+    async getSession(sessionId) {
+      const raw = await client.get(`session:${sessionId}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    },
+    async delSession(sessionId) {
+      const raw = await client.get(`session:${sessionId}`);
+      if (raw) {
+        try {
+          const data = JSON.parse(raw);
+          if (data.userId) await client.srem(`sessions:user:${data.userId}`, sessionId);
+        } catch {}
+      }
+      await client.del(`session:${sessionId}`);
+    },
+    async listUserSessions(userId) {
+      const ids = await client.smembers(`sessions:user:${userId}`);
+      const result = [];
+      for (const id of ids) {
+        const sess = await this.getSession(id);
+        if (sess) result.push({ sessionId: id, ...sess });
+        else await client.srem(`sessions:user:${userId}`, id);
+      }
+      return result;
+    },
+  };
+}
+
+function makeMemoryStore() {
+  const tokens = new Map();
+  const consumed = new Map();
+  const revoked = new Map();
+  const sessions = new Map();
+  const userSessions = new Map();
+
+  function alive(entry) { return entry && Date.now() < entry.exp; }
+
+  return {
+    async setToken(token, ttlSeconds, meta) {
+      tokens.set(token, { meta, exp: Date.now() + ttlSeconds * 1000 });
+    },
+    async getToken(token) {
+      const e = tokens.get(token);
+      if (!alive(e)) { tokens.delete(token); return null; }
+      return e.meta;
+    },
+    async delToken(token) { tokens.delete(token); },
+    async markConsumed(token, familyId, ttlSeconds = 300) {
+      consumed.set(token, { familyId, exp: Date.now() + ttlSeconds * 1000 });
+    },
+    async getConsumedFamily(token) {
+      const e = consumed.get(token);
+      if (!alive(e)) { consumed.delete(token); return null; }
+      return e.familyId;
+    },
+    async revokeFamily(familyId, ttlSeconds) {
+      revoked.set(familyId, Date.now() + ttlSeconds * 1000);
+    },
+    async isFamilyRevoked(familyId) {
+      const exp = revoked.get(familyId);
+      if (!exp) return false;
+      if (Date.now() > exp) { revoked.delete(familyId); return false; }
+      return true;
+    },
+    async setSession(sessionId, data, ttlSeconds) {
+      sessions.set(sessionId, { data, exp: Date.now() + ttlSeconds * 1000 });
+      if (data.userId) {
+        if (!userSessions.has(data.userId)) userSessions.set(data.userId, new Set());
+        userSessions.get(data.userId).add(sessionId);
+      }
+    },
+    async getSession(sessionId) {
+      const e = sessions.get(sessionId);
+      if (!alive(e)) { sessions.delete(sessionId); return null; }
+      return e.data;
+    },
+    async delSession(sessionId) {
+      const e = sessions.get(sessionId);
+      if (e?.data?.userId) userSessions.get(e.data.userId)?.delete(sessionId);
+      sessions.delete(sessionId);
+    },
+    async listUserSessions(userId) {
+      const ids = userSessions.get(userId) || new Set();
+      const result = [];
+      for (const id of [...ids]) {
+        const sess = await this.getSession(id);
+        if (sess) result.push({ sessionId: id, ...sess });
+        else ids.delete(id);
+      }
+      return result;
+    },
+  };
+}
 
 let _store;
 
@@ -29,64 +161,28 @@ function getStore() {
   if (process.env.REDIS_HOST) {
     const client = getRedisClient();
     if (client && client.status === 'ready') {
-      _store = {
-        async set(token, ttlSeconds) {
-          await client.set(`refresh:${token}`, '1', 'EX', ttlSeconds);
-        },
-        async has(token) {
-          return (await client.exists(`refresh:${token}`)) === 1;
-        },
-        async del(token) {
-          await client.del(`refresh:${token}`);
-        },
-      };
-    } else {
-      logger.warn('[AuthController] Redis unavailable — falling back to in-memory refresh token store');
-      const map = new Map();
-      _store = {
-        async set(token, ttlSeconds) { map.set(token, Date.now() + ttlSeconds * 1000); },
-        async has(token) {
-          const exp = map.get(token);
-          if (!exp) return false;
-          if (Date.now() > exp) { map.delete(token); return false; }
-          return true;
-        },
-        async del(token) { map.delete(token); },
-      };
+      _store = makeRedisStore(client);
+      return _store;
     }
-  } else {
-    const map = new Map();
-    _store = {
-      async set(token, ttlSeconds) { map.set(token, Date.now() + ttlSeconds * 1000); },
-      async has(token) {
-        const exp = map.get(token);
-        if (!exp) return false;
-        if (Date.now() > exp) { map.delete(token); return false; }
-        return true;
-      },
-      async del(token) { map.delete(token); },
-    };
+    logger.warn('[AuthController] Redis unavailable — falling back to in-memory token store');
   }
 
+  _store = makeMemoryStore();
   return _store;
 }
 
 function _resetStore() { _store = null; }
 
 // ── Per-account login lockout ─────────────────────────────────────────────────
-// Counters are shared across replicas via Redis when available; the in-process
-// node-cache acts as a write-through layer so lock checks remain synchronous
-// on the hot path (the test suite also benefits from this sync behaviour).
 
-const LOGIN_FAIL_WINDOW = 900;   // 15 min window
-const LOGIN_FAIL_THRESHOLD = 5;  // lock after 5 failures
-const LOGIN_LOCK_TTL = 900;      // lock duration: 15 min
+const LOGIN_FAIL_WINDOW = 900;
+const LOGIN_FAIL_THRESHOLD = 5;
+const LOGIN_LOCK_TTL = 900;
 
 function loginLockKey(id) { return `loginLock:${id}`; }
 function loginFailKey(id) { return `loginFail:${id}`; }
 
 function isLockedOut(loginId) {
-  // Sync in-memory check (fast path, no I/O)
   return Boolean(get(loginLockKey(loginId)));
 }
 
@@ -94,7 +190,6 @@ async function recordLoginFailure(loginId) {
   const fk = loginFailKey(loginId);
   const lk = loginLockKey(loginId);
 
-  // Update in-memory counter
   const prevCount = get(fk) || 0;
   const newCount = prevCount + 1;
   set(fk, newCount, LOGIN_FAIL_WINDOW);
@@ -106,7 +201,7 @@ async function recordLoginFailure(loginId) {
       if (count === 1) await redis.expire(fk, LOGIN_FAIL_WINDOW);
       if (count >= LOGIN_FAIL_THRESHOLD) {
         await redis.set(lk, '1', 'EX', LOGIN_LOCK_TTL);
-        set(lk, true, LOGIN_LOCK_TTL); // mirror to in-memory for sync reads
+        set(lk, true, LOGIN_LOCK_TTL);
         await sendAdminAlert(`Login lockout triggered for "${loginId}"`, { loginId, failCount: count });
       }
     } catch (e) {
@@ -167,26 +262,44 @@ function parseTTL(envVar, defaultSeconds) {
   return n * (multipliers[unit] ?? 1);
 }
 
+function extractDeviceInfo(req) {
+  return {
+    userAgent: req.headers['user-agent'] || null,
+    ip: req.ip || req.connection?.remoteAddress || null,
+  };
+}
+
+// Persist a refresh token and create a session record. Returns the generated
+// refreshToken string. Throws on store write failure (#820).
+async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
+  const familyId  = crypto.randomBytes(16).toString('hex');
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const refreshToken = crypto.randomBytes(40).toString('hex');
+
+  await store.setToken(refreshToken, refreshTTL, { familyId, sessionId, ...jwtPayload });
+
+  store.setSession(sessionId, {
+    userId:     jwtPayload.userId   || null,
+    role:       jwtPayload.role     || null,
+    roles:      jwtPayload.roles    || [],
+    schoolId:   jwtPayload.schoolId || null,
+    familyId,
+    deviceInfo: extractDeviceInfo(req),
+    createdAt:  new Date().toISOString(),
+    lastUsed:   new Date().toISOString(),
+  }, refreshTTL).catch(err =>
+    logger.warn('[AuthController] Failed to persist session record', { error: err.message })
+  );
+
+  return refreshToken;
+}
+
 // ── Login handler ─────────────────────────────────────────────────────────────
 
-/**
- * POST /api/auth/login
- *
- * Accepts { username, password } for the env super-admin (break-glass) and
- * { email, password, mfaCode? } for DB-registered school users.
- *
- * Per-account lockout is enforced via an in-memory counter (Redis-backed when
- * REDIS_HOST is set) keyed by the normalised login identifier.
- *
- * When a school has MFA enabled and the caller provides a valid password but
- * no mfaCode, the response is { requiresMfa: true } (HTTP 200) so the client
- * can prompt for the second factor before re-submitting.
- */
 async function handleLogin(req, res) {
   const { username, email, password, mfaCode } = req.body || {};
   const loginId = ((email || username) || '').trim().toLowerCase();
 
-  // ── Per-account lockout (sync fast-path via in-process cache) ──────────────
   if (isLockedOut(loginId)) {
     return res.status(429).json({
       error: 'Too many failed login attempts. Account temporarily locked.',
@@ -194,15 +307,11 @@ async function handleLogin(req, res) {
     });
   }
 
-  // ── ENV super-admin path (username-based, backward-compatible) ─────────────
-  // When only `username` is supplied (no `email`), we bypass the DB and check
-  // against ADMIN_USERNAME / ADMIN_PASSWORD_HASH (or legacy ADMIN_PASSWORD).
-  // This preserves the existing authLogin.test.js contract and keeps the hot
-  // path synchronous so tests can call handleLogin without await.
+  // ── ENV super-admin path ───────────────────────────────────────────────────
   if (!email) {
-    const envUsername = process.env.ADMIN_USERNAME;
+    const envUsername     = process.env.ADMIN_USERNAME;
     const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
-    const envPassword = process.env.ADMIN_PASSWORD;
+    const envPassword     = process.env.ADMIN_PASSWORD;
 
     if (!envUsername || (!envPassword && !envPasswordHash)) {
       return res.status(500).json({
@@ -215,10 +324,8 @@ async function handleLogin(req, res) {
     let credValid = false;
 
     if (envPasswordHash) {
-      // Async bcrypt path — used when ADMIN_PASSWORD_HASH is configured
       credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
     } else {
-      // Legacy sync path — used when only ADMIN_PASSWORD is set (no await needed)
       credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
     }
 
@@ -227,36 +334,33 @@ async function handleLogin(req, res) {
       return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
     }
 
-    // Success — clear failure counter (fire-and-forget)
     clearLoginFailures(loginId);
 
     const jwt = require('jsonwebtoken');
-    const secret = process.env.JWT_SECRET;
+    const secret    = process.env.JWT_SECRET;
     const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-    // Preserve backward-compat JWT shape; append new fields for new consumers
-    const token = jwt.sign(
-      { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] },
-      secret,
-      { expiresIn: accessTTL }
-    );
+    const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
+    const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
-    const refreshToken = crypto.randomBytes(40).toString('hex');
-    getStore().set(refreshToken, refreshTTL).catch(() => {});
+    const store = getStore();
+    let refreshToken;
+    try {
+      refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
+    } catch (err) {
+      logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
+      return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
+    }
 
+    // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
     res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
     res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
-    return res.json({
-      isAdmin: true,
-      expiresIn: accessTTL,
-      refreshToken,
-      refreshExpiresIn: refreshTTL,
-    });
+    return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
   }
 
-  // ── DB user path (email-based login for school operators) ──────────────────
+  // ── DB user path ───────────────────────────────────────────────────────────
   let user;
   try {
     const User = require('../models/userModel');
@@ -267,7 +371,6 @@ async function handleLogin(req, res) {
   }
 
   if (!user) {
-    // Consume time to avoid user-enumeration via timing
     await bcrypt.compare(password || '', '$2a$10$dummyhashtopreventtimingattacks000000000000000000000000');
     recordLoginFailure(loginId).catch(() => {});
     return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
@@ -279,9 +382,7 @@ async function handleLogin(req, res) {
     return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
   }
 
-  // ── MFA check: user-level TOTP first, school-level as fallback ─────────────
-  // User-level MFA takes priority so each admin/owner has their own second factor
-  // independent of whether the school has MFA configured.
+  // ── MFA check ──────────────────────────────────────────────────────────────
   {
     const { verifyTotpCode, verifyBackupCode } = require('./mfaController');
 
@@ -300,7 +401,6 @@ async function handleLogin(req, res) {
         User.findByIdAndUpdate(user._id, { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }).catch(() => {});
       }
     } else if (user.schoolId) {
-      // Fall back to school-level TOTP when the user has no personal MFA enrolled
       const School = require('../models/schoolModel');
       let school;
       try {
@@ -330,37 +430,35 @@ async function handleLogin(req, res) {
     }
   }
 
-  // ── Issue JWT for school user ──────────────────────────────────────────────
   clearLoginFailures(loginId);
 
   const jwt = require('jsonwebtoken');
-  const secret = process.env.JWT_SECRET;
-  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+  const secret    = process.env.JWT_SECRET;
+  const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-  const token = jwt.sign(
-    {
-      role: 'user',
-      userId: user._id.toString(),
-      schoolId: user.schoolId,
-      roles: user.roles,
-    },
-    secret,
-    { expiresIn: accessTTL }
-  );
+  const jwtPayload = {
+    role:     'user',
+    userId:   user._id.toString(),
+    schoolId: user.schoolId,
+    roles:    user.roles,
+  };
+  const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
-  const refreshToken = crypto.randomBytes(40).toString('hex');
-  getStore().set(refreshToken, refreshTTL).catch(() => {});
+  const store = getStore();
+  let refreshToken;
+  try {
+    refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
+  } catch (err) {
+    logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
+    return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
+  }
 
+  // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
   res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
   res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
-  return res.json({
-    token,
-    expiresIn: accessTTL,
-    refreshToken,
-    refreshExpiresIn: refreshTTL,
-  });
+  return res.json({ expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────
@@ -373,32 +471,68 @@ async function handleRefresh(req, res) {
   }
 
   const store = getStore();
-  const valid = await store.has(refreshToken);
-  if (!valid) {
+  const meta = await store.getToken(refreshToken);
+
+  if (!meta) {
+    // Reuse detection: check if this token was recently consumed (#819)
+    const consumedFamilyId = await store.getConsumedFamily(refreshToken);
+    if (consumedFamilyId) {
+      logger.warn('[AuthController] Refresh token reuse detected — revoking family', { familyId: consumedFamilyId });
+      const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+      await store.revokeFamily(consumedFamilyId, refreshTTL).catch(() => {});
+    }
     res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
     return res.status(401).json({ error: 'Invalid or expired refresh token.', code: 'INVALID_REFRESH_TOKEN' });
   }
 
+  // Reject if the whole token family has been revoked (#819)
+  if (!meta.familyId || await store.isFamilyRevoked(meta.familyId)) {
+    res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
+    return res.status(401).json({ error: 'Session has been revoked.', code: 'SESSION_REVOKED' });
+  }
+
   const jwt = require('jsonwebtoken');
-  const secret = process.env.JWT_SECRET;
-  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+  const secret     = process.env.JWT_SECRET;
+  const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
   const newRefreshToken = crypto.randomBytes(40).toString('hex');
-  await store.set(newRefreshToken, refreshTTL);
-  await store.del(refreshToken);
 
-  const token = jwt.sign({ role: 'admin' }, secret, { expiresIn: accessTTL });
+  // Mark old token consumed before issuing the new one (#819)
+  await store.markConsumed(refreshToken, meta.familyId, 300);
+  await store.delToken(refreshToken);
 
-  res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+  try {
+    await store.setToken(newRefreshToken, refreshTTL, { ...meta, issuedAt: new Date().toISOString() });
+  } catch (err) {
+    logger.error('[AuthController] Failed to persist rotated refresh token', { error: err.message });
+    res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
+    return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
+  }
+
+  // Update session lastUsed (non-critical)
+  if (meta.sessionId) {
+    store.getSession(meta.sessionId)
+      .then(sess => sess && store.setSession(meta.sessionId, { ...sess, lastUsed: new Date().toISOString() }, refreshTTL))
+      .catch(() => {});
+  }
+
+  // Reconstruct JWT payload from stored metadata so the refreshed token is
+  // correct for every user type, not just the super-admin (#819)
+  const jwtPayload = {};
+  if (meta.role)     jwtPayload.role     = meta.role;
+  if (meta.userId)   jwtPayload.userId   = meta.userId;
+  if (meta.roles)    jwtPayload.roles    = meta.roles;
+  if (meta.schoolId) jwtPayload.schoolId = meta.schoolId;
+  if (meta.username) jwtPayload.username = meta.username;
+
+  const accessToken = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+
+  // Deliver via cookies only — no tokens in response body (#821)
+  res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions(accessTTL));
   res.cookie(REFRESH_COOKIE, newRefreshToken, refreshCookieOptions(refreshTTL));
 
-  return res.json({
-    token,
-    expiresIn: accessTTL,
-    refreshToken: newRefreshToken,
-    refreshExpiresIn: refreshTTL,
-  });
+  return res.json({ expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
 }
 
 // ── Logout ────────────────────────────────────────────────────────────────────
@@ -407,7 +541,15 @@ async function handleLogout(req, res) {
   const refreshToken = req.cookies?.[REFRESH_COOKIE] || (req.body && req.body.refreshToken);
 
   if (refreshToken) {
-    await getStore().del(refreshToken);
+    const store = getStore();
+    const meta = await store.getToken(refreshToken).catch(() => null);
+    if (meta?.familyId) {
+      // Revoke the whole family so any rotated copies are also invalidated
+      const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+      await store.revokeFamily(meta.familyId, refreshTTL).catch(() => {});
+      if (meta.sessionId) await store.delSession(meta.sessionId).catch(() => {});
+    }
+    await store.delToken(refreshToken).catch(() => {});
   }
 
   const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
@@ -428,4 +570,40 @@ function handleMe(req, res) {
   });
 }
 
-module.exports = { handleLogin, handleRefresh, handleLogout, handleMe, _resetStore };
+// ── Session management (admin) ────────────────────────────────────────────────
+
+async function handleListSessions(req, res) {
+  const userId = req.admin?.userId || 'super_admin';
+  try {
+    const sessions = await getStore().listUserSessions(userId);
+    return res.json({ sessions });
+  } catch (err) {
+    logger.error('[AuthController] Failed to list sessions', { error: err.message });
+    return res.status(500).json({ error: 'Failed to list sessions.', code: 'SESSION_LIST_ERROR' });
+  }
+}
+
+async function handleRevokeSession(req, res) {
+  const { sessionId } = req.params;
+  const store = getStore();
+  const sess = await store.getSession(sessionId).catch(() => null);
+  if (!sess) {
+    return res.status(404).json({ error: 'Session not found.', code: 'SESSION_NOT_FOUND' });
+  }
+  if (sess.familyId) {
+    const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+    await store.revokeFamily(sess.familyId, refreshTTL).catch(() => {});
+  }
+  await store.delSession(sessionId).catch(() => {});
+  return res.json({ message: 'Session revoked.' });
+}
+
+module.exports = {
+  handleLogin,
+  handleRefresh,
+  handleLogout,
+  handleMe,
+  handleListSessions,
+  handleRevokeSession,
+  _resetStore,
+};
