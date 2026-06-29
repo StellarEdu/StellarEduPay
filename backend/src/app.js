@@ -42,6 +42,7 @@ const { startWorker: startTxQueueWorker, stopWorker: stopTxQueueWorker } = requi
 const { startSessionCleanupScheduler, stopSessionCleanupScheduler } = require('./services/sessionCleanupService');
 const { startReconciliationScheduler, stopReconciliationScheduler } = require('./services/reconciliationService');
 const { startAuditLogCleanupScheduler, stopAuditLogCleanupScheduler } = require('./services/auditLogCleanupService');
+const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./services/metricsRollupService');
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
@@ -257,6 +258,7 @@ connectWithRetry().then(async () => {
     startAuditLogCleanupScheduler();
     startWebhookRetryScheduler();
     startReconciliationReportScheduler();
+    startMetricsRollupScheduler();
   };
 
   const stopLeaderSchedulers = () => {
@@ -268,6 +270,7 @@ connectWithRetry().then(async () => {
     stopAuditLogCleanupScheduler();
     stopWebhookRetryScheduler();
     stopReconciliationReportScheduler();
+    stopMetricsRollupScheduler();
   };
 
   leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);

@@ -15,6 +15,7 @@
 const paymentEvents = require('../events/paymentEvents');
 const { notifyPaymentConfirmed } = require('./webhookService');
 const { createReceipt } = require('./receiptService');
+const { incrementPaymentMetrics } = require('./metricsRollupService');
 const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const logger = require('../utils/logger').child('PaymentSavedSubscribers');
@@ -95,6 +96,11 @@ function registerPaymentSavedSubscribers() {
   paymentEvents.on('payment.saved', onPaymentSavedWebhook);
   paymentEvents.on('payment.saved', onPaymentSavedReceipt);
   paymentEvents.on('payment.saved', onPaymentSavedCancelReminder);
+  // #881 — increment pre-aggregated rollups on every confirmed payment
+  paymentEvents.on('payment.saved', async (payment) => {
+    try { await incrementPaymentMetrics(payment); }
+    catch (err) { logger.error('Metrics rollup subscriber failed', { txHash: payment.txHash, error: err.message }); }
+  });
   paymentEvents.on('refund.status_changed', onRefundStatusChanged);
 }
 
