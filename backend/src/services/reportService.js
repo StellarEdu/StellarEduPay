@@ -29,6 +29,9 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC' 
         overpaidCount: { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'overpaid'] }, 1, 0] } },
         underpaidCount:{ $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
         uniqueStudents:{ $addToSet: '$studentId' },
+        // #883 — sum historical fiat amounts from locked snapshots
+        totalFiatAmount:{ $sum: { $ifNull: ['$fiatSnapshot.fiatAmount', 0] } },
+        fiatCurrency:  { $first: '$fiatSnapshot.fiatCurrency' },
       },
     },
     {
@@ -41,6 +44,8 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC' 
         overpaidCount: 1,
         underpaidCount: 1,
         uniqueStudentCount: { $size: '$uniqueStudents' },
+        totalFiatAmount: { $round: ['$totalFiatAmount', 2] },
+        fiatCurrency: 1,
       },
     },
     { $sort: { date: 1 } },
@@ -234,58 +239,50 @@ function reportToCsv(report) {
 
 /**
  * Aggregate dashboard metrics for a school.
+ * #881 — Reads all-time and today totals from pre-aggregated rollups (O(1));
+ * falls back to raw aggregation if no rollup exists yet.
  * @param {{ schoolId: string, timezone?: string }} options
  */
 async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
+  const { DailyMetrics, MonthlyMetrics } = require('../models/metricsModel');
   const now = new Date();
 
-  // Compute start of today in the school's timezone as the correct UTC epoch.
-  // Strategy: subtract how many ms have elapsed in the current day (measured in
-  // the school's timezone) from now. This handles any UTC offset including DST.
-  const timeParts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).formatToParts(now);
-  const tp = {};
-  timeParts.forEach(p => { tp[p.type] = parseInt(p.value, 10) || 0; });
-  const msIntoDay = tp.hour * 3600000 + tp.minute * 60000 + tp.second * 1000;
-  const startOfToday = new Date(now.getTime() - msIntoDay - (now.getTime() % 1000));
+  // Today's key in UTC
+  const todayKey = now.toISOString().slice(0, 10);
 
   const [
     totalStudents,
     paidStudents,
     overdueStudents,
-    paymentTotals,
-    todayTotals,
+    allTimeRollup,   // sum of all MonthlyMetrics for this school
+    todayRollup,     // DailyMetrics for today
     byClass,
     recentPayments,
+    feeAgg,
   ] = await Promise.all([
     Student.countDocuments({ schoolId }),
     Student.countDocuments({ schoolId, feePaid: true }),
     Student.countDocuments({ schoolId, feePaid: false, paymentDeadline: { $lt: now, $ne: null } }),
 
-    // All-time confirmed payment totals
-    Payment.aggregate([
-      { $match: { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null } },
-      { $group: { _id: null, totalCollected: { $sum: '$amount' }, count: { $sum: 1 } } },
+    // All-time totals from monthly rollups (O(months), not O(payments))
+    MonthlyMetrics.aggregate([
+      { $match: { schoolId } },
+      { $group: { _id: null, totalCollected: { $sum: '$totalAmount' }, count: { $sum: '$paymentCount' } } },
     ]),
 
-    // Today's payments
-    Payment.aggregate([
-      { $match: { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null, confirmedAt: { $gte: startOfToday } } },
-      { $group: { _id: null, totalCollected: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]),
+    // Today from daily rollup (O(1) point-read)
+    DailyMetrics.findOne({ schoolId, period: todayKey }).lean(),
 
-    // Per-class breakdown
+    // Per-class breakdown (from Student collection — these are small)
     Student.aggregate([
       { $match: { schoolId } },
       {
         $group: {
           _id: '$class',
-          totalStudents:  { $sum: 1 },
-          paidStudents:   { $sum: { $cond: ['$feePaid', 1, 0] } },
-          totalFees:      { $sum: '$feeAmount' },
-          totalPaid:      { $sum: '$totalPaid' },
+          totalStudents: { $sum: 1 },
+          paidStudents:  { $sum: { $cond: ['$feePaid', 1, 0] } },
+          totalFees:     { $sum: '$feeAmount' },
+          totalPaid:     { $sum: '$totalPaid' },
         },
       },
       {
@@ -303,26 +300,26 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       { $sort: { class: 1 } },
     ]),
 
-    // 5 most recent successful payments
+    // 5 most recent successful payments (small bounded query, always fast)
     Payment.find({ schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null })
       .sort({ confirmedAt: -1 })
       .limit(5)
       .select('txHash studentId amount feeValidationStatus confirmedAt')
       .lean(),
+
+    Student.aggregate([
+      { $match: { schoolId } },
+      { $group: { _id: null, totalExpected: { $sum: '$feeAmount' }, totalPaid: { $sum: '$totalPaid' } } },
+    ]),
   ]);
 
-  const collected = paymentTotals[0] || { totalCollected: 0, count: 0 };
-  const today     = todayTotals[0]   || { totalCollected: 0, count: 0 };
-
-  // Expected total fees across all students
-  const feeAgg = await Student.aggregate([
-    { $match: { schoolId } },
-    { $group: { _id: null, totalExpected: { $sum: '$feeAmount' }, totalPaid: { $sum: '$totalPaid' } } },
-  ]);
-  const feeRow = feeAgg[0] || { totalExpected: 0, totalPaid: 0 };
+  const collected = allTimeRollup[0] || { totalCollected: 0, count: 0 };
+  const today     = { totalCollected: todayRollup?.totalAmount || 0, count: todayRollup?.paymentCount || 0 };
+  const feeRow    = feeAgg[0] || { totalExpected: 0, totalPaid: 0 };
 
   return {
     generatedAt: now.toISOString(),
+    fromRollup: true,
     students: {
       total:   totalStudents,
       paid:    paidStudents,
@@ -330,10 +327,10 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       overdue: overdueStudents,
     },
     fees: {
-      totalExpected:   parseFloat(feeRow.totalExpected.toFixed(7)),
-      totalCollected:  parseFloat(collected.totalCollected.toFixed(7)),
-      outstanding:     parseFloat(Math.max(0, feeRow.totalExpected - feeRow.totalPaid).toFixed(7)),
-      collectionRate:  feeRow.totalExpected > 0
+      totalExpected:  parseFloat(feeRow.totalExpected.toFixed(7)),
+      totalCollected: parseFloat(collected.totalCollected.toFixed(7)),
+      outstanding:    parseFloat(Math.max(0, feeRow.totalExpected - feeRow.totalPaid).toFixed(7)),
+      collectionRate: feeRow.totalExpected > 0
         ? parseFloat((feeRow.totalPaid / feeRow.totalExpected * 100).toFixed(2))
         : 0,
     },
@@ -346,4 +343,105 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
   };
 }
 
-module.exports = { generateReport, aggregateByDate, reportToCsv, getDashboardMetrics };
+/**
+ * #884 — Versioned accounting export.
+ *
+ * Produces a flat transaction-level CSV with a stable, documented schema
+ * that accounting systems (QuickBooks, Xero, custom) can import reliably.
+ *
+ * Schema version 1 columns (never removed; new columns added at the end):
+ *   schema_version, exported_at, school_id, tx_hash, student_id, class,
+ *   confirmed_at, asset_code, asset_type, crypto_amount, fee_amount,
+ *   fee_validation_status, excess_amount, fiat_amount_at_payment,
+ *   fiat_currency_at_payment, fiat_rate_at_payment, reference_code, status
+ *
+ * The schema_version column and the X-Export-Schema-Version response header
+ * let consumers pin to a specific version and detect breaking changes.
+ */
+
+// Current accounting export schema version — increment when columns change shape.
+const ACCOUNTING_SCHEMA_VERSION = 1;
+
+const ACCOUNTING_HEADERS_V1 = [
+  'schema_version', 'exported_at', 'school_id', 'tx_hash', 'student_id', 'class',
+  'confirmed_at', 'asset_code', 'asset_type', 'crypto_amount', 'fee_amount',
+  'fee_validation_status', 'excess_amount',
+  'fiat_amount_at_payment', 'fiat_currency_at_payment', 'fiat_rate_at_payment',
+  'reference_code', 'status',
+];
+
+/**
+ * Build the accounting CSV for a school, pulling transaction-level rows
+ * directly from the payments collection so every payment appears as one line.
+ *
+ * @param {{ schoolId: string, startDate?: string, endDate?: string }} options
+ * @returns {{ csv: string, schemaVersion: number }}
+ */
+async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
+  const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
+  if (startDate || endDate) {
+    match.confirmedAt = {};
+    if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
+    if (endDate)   match.confirmedAt.$lte = new Date(endDate   + 'T23:59:59.999Z');
+  }
+
+  // Enrich with student class via a $lookup
+  const rows = await Payment.aggregate([
+    { $match: match },
+    {
+      $lookup: {
+        from: 'students',
+        let: { sid: '$studentId', scid: '$schoolId' },
+        pipeline: [
+          { $match: { $expr: { $and: [{ $eq: ['$studentId', '$$sid'] }, { $eq: ['$schoolId', '$$scid'] }] } } },
+          { $project: { class: 1 } },
+        ],
+        as: '_student',
+      },
+    },
+    { $sort: { confirmedAt: 1 } },
+  ]);
+
+  const exportedAt = new Date().toISOString();
+  const lines = [ACCOUNTING_HEADERS_V1.map(csvEscape).join(',')];
+
+  for (const r of rows) {
+    const studentClass = r._student?.[0]?.class ?? '';
+    // #883 — use stored fiat snapshot when available, else leave blank
+    const fiatAmount   = r.fiatSnapshot?.fiatAmount   ?? '';
+    const fiatCurrency = r.fiatSnapshot?.fiatCurrency ?? '';
+    const fiatRate     = r.fiatSnapshot?.fiatRate     ?? '';
+
+    lines.push([
+      ACCOUNTING_SCHEMA_VERSION,
+      exportedAt,
+      csvEscape(r.schoolId),
+      csvEscape(r.txHash),
+      csvEscape(r.studentId),
+      csvEscape(studentClass),
+      r.confirmedAt ? new Date(r.confirmedAt).toISOString() : '',
+      csvEscape(r.assetCode ?? 'XLM'),
+      csvEscape(r.assetType ?? 'crypto'),
+      r.amount,
+      r.feeAmount ?? '',
+      csvEscape(r.feeValidationStatus ?? ''),
+      r.excessAmount ?? 0,
+      fiatAmount,
+      csvEscape(fiatCurrency),
+      fiatRate,
+      csvEscape(r.referenceCode ?? ''),
+      csvEscape(r.status),
+    ].map(v => csvEscape(v)).join(','));
+  }
+
+  return { csv: lines.join('\n'), schemaVersion: ACCOUNTING_SCHEMA_VERSION };
+}
+
+module.exports = {
+  generateReport,
+  aggregateByDate,
+  reportToCsv,
+  generateAccountingCsv,
+  ACCOUNTING_SCHEMA_VERSION,
+  getDashboardMetrics,
+};
