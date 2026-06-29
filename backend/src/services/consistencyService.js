@@ -2,6 +2,7 @@
 
 const { server } = require('../config/stellarConfig');
 const Payment = require('../models/paymentModel');
+const Student = require('../models/studentModel');
 const School = require('../models/schoolModel');
 
 /**
@@ -82,6 +83,9 @@ async function checkSchoolConsistency({ schoolId, stellarAddress }) {
     }
   }
 
+  const balanceMismatches = await checkStudentBalanceConsistency(schoolId);
+  mismatches.push(...balanceMismatches);
+
   return {
     schoolId,
     totalDbPayments: dbPayments.length,
@@ -99,6 +103,49 @@ async function checkSchoolConsistency({ schoolId, stellarAddress }) {
  *  - amount_mismatch  : DB amount differs from on-chain amount
  *  - student_mismatch : DB studentId doesn't match the tx memo
  */
+async function checkStudentBalanceConsistency(schoolId) {
+  const students = await Student.find({ schoolId, deletedAt: null }).lean();
+  const mismatches = [];
+
+  for (const student of students) {
+    const [agg] = await Payment.aggregate([
+      { $match: { schoolId, studentId: student.studentId, status: 'SUCCESS', deletedAt: null } },
+      { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
+    ]);
+
+    const computedTotal = agg?.computedTotal ?? 0;
+    const computedRemaining = Math.max(0, student.feeAmount - computedTotal);
+
+    const totalDrift = Math.abs(computedTotal - (student.totalPaid || 0));
+    const remainingDrift = Math.abs(computedRemaining - (student.remainingBalance || 0));
+
+    if (totalDrift > 0.0000001 || remainingDrift > 0.0000001) {
+      mismatches.push({
+        type: 'student_balance_drift',
+        schoolId,
+        studentId: student.studentId,
+        storedTotal: student.totalPaid || 0,
+        computedTotal,
+        storedRemaining: student.remainingBalance || 0,
+        computedRemaining,
+        diff: computedTotal - (student.totalPaid || 0),
+        message: `Student ${student.studentId} balance drift detected and repaired`,
+      });
+
+      await Student.findOneAndUpdate(
+        { schoolId, studentId: student.studentId },
+        {
+          totalPaid: computedTotal,
+          remainingBalance: computedRemaining,
+          feePaid: computedTotal >= student.feeAmount,
+        }
+      );
+    }
+  }
+
+  return mismatches;
+}
+
 async function checkConsistency() {
   const schools = await School.find({ isActive: true }).lean();
 

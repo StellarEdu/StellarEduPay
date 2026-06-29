@@ -22,12 +22,14 @@ const { v4: uuidv4 } = require("uuid");
  *
  * Throws DUPLICATE_TX if the transaction was already recorded by any concurrent path.
  */
-async function savePayment(data) {
+async function savePayment(data, options = {}) {
+  const { session = null } = options;
+
   if (!data.referenceCode) {
     data = { ...data, referenceCode: await generateReferenceCode() };
   }
   try {
-    const payment = await Payment.create(data);
+    const payment = await Payment.create(data, { session });
 
     const eventId = uuidv4();
     await Outbox.create({
@@ -36,7 +38,7 @@ async function savePayment(data) {
       aggregateId: payment.txHash,
       aggregateType: "payment",
       payload: payment.toObject(),
-    });
+    }, { session });
 
     logger.debug("Payment saved with outbox event", {
       txHash: payment.txHash,

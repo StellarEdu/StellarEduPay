@@ -7,6 +7,7 @@ const {
   CONFIRMATION_THRESHOLD,
   FINALIZATION_THRESHOLD,
 } = require("../config/stellarConfig");
+const mongoose = require("mongoose");
 const Payment = require("../models/paymentModel");
 const Student = require("../models/studentModel");
 const PaymentIntent = require("../models/paymentIntentModel");
@@ -686,27 +687,83 @@ async function syncPaymentsForSchool(school) {
           ? parseFloat((cumulativeTotal - student.feeAmount).toFixed(7))
           : 0;
 
+      let session;
       try {
-        await savePayment({
-          schoolId,
-          studentId,
-          txHash: tx.hash,
-          correlationId: deriveCorrelationId(tx.hash),
-          amount: paymentAmount,
-          feeAmount: feeAmountForRecord,
-          feeCategory,
-          feeValidationStatus: cumulativeStatus,
-          excessAmount,
-          status: "SUCCESS",
-          memo,
-          senderAddress,
-          isSuspicious,
-          suspicionReason,
-          ledger: txLedger,
-          ledgerSequence: txLedger,
-          confirmationStatus,
-          confirmationState: confirmation.state,
-          confirmedAt: txDate,
+        session = await mongoose.connection.startSession();
+        await session.withTransaction(async () => {
+          await savePayment({
+            schoolId,
+            studentId,
+            txHash: tx.hash,
+            correlationId: deriveCorrelationId(tx.hash),
+            amount: paymentAmount,
+            feeAmount: feeAmountForRecord,
+            feeCategory,
+            feeValidationStatus: cumulativeStatus,
+            excessAmount,
+            status: "SUCCESS",
+            memo,
+            senderAddress,
+            isSuspicious,
+            suspicionReason,
+            ledger: txLedger,
+            ledgerSequence: txLedger,
+            confirmationStatus,
+            confirmationState: confirmation.state,
+            confirmedAt: txDate,
+          }, { session });
+
+          if (isConfirmed && !isSuspicious) {
+            const updateData = {
+              totalPaid: cumulativeTotal,
+              remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeTotal).toFixed(7)),
+              feePaid: cumulativeTotal >= student.feeAmount,
+            };
+
+            if (feeCategory && student.fees && student.fees.length > 0) {
+              const feeIndex = student.fees.findIndex(f => f.category === feeCategory);
+              if (feeIndex !== -1) {
+                const categoryPayments = await Payment.aggregate([
+                  {
+                    $match: {
+                      schoolId,
+                      studentId,
+                      feeCategory,
+                      confirmationStatus: "confirmed",
+                      isSuspicious: false,
+                      deletedAt: null,
+                    },
+                  },
+                  { $group: { _id: null, total: { $sum: "$amount" } } },
+                ]).session(session);
+                const categoryTotalPaid = categoryPayments.length
+                  ? parseFloat(categoryPayments[0].total.toFixed(7))
+                  : 0;
+
+                student.fees[feeIndex].totalPaid = categoryTotalPaid;
+                student.fees[feeIndex].remainingBalance = Math.max(
+                  0,
+                  student.fees[feeIndex].amount - categoryTotalPaid
+                );
+                student.fees[feeIndex].paid = categoryTotalPaid >= student.fees[feeIndex].amount;
+                updateData.fees = student.fees;
+              }
+            }
+
+            await Student.findOneAndUpdate(
+              { schoolId, studentId },
+              updateData,
+              { session }
+            );
+          }
+
+          if (intent) {
+            await PaymentIntent.findByIdAndUpdate(
+              intent._id,
+              { status: "completed" },
+              { session }
+            );
+          }
         });
       } catch (saveErr) {
         if (saveErr.code === 'DUPLICATE_TX') {
@@ -720,6 +777,8 @@ async function syncPaymentsForSchool(school) {
           continue;
         }
         throw saveErr;
+      } finally {
+        if (session) await session.endSession();
       }
       newPayments++;
 
@@ -734,50 +793,6 @@ async function syncPaymentsForSchool(school) {
         confirmationState: confirmation.state,
         intentMatched: Boolean(intent),
       });
-
-      if (isConfirmed && !isSuspicious) {
-        const updateData = {
-          totalPaid: cumulativeTotal,
-          remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeTotal).toFixed(7)),
-          feePaid: cumulativeTotal >= student.feeAmount,
-        };
-
-        if (feeCategory && student.fees && student.fees.length > 0) {
-          const feeIndex = student.fees.findIndex(f => f.category === feeCategory);
-          if (feeIndex !== -1) {
-            const categoryPayments = await Payment.aggregate([
-              {
-                $match: {
-                  schoolId,
-                  studentId,
-                  feeCategory,
-                  confirmationStatus: "confirmed",
-                  isSuspicious: false,
-                  deletedAt: null,
-                },
-              },
-              { $group: { _id: null, total: { $sum: "$amount" } } },
-            ]);
-            const categoryTotalPaid = categoryPayments.length
-              ? parseFloat(categoryPayments[0].total.toFixed(7))
-              : 0;
-
-            student.fees[feeIndex].totalPaid = categoryTotalPaid;
-            student.fees[feeIndex].remainingBalance = Math.max(
-              0,
-              student.fees[feeIndex].amount - categoryTotalPaid
-            );
-            student.fees[feeIndex].paid = categoryTotalPaid >= student.fees[feeIndex].amount;
-            updateData.fees = student.fees;
-          }
-        }
-
-        await Student.findOneAndUpdate({ schoolId, studentId }, updateData);
-      }
-
-      if (intent) {
-        await PaymentIntent.findByIdAndUpdate(intent._id, { status: "completed" });
-      }
     }
 
     if (!done) {
