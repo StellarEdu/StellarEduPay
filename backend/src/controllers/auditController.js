@@ -1,6 +1,6 @@
 'use strict';
 
-const { getAuditLogs, getRecentAuditLogs } = require('../services/auditService');
+const { getAuditLogs, getRecentAuditLogs, verifyAuditChain } = require('../services/auditService');
 
 /**
  * GET /api/audit-logs
@@ -59,4 +59,14 @@ async function getRecentAuditLogsEndpoint(req, res, next) {
   }
 }
 
-module.exports = { getAuditLogsEndpoint, getRecentAuditLogsEndpoint };
+module.exports = { getAuditLogsEndpoint, getRecentAuditLogsEndpoint, verifyChainEndpoint };
+
+async function verifyChainEndpoint(req, res, next) {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+    const report = await verifyAuditChain(req.schoolId, { limit });
+    res.json(report);
+  } catch (err) {
+    next(err);
+  }
+}

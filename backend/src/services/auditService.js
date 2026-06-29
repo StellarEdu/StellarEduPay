@@ -1,12 +1,16 @@
 'use strict';
 
+const crypto = require('crypto');
 const AuditLog = require('../models/auditLogModel');
 const logger = require('../utils/logger');
 
-// In-process failure counter — reset on restart (acceptable for single-process deployments)
+// HMAC key for entry hashes. Falls back to JWT_SECRET so no new env var is
+// required; operators can add AUDIT_HMAC_KEY to isolate the secret.
+const HMAC_KEY = process.env.AUDIT_HMAC_KEY || process.env.JWT_SECRET || 'audit-integrity-key';
+
+// In-process failure counter — reset on restart
 let _auditFailureCount = 0;
 
-/** Returns the current audit log failure count and health status. */
 function getAuditHealth() {
   return {
     status: _auditFailureCount === 0 ? 'ok' : 'degraded',
@@ -14,25 +18,48 @@ function getAuditHealth() {
   };
 }
 
-/** Exposed for testing only. */
 function _resetAuditFailureCount() {
   _auditFailureCount = 0;
 }
 
 /**
- * logAudit — creates an audit log entry for admin actions.
+ * Compute a deterministic HMAC-SHA256 over the canonical fields of an entry.
+ * prevHash is included so any modification to the chain is detectable.
+ */
+function _computeEntryHash(fields) {
+  const canonical = JSON.stringify({
+    schoolId:     fields.schoolId,
+    action:       fields.action,
+    performedBy:  fields.performedBy,
+    targetId:     fields.targetId,
+    targetType:   fields.targetType,
+    details:      fields.details,
+    result:       fields.result,
+    errorMessage: fields.errorMessage ?? null,
+    ipAddress:    fields.ipAddress ?? null,
+    prevHash:     fields.prevHash ?? null,
+    createdAt:    fields.createdAt instanceof Date ? fields.createdAt.toISOString() : fields.createdAt,
+  });
+  return crypto.createHmac('sha256', HMAC_KEY).update(canonical).digest('hex');
+}
+
+/**
+ * Fetch the most recent audit entry's entryHash for the given schoolId.
+ * Used to link the new entry into the hash chain.
+ */
+async function _getPrevHash(schoolId) {
+  const last = await AuditLog.findOne({ schoolId })
+    .sort({ _id: -1 })
+    .select('entryHash')
+    .lean()
+    .bypassTenantScope();
+  return last ? (last.entryHash || null) : null;
+}
+
+/**
+ * logAudit — append-only audit entry with hash chain.
  *
- * @param {Object} params
- * @param {string} params.schoolId - School context
- * @param {string} params.action - Action performed (e.g., 'student_create', 'payment_reset')
- * @param {string} params.performedBy - Admin user identifier (email or userId from JWT)
- * @param {string} params.targetId - ID of the affected resource
- * @param {string} params.targetType - Type of resource ('student', 'payment', 'fee', 'school')
- * @param {Object} params.details - Additional context (before/after values, etc.)
- * @param {string} params.result - 'success' or 'failure'
- * @param {string} params.errorMessage - Error details if result is 'failure'
- * @param {string} params.ipAddress - Client IP address
- * @param {string} params.userAgent - Client user agent
+ * Never throws; audit failure must not break the primary operation.
  */
 async function logAudit({
   schoolId,
@@ -48,6 +75,14 @@ async function logAudit({
   severity = null,
 }) {
   try {
+    const prevHash = await _getPrevHash(schoolId);
+    const createdAt = new Date();
+
+    const entryHash = _computeEntryHash({
+      schoolId, action, performedBy, targetId, targetType,
+      details, result, errorMessage, ipAddress, prevHash, createdAt,
+    });
+
     await AuditLog.create({
       schoolId,
       action,
@@ -60,83 +95,47 @@ async function logAudit({
       ipAddress,
       userAgent,
       ...(severity ? { severity } : {}),
+      prevHash,
+      entryHash,
+      createdAt,
     });
   } catch (err) {
-    // Do NOT re-throw — audit failure must not break the primary operation
     _auditFailureCount += 1;
     logger.error('AUDIT_LOG_FAILURE', { err, schoolId, action });
   }
 }
 
-/**
- * getAuditLogs — retrieves audit logs with filtering and pagination.
- *
- * Supports two pagination modes:
- *  - Cursor-based (preferred for large datasets): pass `cursor` (opaque token
- *    from a prior response's `nextCursor`). Uses the compound index
- *    { schoolId, createdAt } — no collection scan, O(1) seek.
- *  - Page/offset (backward-compatible): pass `page` + `limit`. Limited to
- *    MAX_PAGE_SIZE results; avoid large page numbers on high-volume schools.
- *
- * @param {Object} filters
- * @param {string} filters.schoolId   - Required school context
- * @param {string} filters.action     - Filter by action type
- * @param {string} filters.targetType - Filter by target type
- * @param {string} filters.performedBy - Filter by actor (admin user)
- * @param {string} filters.result     - Filter by result ('success' | 'failure')
- * @param {Date}   filters.startDate  - Filter by date range start (ISO 8601)
- * @param {Date}   filters.endDate    - Filter by date range end (ISO 8601)
- * @param {string} filters.cursor     - Opaque cursor from a prior response
- * @param {number} filters.page       - Page number for offset pagination (default: 1)
- * @param {number} filters.limit      - Results per page (default: 50, max: 200)
- */
 const MAX_PAGE_SIZE = 200;
 
 async function getAuditLogs(filters = {}) {
   const {
-    schoolId,
-    action,
-    targetType,
-    performedBy,
-    result,
-    startDate,
-    endDate,
-    cursor,
-    page = 1,
-    limit = 50,
+    schoolId, action, targetType, performedBy, result,
+    startDate, endDate, cursor, page = 1, limit = 50,
   } = filters;
 
   const baseQuery = { schoolId };
-
   if (action) baseQuery.action = action;
   if (targetType) baseQuery.targetType = targetType;
   if (performedBy) baseQuery.performedBy = performedBy;
   if (result) baseQuery.result = result;
-
   if (startDate || endDate) {
     baseQuery.createdAt = {};
     if (startDate) baseQuery.createdAt.$gte = new Date(startDate);
-    if (endDate) baseQuery.createdAt.$lte = new Date(endDate);
+    if (endDate)   baseQuery.createdAt.$lte = new Date(endDate);
   }
 
-  const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
-  const actualPage = Math.max(parseInt(page, 10) || 1, 1);
+  const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), MAX_PAGE_SIZE);
+  const actualPage  = Math.max(parseInt(page,  10) || 1, 1);
   const skip = (actualPage - 1) * actualLimit;
 
-  // Select the most specific compound index to avoid COLLSCAN
   let indexHint;
-  if (action) {
-    indexHint = { schoolId: 1, action: 1, createdAt: -1 };
-  } else if (performedBy) {
-    indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
-  } else if (targetType) {
-    indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
-  } else {
-    indexHint = { schoolId: 1, createdAt: -1 };
-  }
+  if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
+  else if (performedBy) indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
+  else if (targetType)  indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
+  else              indexHint = { schoolId: 1, createdAt: -1 };
 
   const [logs, total] = await Promise.all([
-    AuditLog.find(query)
+    AuditLog.find(baseQuery)
       .hint(indexHint)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -147,35 +146,91 @@ async function getAuditLogs(filters = {}) {
 
   const nextCursor =
     skip + logs.length < total && logs.length > 0
-      ? Buffer.from(
-          JSON.stringify({
-            createdAt: logs[logs.length - 1].createdAt,
-            _id: logs[logs.length - 1]._id,
-          }),
-        ).toString('base64')
+      ? Buffer.from(JSON.stringify({
+          createdAt: logs[logs.length - 1].createdAt,
+          _id: logs[logs.length - 1]._id,
+        })).toString('base64')
       : null;
 
-  return {
-    logs,
-    total,
-    page: actualPage,
-    limit: actualLimit,
-    pages: Math.ceil(total / actualLimit) || 1,
-    nextCursor,
-  };
+  return { logs, total, page: actualPage, limit: actualLimit, pages: Math.ceil(total / actualLimit) || 1, nextCursor };
+}
+
+async function getRecentAuditLogs(schoolId, limit = 10) {
+  return AuditLog.find({ schoolId }).sort({ createdAt: -1 }).limit(limit).lean();
 }
 
 /**
- * getRecentAuditLogs — retrieves the most recent audit logs for dashboard display.
+ * verifyAuditChain — walks the chain for a school and reports broken links.
  *
- * @param {string} schoolId - School context
- * @param {number} limit - Number of recent logs to retrieve (default: 10)
+ * Returns { ok: boolean, scanned: number, broken: Array<{ _id, reason }> }
+ *
+ * Broken entries are those where:
+ *   (a) recomputed entryHash !== stored entryHash, or
+ *   (b) stored prevHash !== entryHash of the prior record.
  */
-async function getRecentAuditLogs(schoolId, limit = 10) {
-  return await AuditLog.find({ schoolId })
-    .sort({ createdAt: -1 })
+async function verifyAuditChain(schoolId, { limit = 1000 } = {}) {
+  const entries = await AuditLog.find({ schoolId })
+    .sort({ _id: 1 })
     .limit(limit)
-    .lean();
+    .lean()
+    .bypassTenantScope();
+
+  const broken = [];
+  let prevHash = null;
+
+  for (const entry of entries) {
+    // (a) Recompute hash to detect field-level tampering
+    const recomputed = _computeEntryHash({
+      schoolId:     entry.schoolId,
+      action:       entry.action,
+      performedBy:  entry.performedBy,
+      targetId:     entry.targetId,
+      targetType:   entry.targetType,
+      details:      entry.details,
+      result:       entry.result,
+      errorMessage: entry.errorMessage,
+      ipAddress:    entry.ipAddress,
+      prevHash:     entry.prevHash,
+      createdAt:    entry.createdAt,
+    });
+
+    if (recomputed !== entry.entryHash) {
+      broken.push({ _id: entry._id, reason: 'entryHash_mismatch' });
+    } else if (entry.prevHash !== prevHash) {
+      // (b) Chain link broken: this entry doesn't point to the previous one
+      broken.push({ _id: entry._id, reason: 'chain_link_broken' });
+    }
+
+    prevHash = entry.entryHash;
+  }
+
+  return { ok: broken.length === 0, scanned: entries.length, broken };
 }
 
-module.exports = { logAudit, getAuditLogs, getRecentAuditLogs, getAuditHealth, _resetAuditFailureCount };
+/**
+ * archiveAuditLogs — marks records older than retentionDays as archived=true.
+ * Records are never deleted; archiving signals they can be exported to cold storage.
+ */
+async function archiveAuditLogs(retentionDays = 730) {
+  const expiry = new Date(Date.now() - retentionDays * 86400000);
+  const result = await AuditLog.updateMany(
+    { createdAt: { $lt: expiry }, archived: false },
+    { $set: { archived: true } },
+  ).bypassTenantScope();
+  if (result.modifiedCount > 0) {
+    logger.info('AUDIT_LOG_ARCHIVE', { archivedCount: result.modifiedCount });
+  }
+  return result.modifiedCount;
+}
+
+module.exports = {
+  logAudit,
+  getAuditLogs,
+  getRecentAuditLogs,
+  getAuditHealth,
+  verifyAuditChain,
+  archiveAuditLogs,
+  _resetAuditFailureCount,
+  // Exported for testing
+  _computeEntryHash,
+};
