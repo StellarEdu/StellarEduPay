@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { setLogLevel } = require('../controllers/adminController');
-const { listDLQ, retryDLQEntry } = require('../controllers/webhookAdminController');
+const { listDLQ, retryDLQEntry, replayWebhook } = require('../controllers/webhookAdminController');
 const {
   getBacklog,
   listDeadLetterVerifications,
@@ -19,6 +19,8 @@ router.post('/log-level', requireAdminAuth, auditContext, setLogLevel);
 // Webhook dead-letter queue admin endpoints
 router.get('/webhooks/dlq', requireAdminAuth, listDLQ);
 router.post('/webhooks/dlq/:id/retry', requireAdminAuth, auditContext, retryDLQEntry);
+// Manual replay — accepts any delivery status (Issue #73)
+router.post('/webhooks/:id/replay', requireAdminAuth, auditContext, replayWebhook);
 
 // Stellar verification retry backlog / dead-letter admin endpoints
 router.get('/pending-verifications/backlog', requireAdminAuth, getBacklog);
