@@ -2,7 +2,12 @@
 
 const StellarSdk = require('@stellar/stellar-sdk');
 const config = require('./index');
-const { getInstance: getFailoverClient } = require('../services/horizonFailoverClient');
+const {
+  getInstance: getFailoverClient,
+  CB_FAILURE_THRESHOLD,
+  CB_RESET_TIMEOUT_MS,
+  CB_HALF_OPEN_SUCCESS_THRESHOLD,
+} = require('../services/horizonFailoverClient');
 
 // The failover client manages a prioritized list of Horizon URLs, a circuit
 // breaker per endpoint, and health-aware failover.  Callers that need to make
@@ -100,4 +105,7 @@ module.exports = {
   FINALIZATION_THRESHOLD,
   isAcceptedAsset,
   resolveAsset,
+  CB_FAILURE_THRESHOLD,
+  CB_RESET_TIMEOUT_MS,
+  CB_HALF_OPEN_SUCCESS_THRESHOLD,
 };

@@ -11,6 +11,9 @@ const {
   deactivateSchoolEndpoint,
   activateSchool,
   registerWebhook,
+  getSchoolSettings,
+  updateSchoolSettings,
+  clearSchoolSetting,
 } = require('../controllers/schoolController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
@@ -30,5 +33,10 @@ router.patch('/:schoolId/activate',   requireAdminAuth, auditContext, activateSc
 
 // Webhook registration — validates URL for SSRF safety before storing
 router.post('/:slug/webhooks', requireAdminAuth, auditContext, registerWebhook);
+
+// Per-school settings overrides
+router.get('/:schoolId/settings',     requireAdminAuth, auditContext, getSchoolSettings);
+router.patch('/:schoolId/settings',   requireAdminAuth, auditContext, updateSchoolSettings);
+router.delete('/:schoolId/settings/:key', requireAdminAuth, auditContext, clearSchoolSetting);
 
 module.exports = router;

@@ -1,7 +1,7 @@
 'use strict';
 
 const database = require('../config/database');
-const { horizonClient } = require('../config/stellarConfig');
+const { horizonClient, CB_FAILURE_THRESHOLD, CB_RESET_TIMEOUT_MS, CB_HALF_OPEN_SUCCESS_THRESHOLD } = require('../config/stellarConfig');
 const config = require('../config');
 const { concurrentPaymentProcessor } = require('../services/concurrentPaymentProcessor');
 const { getReminderStatus } = require('../services/reminderService');
@@ -129,6 +129,11 @@ async function healthCheck(req, res) {
         horizonUrl: stellar.activeUrl || config.HORIZON_URL,
         activeEndpoint: stellar.activeUrl || config.HORIZON_URL,
         endpoints: stellar.endpoints || [],
+        circuitBreaker: {
+          failureThreshold: CB_FAILURE_THRESHOLD,
+          resetTimeoutMs: CB_RESET_TIMEOUT_MS,
+          halfOpenSuccessThreshold: CB_HALF_OPEN_SUCCESS_THRESHOLD,
+        },
       },
       paymentProcessor: {
         queueDepth,

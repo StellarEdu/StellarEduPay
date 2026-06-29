@@ -36,7 +36,7 @@ const metricsRoute = require('./routes/metricsRoute');
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
 const retrySelector = require('./services/retryServiceSelector');
-const { startConsistencyScheduler } = require('./services/consistencyScheduler');
+const { startConsistencyScheduler, stopConsistencyScheduler } = require('./services/consistencyScheduler');
 const { startReminderScheduler, stopReminderScheduler } = require('./services/reminderService');
 const { startWorker: startTxQueueWorker, stopWorker: stopTxQueueWorker } = require('./services/transactionQueueService');
 const { startSessionCleanupScheduler, stopSessionCleanupScheduler } = require('./services/sessionCleanupService');
@@ -122,6 +122,12 @@ app.use('/metrics', metricsRoute);
 
 app.use(concurrentMiddleware.rateLimiter((req) => req.ip));
 app.use(concurrentMiddleware.requestQueue());
+
+// ── Maintenance mode ───────────────────────────────────────────────────────────
+// Global maintenance mode check. Per-school maintenance mode is enforced inside
+// schoolContext.js after tenant resolution.
+const { maintenanceMode } = require('./middleware/maintenanceMode');
+app.use(maintenanceMode);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
@@ -234,15 +240,39 @@ connectWithRetry().then(async () => {
     logger.error('Transaction queue recovery failed on startup', { error: err.message });
   }
 
+  // ── Leader election for singleton schedulers ───────────────────────────────
+  // Polling uses per-school distributed locks; the transaction queue worker
+  // and retry selector are safe for multi-instance.  All other schedulers run
+  // only on the elected leader to prevent N× concurrent execution when scaled.
+  const leaderElection = require('./services/leaderElection');
+
+  const startLeaderSchedulers = () => {
+    logger.info('[Leader] Starting leader-only schedulers');
+    startConsistencyScheduler();
+    startReminderScheduler();
+    startSessionCleanupScheduler();
+    startReconciliationScheduler();
+    startAuditLogCleanupScheduler();
+    startWebhookRetryScheduler();
+  };
+
+  const stopLeaderSchedulers = () => {
+    logger.info('[Leader] Stopping leader-only schedulers');
+    stopConsistencyScheduler();
+    stopReminderScheduler();
+    stopSessionCleanupScheduler();
+    stopReconciliationScheduler();
+    stopAuditLogCleanupScheduler();
+    stopWebhookRetryScheduler();
+  };
+
+  leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);
+  await leaderElection.start();
+
+  // Always-start services (handle concurrency internally)
   startPolling();
-  startConsistencyScheduler();
   retrySelector.start();
   startTxQueueWorker();
-  startReminderScheduler();
-  startSessionCleanupScheduler();
-  startReconciliationScheduler();
-  startAuditLogCleanupScheduler();
-  startWebhookRetryScheduler();
   registerPaymentSavedSubscribers();
 
   // Only initialise BullMQ when Redis is configured
@@ -282,11 +312,12 @@ async function shutdown(signal) {
   // Stop background services — no new work accepted
   stopPolling();
   retrySelector.stop();
-  stopReminderScheduler();
-  stopSessionCleanupScheduler();
-  stopReconciliationScheduler();
-  stopAuditLogCleanupScheduler();
-  stopWebhookRetryScheduler();
+
+  // Stop leader election (demotes leader, stops leader-only schedulers)
+  try {
+    const leaderElection = require('./services/leaderElection');
+    await leaderElection.stop();
+  } catch (_) { /* leader election may not have been started */ }
 
   try {
     await stopTxQueueWorker();

@@ -48,6 +48,7 @@ let _horizonFailovers;
 let _horizonCbTransitions;
 let _horizonActiveEndpoint;
 let _horizonCbState;
+let _horizonCbFailures;
 
 function _ensureMetrics() {
   let metrics;
@@ -87,6 +88,14 @@ function _ensureMetrics() {
     _horizonCbState = new client.Gauge({
       name: 'horizon_circuit_breaker_state',
       help: 'Circuit-breaker state per Horizon endpoint: 0=closed 1=open 2=half_open',
+      labelNames: ['url'],
+      registers: [registry],
+    });
+  }
+  if (!_horizonCbFailures) {
+    _horizonCbFailures = new client.Gauge({
+      name: 'horizon_circuit_breaker_failures',
+      help: 'Consecutive failures tracked per Horizon endpoint circuit breaker',
       labelNames: ['url'],
       registers: [registry],
     });
@@ -172,6 +181,7 @@ class CircuitBreaker {
     } else {
       this.failures = 0;
     }
+    this._updateFailuresMetric();
   }
 
   recordFailure() {
@@ -181,6 +191,14 @@ class CircuitBreaker {
       this.openedAt = Date.now();
       this._transition(CB_STATE.OPEN);
     }
+    this._updateFailuresMetric();
+  }
+
+  _updateFailuresMetric() {
+    try {
+      _ensureMetrics();
+      if (_horizonCbFailures) _horizonCbFailures.set({ url: this.url }, this.failures);
+    } catch (_) { /* metrics optional */ }
   }
 
   _transition(newState) {
@@ -221,6 +239,7 @@ class HorizonFailoverClient {
       url,
       server: new StellarSdk.Horizon.Server(url, { timeout: this._timeoutMs }),
       cb: new CircuitBreaker(url),
+      failoverCount: 0,
     }));
 
     // Expose the active server as `.server` for drop-in compatibility with
@@ -264,14 +283,16 @@ class HorizonFailoverClient {
     const toUrl = this._urls[nextIdx];
     logger.warn(`[HorizonFailoverClient] Failing over ${fromUrl} → ${toUrl}`);
 
+    this._servers[fromIndex].failoverCount++;
+    this._activeIndex = nextIdx;
+    this._refreshActiveServer();
+
     try {
       _ensureMetrics();
       if (_horizonFailovers) _horizonFailovers.inc({ from_url: fromUrl, to_url: toUrl });
       if (_horizonActiveEndpoint) _horizonActiveEndpoint.set(nextIdx);
     } catch (_) { /* metrics optional */ }
 
-    this._activeIndex = nextIdx;
-    this._refreshActiveServer();
     return true;
   }
 
@@ -362,10 +383,11 @@ class HorizonFailoverClient {
 
   /** Return a snapshot of every endpoint's circuit-breaker status. */
   getCircuitBreakerStatus() {
-    return this._servers.map(({ url, cb }, idx) => ({
+    return this._servers.map(({ url, cb, failoverCount }, idx) => ({
       url,
       index: idx,
       active: idx === this._activeIndex,
+      failoverCount,
       circuitBreaker: {
         state: cb.getState(),
         failures: cb.failures,
@@ -374,6 +396,11 @@ class HorizonFailoverClient {
           cb.getState() === CB_STATE.OPEN
             ? new Date(cb.openedAt + CB_RESET_TIMEOUT_MS).toISOString()
             : null,
+      },
+      thresholds: {
+        failureThreshold: CB_FAILURE_THRESHOLD,
+        resetTimeoutMs: CB_RESET_TIMEOUT_MS,
+        halfOpenSuccessThreshold: CB_HALF_OPEN_SUCCESS_THRESHOLD,
       },
     }));
   }
@@ -396,6 +423,9 @@ module.exports = {
   HorizonFailoverClient,
   CircuitBreaker,
   CB_STATE,
+  CB_FAILURE_THRESHOLD,
+  CB_RESET_TIMEOUT_MS,
+  CB_HALF_OPEN_SUCCESS_THRESHOLD,
   getInstance,
   resetInstance,
   resolveHorizonUrls,

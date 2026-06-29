@@ -146,6 +146,13 @@ async function resolveSchool(req, res, next) {
       }
     }
 
+    if (school.maintenanceMode) {
+      return res.status(503).json({
+        error: 'This school is temporarily unavailable due to maintenance.',
+        code: 'SCHOOL_MAINTENANCE_MODE',
+      });
+    }
+
     req.school   = school;
     req.schoolId = school.schoolId;
     next();
