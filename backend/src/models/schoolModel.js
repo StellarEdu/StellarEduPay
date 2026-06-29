@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const StellarSdk = require('@stellar/stellar-sdk');
+const { encryptWebhookSecret, decryptWebhookSecret } = require('../services/webhookSecretEncryption');
 
 /**
  * School model — each school is a fully independent tenant.
@@ -190,6 +191,25 @@ schoolSchema.set('toJSON', {
     delete ret.mfaBackupCodes;
     return ret;
   },
+});
+
+// ── Webhook secret encryption — Issue #75 ────────────────────────────────────
+// Encrypt webhookSecret at rest before persisting; decrypt transparently on load.
+// Both operations are no-ops when WEBHOOK_SECRET_ENCRYPTION_KEY is not set,
+// so local development without the key continues to work.
+
+schoolSchema.pre('save', function (next) {
+  if (this.isModified('webhookSecret') && this.webhookSecret != null) {
+    this.webhookSecret = encryptWebhookSecret(this.webhookSecret);
+  }
+  next();
+});
+
+// Decrypt after loading from DB so callers always receive plaintext.
+schoolSchema.post('init', function () {
+  if (this.webhookSecret != null) {
+    this.webhookSecret = decryptWebhookSecret(this.webhookSecret);
+  }
 });
 
 module.exports = mongoose.model('School', schoolSchema);
