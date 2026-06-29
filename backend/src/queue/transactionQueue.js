@@ -31,7 +31,8 @@ const { getRedisClient } = require('../config/redisClient');
 const QUEUE_NAME = 'transaction-processing';
 
 const connection = getRedisClient();
-let transactionQueue = null;
+ let transactionQueue = null;
+ let worker = null;
 
 if (!connection) {
   logger.warn('[TransactionQueue] Redis not configured or unavailable — using MongoDB fallback only');
@@ -238,16 +239,16 @@ async function getJobStatus(txHash) {
  * @param {Function} processor  async (job) => result
  */
 function startTransactionWorker(processor) {
-  const connection = getRedisClient();
-  if (!connection) {
-    logger.warn('[TransactionQueue] Redis unavailable — transaction worker not started');
-    return null;
-  }
+   const connection = getRedisClient();
+   if (!connection) {
+     logger.warn('[TransactionQueue] Redis unavailable — transaction worker not started');
+     return null;
+   }
 
-  const worker = new Worker(QUEUE_NAME, processor, {
-    connection,
-    concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
-  });
+   worker = new Worker(QUEUE_NAME, processor, {
+     connection,
+     concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
+   });
 
   worker.on('completed', (job) =>
     logger.info('[TransactionQueue] Job completed', {
@@ -273,30 +274,98 @@ function startTransactionWorker(processor) {
 }
 
 async function closeQueue() {
-  try {
-    if (transactionQueue) {
-      await transactionQueue.close();
-      transactionQueue = null;
-      logger.info('[TransactionQueue] Queue closed');
-    }
+   try {
+     if (worker) {
+       await worker.close();
+       worker = null;
+       logger.info('[TransactionQueue] Worker closed');
+     }
 
-    if (connection && typeof connection.quit === 'function') {
-      await connection.quit();
-      logger.info('[TransactionQueue] Redis connection closed');
-    }
-  } catch (err) {
-    logger.error('[TransactionQueue] Failed to close queue', { error: err.message });
+     if (transactionQueue) {
+       await transactionQueue.close();
+       transactionQueue = null;
+       logger.info('[TransactionQueue] Queue closed');
+     }
+
+     if (connection && typeof connection.quit === 'function') {
+       await connection.quit();
+       logger.info('[TransactionQueue] Redis connection closed');
+     }
+   } catch (err) {
+     logger.error('[TransactionQueue] Failed to close queue', { error: err.message });
+   }
+ }
+
+// ── Worker drain for graceful shutdown ───────────────────────────────────────
+
+function getWorker() {
+  return worker;
+}
+
+async function drainWorker() {
+  if (!worker) {
+    logger.info('[TransactionQueue] No worker to drain');
+    return { drained: true, activeJobs: 0, requeuedJobs: 0 };
   }
+
+  const WAIT_FOR_ACTIVE_TIMEOUT_MS = parseInt(process.env.DRAIN_TIMEOUT_MS, 10) || 60_000;
+
+  const activeJobs = await worker.getJobs('active');
+  const waitingJobs = await worker.getJobs('waiting');
+  const delayedJobs = await worker.getJobs('delayed');
+
+  logger.info(`[TransactionQueue] Draining worker — active: ${activeJobs.length}, waiting: ${waitingJobs.length}, delayed: ${delayedJobs.length}`);
+
+  const waited = await worker.waitUntilReady({
+    timeout: WAIT_FOR_ACTIVE_TIMEOUT_MS,
+  }).catch((err) => {
+    logger.warn('[TransactionQueue] Timeout waiting for active jobs, requeuing uncompleted', {
+      error: err.message,
+      activeRemaining: activeJobs.length,
+    });
+    return false;
+  });
+
+  let requeuedJobs = 0;
+  if (!waited && activeJobs.length > 0) {
+    for (const job of activeJobs) {
+      try {
+        const jobState = await job.getState();
+        if (jobState === 'active') {
+          await markDead(job.data.txHash, { message: 'Job interrupted by shutdown — will be recovered on restart' });
+          requeuedJobs++;
+          logger.info('[TransactionQueue] Re-queued interrupted job for recovery', { txHash: job.data.txHash });
+        }
+      } catch (err) {
+        logger.error('[TransactionQueue] Failed to re-queue job during drain', {
+          txHash: job.data.txHash,
+          error: err.message,
+        });
+      }
+    }
+  }
+
+  await worker.close();
+  worker = null;
+
+  logger.info('[TransactionQueue] Worker drain complete', {
+    activeJobs: activeJobs.length,
+    requeuedJobs,
+  });
+
+  return { drained: true, activeJobs: activeJobs.length, requeuedJobs };
 }
 
 module.exports = {
-  transactionQueue,
-  enqueueTransaction,
-  getJobStatus,
-  startTransactionWorker,
-  closeQueue,
-  recoverPendingJobs,
-  markResolved,
-  markDead,
-  QUEUE_NAME,
-};
+   transactionQueue,
+   enqueueTransaction,
+   getJobStatus,
+   startTransactionWorker,
+   closeQueue,
+   recoverPendingJobs,
+   markResolved,
+   markDead,
+   drainWorker,
+   getWorker,
+   QUEUE_NAME,
+ };

@@ -9,6 +9,7 @@ const { getCachedRates } = require('../services/currencyConversionService');
 const { getAuditHealth } = require('../services/auditService');
 const { getRedisStatus } = require('../config/redisClient');
 const logger = require('../utils/logger');
+const { isReady: isShutdownReady } = require('../services/shutdownManager');
 
 const STELLAR_CHECK_TIMEOUT_MS = 3000; // 3 second timeout for Stellar health check
 
@@ -172,9 +173,18 @@ async function healthLive(req, res) {
 /**
  * GET /health/ready
  * Readiness probe: returns 200 only when the service can handle traffic.
- * Checks DB and Horizon; returns 503 if either is unavailable.
+ * Checks DB, Horizon, and shutdown readiness; returns 503 if any is unavailable.
  */
 async function healthReady(req, res) {
+  // Check if shutdown has started (readiness flag flipped)
+  if (!isShutdownReady()) {
+    return res.status(503).json({
+      status: 'not_ready',
+      reason: 'shutdown_in_progress',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   const [dbResult, stellarResult] = await Promise.allSettled([
     database.healthCheck(),
     checkStellar(),

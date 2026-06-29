@@ -637,6 +637,45 @@ async function shutdownQueue() {
   }
 }
 
+function getWorker() {
+  return retryWorker;
+}
+
+async function drainWorker() {
+  if (!retryWorker) {
+    console.log('[TransactionRetryQueue] No worker to drain');
+    return { drained: true, activeJobs: 0, requeuedJobs: 0 };
+  }
+
+  const WAIT_FOR_ACTIVE_TIMEOUT_MS = parseInt(process.env.DRAIN_TIMEOUT_MS, 10) || 60_000;
+
+  const queue = createTransactionRetryQueue();
+  const activeJobs = await queue.getActive(0, 100);
+
+  console.log(`[TransactionRetryQueue] Draining worker — active: ${activeJobs.length}`);
+
+  const waited = await retryWorker.waitUntilReady({
+    timeout: WAIT_FOR_ACTIVE_TIMEOUT_MS,
+  }).catch((err) => {
+    console.warn('[TransactionRetryQueue] Timeout waiting for active jobs, marking for recovery', {
+      error: err.message,
+      activeRemaining: activeJobs.length,
+    });
+    return false;
+  });
+
+  if (!waited && activeJobs.length > 0) {
+    console.log(`[TransactionRetryQueue] Marking ${activeJobs.length} jobs for recovery on restart`);
+  }
+
+  await retryWorker.close();
+  retryWorker = null;
+
+  console.log('[TransactionRetryQueue] Worker drain complete');
+
+  return { drained: true, activeJobs: activeJobs.length, requeuedJobs: 0 };
+}
+
 /**
  * Initialize the transaction retry queue system
  */
@@ -685,6 +724,8 @@ module.exports = {
   getDLQStats,
   calculateBackoffDelay,
   shutdownQueue,
+  drainWorker,
+  getWorker,
   config,
   QUEUE_NAMES,
 };

@@ -204,6 +204,30 @@ function getStats() {
 }
 
 /**
+ * Close all SSE connections with a close/retry event so clients reconnect.
+ * Called during graceful shutdown to notify clients to reconnect.
+ */
+async function closeAll() {
+  const payload = 'event: retry\ndata: {"retry": true}\n\n';
+  let closed = 0;
+  for (const [schoolId, set] of clients) {
+    for (const res of set) {
+      try {
+        res.write(payload);
+        if (res._sseHeartbeat) {
+          clearInterval(res._sseHeartbeat);
+          res._sseHeartbeat = null;
+        }
+      } catch {
+        // ignore write errors during shutdown
+      }
+    }
+    closed += set.size;
+  }
+  logger.info('[SSEService] Sent close/retry to all clients', { connections: closed });
+}
+
+/**
  * Close Redis connections during graceful shutdown.
  */
 async function close() {
@@ -221,6 +245,7 @@ module.exports = {
   emit,
   getStats,
   close,
+  closeAll,
   MAX_CONNECTIONS_PER_SCHOOL,
   // Exposed for testing
   _fanout: fanout,
