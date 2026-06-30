@@ -125,6 +125,26 @@ new client.Gauge({
   },
 });
 
+new client.Gauge({
+  name: 'stuck_payments',
+  help: 'Number of stuck payments awaiting reconciliation',
+  registers: [registry],
+  async collect() {
+    try {
+      const { STUCK_PAYMENT_THRESHOLD_MS } = require('../services/stuckPaymentReconciliation');
+      const Payment = require('../models/paymentModel');
+      const count = await Payment.countDocuments({
+        status: 'SUBMITTED',
+        submittedAt: { $lt: new Date(Date.now() - STUCK_PAYMENT_THRESHOLD_MS) },
+        deletedAt: null,
+      });
+      this.set(count);
+    } catch (_) {
+      // DB may not be ready yet — scrape still succeeds with stale/zero values
+    }
+  },
+});
+
 // suspicious_payment_flagged{school_id} — counter of payments flagged as
 // suspicious by the abnormal-pattern detector, so operators can alert on
 // flagged volume per tenant. Incremented in the payment confirmation pipeline.
@@ -176,4 +196,5 @@ module.exports = {
   paymentBatchTotal,
   paymentBatchItemsTotal,
   paymentBatchDurationSeconds,
+  stuckPaymentsGauge,
 };
