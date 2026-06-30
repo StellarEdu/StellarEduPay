@@ -7,6 +7,7 @@ const { logAudit } = require('../services/auditService');
 const { verifyStellarAccountFunding } = require('../services/stellarAccountVerificationService');
 const { validateWebhookUrl } = require('../utils/validateWebhookUrl');
 const schoolCache = require('../services/schoolCacheInvalidator');
+const { isSupportedCurrency } = require('../services/currencyConversionService');
 
 function isValidTimezone(tz) {
   try {
@@ -47,6 +48,18 @@ async function createSchool(req, res, next) {
       });
     }
 
+    // Issue #889: Validate localCurrency against CoinGecko supported list
+    const { localCurrency } = req.body;
+    if (localCurrency !== undefined) {
+      const { valid } = await isSupportedCurrency(localCurrency);
+      if (!valid) {
+        return res.status(400).json({
+          error: `Currency "${localCurrency.toUpperCase()}" is not supported by the price feed. Use a valid ISO 4217 fiat code (e.g. USD, EUR, NGN).`,
+          code: 'UNSUPPORTED_CURRENCY',
+        });
+      }
+    }
+
     // Verify Stellar account funding (non-blocking)
     const { isFunded, warning } = await verifyStellarAccountFunding(stellarAddress);
 
@@ -59,6 +72,7 @@ async function createSchool(req, res, next) {
       network: network || 'testnet',
       adminEmail: adminEmail || null,
       address: address || null,
+      ...(localCurrency !== undefined && { localCurrency: localCurrency.toUpperCase() }),
       ...(timezone !== undefined && { timezone }),
       ...(suspiciousPaymentMultiplier !== undefined && { suspiciousPaymentMultiplier }),
       ...(suspiciousAmountConfig !== undefined && { suspiciousAmountConfig }),
@@ -157,7 +171,7 @@ async function getSchool(req, res, next) {
 // PATCH /api/schools/:schoolSlug
 async function updateSchool(req, res, next) {
   try {
-    const allowed = ['name', 'stellarAddress', 'network', 'adminEmail', 'address', 'suspiciousPaymentMultiplier', 'suspiciousAmountConfig'];
+    const allowed = ['name', 'stellarAddress', 'network', 'adminEmail', 'address', 'suspiciousPaymentMultiplier', 'suspiciousAmountConfig', 'localCurrency'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -215,6 +229,18 @@ async function updateSchool(req, res, next) {
       if (cfg.mode !== undefined && !['fee_multiplier', 'historical'].includes(cfg.mode)) {
         return res.status(400).json({ error: "suspiciousAmountConfig.mode must be 'fee_multiplier' or 'historical'", code: 'INVALID_SUSPICIOUS_AMOUNT_CONFIG' });
       }
+    }
+
+    // Issue #889: Validate localCurrency against CoinGecko supported list
+    if (updates.localCurrency !== undefined) {
+      const { valid } = await isSupportedCurrency(updates.localCurrency);
+      if (!valid) {
+        return res.status(400).json({
+          error: `Currency "${String(updates.localCurrency).toUpperCase()}" is not supported by the price feed. Use a valid ISO 4217 fiat code (e.g. USD, EUR, NGN).`,
+          code: 'UNSUPPORTED_CURRENCY',
+        });
+      }
+      updates.localCurrency = String(updates.localCurrency).toUpperCase();
     }
 
     const original = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }).lean();

@@ -98,15 +98,16 @@ function idempotency(req, res, next) {
           res.json = function (body) {
             if (res.statusCode < 500) {
               idempotencyStore
-                .complete(canonicalKey, {
-                  scope,
-                  responseStatus: res.statusCode,
-                  responseBody: body,
-                  fingerprint,
-                })
-                .catch((err) => {
-                  console.error('[Idempotency] Failed to cache response:', err.message);
-                });
+                  .complete(canonicalKey, {
+                    scope,
+                    responseStatus: res.statusCode,
+                    responseBody: body,
+                    fingerprint,
+                  })
+                  .catch((err) => {
+                    const logger = require('../utils/logger').child('Idempotency');
+                    logger.error('Failed to cache response', { error: err.message });
+                  });
             } else {
               // 5xx is never cached — release the reservation so the client can retry.
               idempotencyStore.release(canonicalKey).catch(() => {});
@@ -118,7 +119,8 @@ function idempotency(req, res, next) {
         });
     })
     .catch((err) => {
-      console.error('[Idempotency] store operation failed:', err.message);
+      const logger = require('../utils/logger').child('Idempotency');
+      logger.error('store operation failed', { error: err.message });
       // Fail open — let the request through rather than blocking the user.
       next();
     });

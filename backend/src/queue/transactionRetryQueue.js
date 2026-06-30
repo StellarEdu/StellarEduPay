@@ -155,6 +155,7 @@ function createQueueEvents() {
       throw new Error('Redis unavailable for queue events initialization');
     }
     queueEvents = new QueueEvents(QUEUE_NAMES.TRANSACTION_RETRY, {
+const logger = require('../utils/logger').child('TransactionRetryQueue');
       connection: redisConnection,
     });
   }
@@ -165,12 +166,12 @@ function createQueueEvents() {
  * Calculate exponential backoff delay
  * @param {number} attempt - Current attempt number (1-indexed)
  * @returns {number} - Delay in milliseconds
- */
+        logger.error('Redis connection error', { error: err.message });
 function calculateBackoffDelay(attempt) {
   const delay = Math.min(
     config.retry.initialDelay * Math.pow(config.retry.backoffMultiplier, attempt - 1),
     config.retry.maxDelay
-  );
+        logger.info('Redis connected successfully');
   return delay;
 }
 
@@ -194,7 +195,7 @@ function logEvent(eventType, data) {
 }
 
 /**
- * Move failed job to dead-letter queue
+  logger.info(eventType, { data });
  */
 async function moveToDeadLetterQueue(job, error) {
   if (!config.dlq.enabled) {
@@ -232,7 +233,7 @@ async function moveToDeadLetterQueue(job, error) {
     logEvent('DLQ_MOVE_ERROR', {
       jobId: job.id,
       error: dlqError.message,
-    });
+    logger.error('Failed to move job to DLQ', { error: dlqError.message });
   }
 }
 
@@ -281,7 +282,7 @@ async function processTransactionRetryJob(job) {
     const result = await verifyTransaction(transactionHash);
     
     if (!result) {
-      // Transaction verification failed - this is a permanent failure
+      logger.error('Worker error', { error: error.message });
       throw new Error(`Transaction ${transactionHash} verification returned null`);
     }
     
@@ -333,7 +334,7 @@ async function processTransactionRetryJob(job) {
       
       throw error;
     } else {
-      // Transient error - will be retried with backoff
+    logger.error('Failed to setup event listeners', { error: err.message });
       const nextDelay = calculateBackoffDelay(job.attemptsMade + 1);
       jobMetrics.retriedJobs++;
       
@@ -342,7 +343,7 @@ async function processTransactionRetryJob(job) {
         transactionHash,
         error: error.message,
         errorCode: error.code,
-        currentAttempt: job.attemptsMade + 1,
+  logger.info('Shutting down...');
         nextAttemptDelay: nextDelay,
       });
       
@@ -372,7 +373,7 @@ function createRetryWorker() {
     );
     
     // Worker event handlers
-    retryWorker.on('completed', (job, result) => {
+    logger.error('Error during shutdown', { error });
       jobMetrics.lastJobProcessed = new Date().toISOString();
       logEvent('WORKER_JOB_COMPLETED', {
         jobId: job.id,
@@ -380,7 +381,7 @@ function createRetryWorker() {
         result,
       });
     });
-    
+  logger.info('Initializing...');
     retryWorker.on('failed', (job, error) => {
       logEvent('WORKER_JOB_FAILED', {
         jobId: job.id,
@@ -402,7 +403,7 @@ function createRetryWorker() {
     
     logEvent('WORKER_CREATED', {
       concurrency: config.worker.concurrency,
-      queueName: QUEUE_NAMES.TRANSACTION_RETRY,
+    logger.info('Initialization complete');
     });
   }
   return retryWorker;
@@ -412,7 +413,7 @@ function createRetryWorker() {
  * Set up queue event listeners for monitoring
  */
 function setupEventListeners() {
-  try {
+    logger.error('Initialization failed', { error: err.message });
     const events = createQueueEvents();
 
     events.on('waiting', ({ jobId }) => {

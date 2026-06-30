@@ -52,7 +52,8 @@ async function runMigrations(_require = require) {
     }
 
     // We won the lock — run the migration.
-    console.log(`[Migration] Running: ${migration.version}`);
+    const logger = require('../utils/logger').child('Migration');
+    logger.info(`Running: ${migration.version}`);
     try {
       await migration.up();
     } catch (err) {
@@ -65,7 +66,7 @@ async function runMigrations(_require = require) {
       { version: migration.version },
       { $set: { appliedAt: new Date() } }
     );
-    console.log(`[Migration] Applied: ${migration.version}`);
+    logger.info(`Applied: ${migration.version}`);
   }
 }
 
@@ -83,7 +84,8 @@ async function rollback(_require = require) {
     .sort({ appliedAt: -1 });
 
   if (!last) {
-    console.log('[Migration] Nothing to roll back.');
+    const logger = require('../utils/logger').child('Migration');
+    logger.info('Nothing to roll back.');
     return;
   }
 
@@ -107,10 +109,11 @@ async function rollback(_require = require) {
     throw new Error(`[Migration] "${last.version}" does not export a down() function.`);
   }
 
-  console.log(`[Migration] Rolling back: ${last.version}`);
+  const logger = require('../utils/logger').child('Migration');
+  logger.info(`Rolling back: ${last.version}`);
   await migration.down();
   await Migration.deleteOne({ version: last.version });
-  console.log(`[Migration] Rolled back: ${last.version}`);
+  logger.info(`Rolled back: ${last.version}`);
 }
 
 module.exports = { runMigrations, rollback };

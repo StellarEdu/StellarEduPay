@@ -117,7 +117,8 @@ studentSchema.pre('save', async function () {
       );
     } catch (archiveErr) {
       // Log but don't abort the save — active record integrity takes priority.
-      console.error('[StudentModel] Failed to archive fee history:', archiveErr.message);
+      const logger = require('../utils/logger').child('StudentModel');
+      logger.error('Failed to archive fee history', { error: archiveErr.message });
     }
   }
 

@@ -28,6 +28,12 @@ const CACHE_TTL_MS             = parseInt(process.env.PRICE_CACHE_TTL_MS        
 const PRICE_STALE_THRESHOLD_MS = parseInt(process.env.PRICE_STALE_THRESHOLD_MS  || "3600000", 10);
 const COINGECKO_API_KEY        = process.env.COINGECKO_API_KEY || null;
 
+// Supported-currencies list cache (#889):
+//   Periodically refreshed from CoinGecko /simple/supported_vs_currencies.
+//   Falls back to a static allowlist when the network call fails.
+const SUPPORTED_CURRENCIES_TTL_MS =
+  parseInt(process.env.SUPPORTED_CURRENCIES_TTL_MS || "3600000", 10); // 1 hour
+
 // Redis cache TTL in seconds (slightly longer than in-memory TTL to allow
 // cross-replica stale-while-revalidate).
 const REDIS_CACHE_TTL_S = Math.ceil(PRICE_STALE_THRESHOLD_MS / 1000);
@@ -83,6 +89,83 @@ const _localCache = new Map();
 
 // ── In-flight deduplication ──────────────────────────────────────────────────
 const _inFlight = new Map();
+
+// ── Supported currencies cache (#889) ────────────────────────────────────────
+// CoinGecko's /simple/supported_vs_currencies endpoint returns the authoritative
+// list of fiat/crypto codes accepted by the price API.  We cache this for
+// SUPPORTED_CURRENCIES_TTL_MS and refresh lazily so that school create/update
+// can validate localCurrency up-front rather than discovering the error at
+// conversion time.
+
+// Static fallback — covers the most common fiat codes so validation still
+// works when the network is unavailable at startup.
+const STATIC_FALLBACK_CURRENCIES = new Set([
+  "usd","eur","gbp","jpy","aud","cad","chf","cny","hkd","nzd",
+  "sek","krw","sgd","nok","mxn","inr","rub","zar","try","brl",
+  "twd","dkk","pln","thb","idr","huf","czk","ils","clp","php",
+  "aed","cop","sar","myr","ron","ngn","kes","ghs","ugx","tzs",
+  "rwf","etb","xof","mad","egp","pkr","bdt","vnd","pgk",
+]);
+
+let _supportedCurrenciesCache = null; // Set<string> (lowercase) | null
+let _supportedCurrenciesFetchedAt = 0;
+let _supportedCurrenciesInFlight = null;
+
+/**
+ * Return the set of vs_currencies supported by CoinGecko.
+ * Refreshed at most once per SUPPORTED_CURRENCIES_TTL_MS.
+ * Falls back to STATIC_FALLBACK_CURRENCIES on network failure.
+ *
+ * @returns {Promise<Set<string>>}  lowercase currency codes
+ */
+async function getSupportedCurrencies() {
+  const now = Date.now();
+  // Return cached set when still fresh.
+  if (_supportedCurrenciesCache && now - _supportedCurrenciesFetchedAt < SUPPORTED_CURRENCIES_TTL_MS) {
+    return _supportedCurrenciesCache;
+  }
+
+  // Deduplicate concurrent callers.
+  if (_supportedCurrenciesInFlight) {
+    try { return await _supportedCurrenciesInFlight; } catch { /* fall through */ }
+  }
+
+  _supportedCurrenciesInFlight = (async () => {
+    try {
+      let url = "https://api.coingecko.com/api/v3/simple/supported_vs_currencies";
+      if (COINGECKO_API_KEY) url += `?x_cg_pro_api_key=${encodeURIComponent(COINGECKO_API_KEY)}`;
+      const data = await httpsGet(url);
+      if (!Array.isArray(data) || data.length === 0) throw new Error("Empty supported_vs_currencies response");
+      const currencies = new Set(data.map((c) => String(c).toLowerCase()));
+      _supportedCurrenciesCache = currencies;
+      _supportedCurrenciesFetchedAt = Date.now();
+      logger.info("Supported vs_currencies list refreshed", { count: currencies.size });
+      return currencies;
+    } catch (err) {
+      logger.warn("Could not fetch supported_vs_currencies from CoinGecko — using static fallback", {
+        error: err.message,
+      });
+      // Return stale cache if available, otherwise static fallback.
+      return _supportedCurrenciesCache || STATIC_FALLBACK_CURRENCIES;
+    } finally {
+      _supportedCurrenciesInFlight = null;
+    }
+  })();
+
+  return _supportedCurrenciesInFlight;
+}
+
+/**
+ * Validate that `currencyCode` is in CoinGecko's supported vs_currencies list.
+ * Returns { valid: boolean, supported: Set<string> }.
+ *
+ * @param {string} currencyCode  — e.g. "USD", "ngn", "PGK"
+ * @returns {Promise<{ valid: boolean, supported: Set<string> }>}
+ */
+async function isSupportedCurrency(currencyCode) {
+  const supported = await getSupportedCurrencies();
+  return { valid: supported.has(String(currencyCode).toLowerCase()), supported };
+}
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
@@ -349,6 +432,9 @@ module.exports = {
   convertXlmToLocal,
   formatWithConversion,
   attachConversion,
+  // #889 — currency validation
+  getSupportedCurrencies,
+  isSupportedCurrency,
   // Testing internals
   _fetchRatesFromCoinGecko: (c) => _fetchFromCoinGecko(c),
   _getRates: getRates,

@@ -7,6 +7,7 @@
 
 const bullMQRetryService = require('../services/bullMQRetryService');
 const retryQueueRoutes = require('../routes/retryQueueRoutes');
+const logger = require('../utils/logger').child('RetryQueueSetup');
 
 let isInitialized = false;
 
@@ -20,22 +21,22 @@ let initState = { status: 'not_started', error: null };
  */
 async function initializeRetryQueue(app) {
   if (isInitialized) {
-    console.log('[RetryQueueSetup] Already initialized');
+    logger.info('Already initialized');
     return;
   }
 
   try {
-    console.log('[RetryQueueSetup] Starting initialization...');
+    logger.info('Starting initialization...');
 
     // Initialize the BullMQ queue system
     await bullMQRetryService.initializeRetryQueue();
 
-    console.log('[RetryQueueSetup] BullMQ queue system initialized');
+    logger.info('BullMQ queue system initialized');
 
     // Register routes if app is provided
     if (app) {
       app.use('/api/retry-queue', retryQueueRoutes);
-      console.log('[RetryQueueSetup] Routes registered at /api/retry-queue');
+      logger.info('Routes registered at /api/retry-queue');
     }
 
     // Main application manages process signal handling to avoid duplicate shutdown paths.
@@ -43,7 +44,7 @@ async function initializeRetryQueue(app) {
 
     isInitialized = true;
     initState = { status: 'ok', error: null };
-    console.log('[RetryQueueSetup] Initialization complete');
+    logger.info('Initialization complete');
 
     return {
       success: true,
@@ -52,7 +53,7 @@ async function initializeRetryQueue(app) {
 
   } catch (error) {
     initState = { status: 'failed', error: error.message };
-    console.error('[RetryQueueSetup] Initialization failed:', error);
+    logger.error('Initialization failed', { error: error.message });
     throw error;
   }
 }
@@ -69,7 +70,7 @@ function getRetryQueueHealth() {
  * Setup graceful shutdown handlers
  */
 function setupGracefulShutdown() {
-  console.log('[RetryQueueSetup] Main application manages process shutdown; skipping duplicate signal handlers');
+  logger.info('Main application manages process shutdown; skipping duplicate signal handlers');
 }
 
 /**
@@ -77,19 +78,19 @@ function setupGracefulShutdown() {
  */
 async function gracefulShutdown() {
   try {
-    console.log('[RetryQueueSetup] Starting graceful shutdown...');
+    logger.info('Starting graceful shutdown...');
     
     // Get final stats before shutdown
     const stats = await bullMQRetryService.getRetryQueueStats();
-    console.log('[RetryQueueSetup] Final queue stats:', stats);
+    logger.info('Final queue stats', { stats });
     
     // Shutdown the queue system
     await bullMQRetryService.shutdownQueue();
     
-    console.log('[RetryQueueSetup] Graceful shutdown complete');
+    logger.info('Graceful shutdown complete');
     
   } catch (error) {
-    console.error('[RetryQueueSetup] Error during graceful shutdown:', error);
+    logger.error('Error during graceful shutdown', { error: error.message });
   }
 }
 
@@ -121,20 +122,20 @@ async function getSystemStatus() {
  * Setup periodic health checks and monitoring
  */
 function setupMonitoring(intervalMs = 60000) {
-  console.log(`[RetryQueueSetup] Setting up monitoring with ${intervalMs}ms interval`);
+  logger.info(`Setting up monitoring with ${intervalMs}ms interval`);
   
   setInterval(async () => {
     try {
       const health = await bullMQRetryService.getHealthStatus();
       
       if (!health.healthy) {
-        console.warn('[RetryQueueSetup] Unhealthy status detected:', health);
+        logger.warn('Unhealthy status detected', { health });
         // Could send alerts here
       }
       
       // Log periodic stats
       const stats = await bullMQRetryService.getRetryQueueStats();
-      console.log('[RetryQueueSetup] Periodic stats:', {
+      logger.info('Periodic stats', {
         totalJobs: stats.bullmq.metrics.totalJobs,
         activeJobs: stats.bullmq.metrics.active,
         health: stats.systemHealth.queueHealth,

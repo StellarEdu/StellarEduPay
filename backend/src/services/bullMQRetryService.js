@@ -15,6 +15,7 @@ const {
   config,
   QUEUE_NAMES,
 } = require('../queue/transactionRetryQueue');
+const logger = require('../utils/logger').child('BullMQRetryService');
 
 const PendingVerification = require('../models/pendingVerificationModel');
 
@@ -85,7 +86,7 @@ function classifyError(error) {
 async function initializeRetryQueue() {
   if (!queueInstance) {
     queueInstance = await initializeQueue();
-    console.log('[BullMQRetryService] Queue system initialized');
+    logger.info('Queue system initialized');
   }
   return queueInstance;
 }
@@ -151,7 +152,7 @@ async function queueFailedTransaction(transactionHash, options = {}) {
       queuedAt: new Date().toISOString(),
     });
     
-    console.log(`[BullMQRetryService] Queued transaction ${transactionHash} for retry (attempt ${metadata.attemptNumber || 1})`);
+    logger.info(`Queued transaction ${transactionHash} for retry (attempt ${metadata.attemptNumber || 1})`);
     
     return {
       queued: true,
@@ -161,7 +162,7 @@ async function queueFailedTransaction(transactionHash, options = {}) {
     };
     
   } catch (error) {
-    console.error(`[BullMQRetryService] Failed to queue transaction ${transactionHash}:`, error);
+    logger.error('Failed to queue transaction', { transactionHash, error: error.message });
     throw error;
   }
 }
@@ -204,7 +205,7 @@ async function getRetryQueueStats() {
     };
     
   } catch (error) {
-    console.error('[BullMQRetryService] Failed to get queue stats:', error);
+    logger.error('Failed to get queue stats', { error: error.message });
     throw error;
   }
 }
@@ -244,7 +245,7 @@ async function getJobDetails(jobId) {
     };
     
   } catch (error) {
-    console.error(`[BullMQRetryService] Failed to get job details for ${jobId}:`, error);
+    logger.error('Failed to get job details', { jobId, error: error.message });
     throw error;
   }
 }
@@ -289,7 +290,7 @@ async function getJobsByState(state, limit = 50) {
     }));
     
   } catch (error) {
-    console.error(`[BullMQRetryService] Failed to get jobs by state ${state}:`, error);
+    logger.error('Failed to get jobs by state', { state, error: error.message });
     throw error;
   }
 }
@@ -323,7 +324,7 @@ async function retryJobImmediately(jobId) {
     };
     
   } catch (error) {
-    console.error(`[BullMQRetryService] Failed to retry job ${jobId}:`, error);
+    logger.error('Failed to retry job', { jobId, error: error.message });
     throw error;
   }
 }
@@ -351,7 +352,7 @@ async function removeJob(jobId) {
     };
     
   } catch (error) {
-    console.error(`[BullMQRetryService] Failed to remove job ${jobId}:`, error);
+    logger.error('Failed to remove job', { jobId, error: error.message });
     throw error;
   }
 }
@@ -374,7 +375,7 @@ async function cleanupOldJobs(maxAge = 86400000) {
     };
     
   } catch (error) {
-    console.error('[BullMQRetryService] Failed to cleanup old jobs:', error);
+    logger.error('Failed to cleanup old jobs', { error: error.message });
     throw error;
   }
 }
@@ -393,7 +394,7 @@ async function pauseQueue() {
     return { success: true, paused: true };
     
   } catch (error) {
-    console.error('[BullMQRetryService] Failed to pause queue:', error);
+    logger.error('Failed to pause queue', { error: error.message });
     throw error;
   }
 }
