@@ -15,6 +15,12 @@ const config = {
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT, 10) || 6379,
     password: process.env.REDIS_PASSWORD || undefined,
+    // BullMQ requires these on any connection it uses for blocking commands
+    // (Worker / QueueEvents). Without them, createQueueEvents() throws:
+    //   "Your redis options maxRetriesPerRequest must be null"
+    // and the whole retry/dead-letter pipeline fails to initialize.
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
   },
   retry: {
     enabled: process.env.RETRIES_ENABLED !== 'false',

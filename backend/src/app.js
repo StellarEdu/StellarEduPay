@@ -223,7 +223,14 @@ connectWithRetry().then(async () => {
       setupMonitoring(60000);
       logger.info('All services initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize retry queue system', { error: error.message });
+      // The HTTP server still boots, but the retry/dead-letter pipeline is dead —
+      // failed payments would silently never be retried. Fail loudly so the broken
+      // state is visible in logs and via /health (retryQueue.status: failed).
+      logger.error(
+        '[CRITICAL] Retry queue failed to initialize — failed payments will NOT be retried. ' +
+        'Investigate Redis/BullMQ connection immediately.',
+        { error: error.message }
+      );
     }
   } else {
     logger.warn('REDIS_HOST is not configured — using MongoDB retry backend. Rate-limit counters are in-process only and will reset on restart. Set REDIS_HOST for production deployments.');

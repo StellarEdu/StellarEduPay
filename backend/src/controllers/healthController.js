@@ -77,6 +77,25 @@ async function healthCheck(req, res) {
   const retryBackend = retrySelector.getSelectedBackend();
   const redisConfigured = Boolean(process.env.REDIS_HOST);
 
+  // Retry queue init status. For the Redis-backed BullMQ pipeline this reflects
+  // whether initializeRetryQueue() succeeded; for the MongoDB fallback it reflects
+  // whether the worker is running.
+  let retryQueueStatus;
+  if (retryBackend === 'bullmq') {
+    const { getRetryQueueHealth } = require('../config/retryQueueSetup');
+    retryQueueStatus = getRetryQueueHealth().status; // 'ok' | 'failed' | 'not_started'
+  } else if (retryBackend === 'mongodb') {
+    retryQueueStatus = retrySelector.isRunning() ? 'ok' : 'stopped';
+  } else {
+    retryQueueStatus = 'not_started';
+  }
+
+  // A dead retry/dead-letter pipeline means failed payments are never retried —
+  // surface that as degraded (DB is still up, so not fully unhealthy).
+  if (retryQueueStatus === 'failed' && overallStatus === 'healthy') {
+    overallStatus = 'degraded';
+  }
+
   // Price feed status
   const cachedRates = getCachedRates();
   const priceFeedStatus = Object.entries(cachedRates).map(([currency, data]) => {
@@ -117,6 +136,7 @@ async function healthCheck(req, res) {
       },
       reminders: getReminderStatus(),
       retryQueue: {
+        status: retryQueueStatus,
         backend: retryBackend || 'not_started',
         redisConfigured,
         ...(redisConfigured && { redisHost: process.env.REDIS_HOST }),

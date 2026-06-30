@@ -10,6 +10,11 @@ const retryQueueRoutes = require('../routes/retryQueueRoutes');
 
 let isInitialized = false;
 
+// Tracks the outcome of the most recent initialization attempt so /health and
+// startup assertions can fail loudly when the retry/dead-letter pipeline is dead.
+//   status: 'not_started' | 'ok' | 'failed'
+let initState = { status: 'not_started', error: null };
+
 /**
  * Initialize the retry queue system
  */
@@ -18,36 +23,46 @@ async function initializeRetryQueue(app) {
     console.log('[RetryQueueSetup] Already initialized');
     return;
   }
-  
+
   try {
     console.log('[RetryQueueSetup] Starting initialization...');
-    
+
     // Initialize the BullMQ queue system
     await bullMQRetryService.initializeRetryQueue();
-    
+
     console.log('[RetryQueueSetup] BullMQ queue system initialized');
-    
+
     // Register routes if app is provided
     if (app) {
       app.use('/api/retry-queue', retryQueueRoutes);
       console.log('[RetryQueueSetup] Routes registered at /api/retry-queue');
     }
-    
+
     // Main application manages process signal handling to avoid duplicate shutdown paths.
     setupGracefulShutdown();
-    
+
     isInitialized = true;
+    initState = { status: 'ok', error: null };
     console.log('[RetryQueueSetup] Initialization complete');
-    
+
     return {
       success: true,
       message: 'Retry queue system initialized successfully',
     };
-    
+
   } catch (error) {
+    initState = { status: 'failed', error: error.message };
     console.error('[RetryQueueSetup] Initialization failed:', error);
     throw error;
   }
+}
+
+/**
+ * Lightweight init status for health checks and startup assertions.
+ * Does not touch Redis — reflects the outcome of initializeRetryQueue().
+ */
+function getRetryQueueHealth() {
+  return { ...initState, initialized: isInitialized };
 }
 
 /**
@@ -133,6 +148,7 @@ function setupMonitoring(intervalMs = 60000) {
 
 module.exports = {
   initializeRetryQueue,
+  getRetryQueueHealth,
   getSystemStatus,
   setupGracefulShutdown,
   setupMonitoring,
