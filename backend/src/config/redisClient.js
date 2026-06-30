@@ -37,14 +37,26 @@ function _updateStatus(newStatus, reason = null) {
   };
 }
 
-function getRedisConfig() {
+/**
+ * Shared reconnection policy used by every Redis consumer (queue, SSE pub/sub,
+ * distributed locks, rate limiter, refresh-token store). Centralising it here
+ * means all consumers reconnect with the same exponential backoff and treat the
+ * same error codes as transient — Issue #83: "Reconnection policy consistent".
+ *
+ * Pass overrides for connection-specific requirements. BullMQ Worker/QueueEvents
+ * connections, for example, require `maxRetriesPerRequest: null`.
+ *
+ * @param {object} [overrides] Merged over the shared defaults.
+ */
+function getRedisConnectionOptions(overrides = {}) {
   return {
-    host: process.env.REDIS_HOST,
+    host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT, 10) || 6379,
     password: process.env.REDIS_PASSWORD || undefined,
     lazyConnect: true,
     enableOfflineQueue: false,
     maxRetriesPerRequest: 1,
+    connectTimeout: 10000,
     retryStrategy(times) {
       if (times >= REDIS_RECONNECT_MAX_ATTEMPTS) {
         return null;
@@ -59,8 +71,12 @@ function getRedisConfig() {
       const transientCodes = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH'];
       return transientCodes.some((code) => err.message.includes(code));
     },
-    connectTimeout: 10000,
+    ...overrides,
   };
+}
+
+function getRedisConfig() {
+  return getRedisConnectionOptions();
 }
 
 function createRedisClient() {
@@ -160,6 +176,8 @@ function resetRedisClient() {
 module.exports = {
   createRedisClient,
   getRedisClient,
+  getRedisConfig,
+  getRedisConnectionOptions,
   getRedisStatus,
   isRedisReady,
   resetRedisClient,

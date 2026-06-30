@@ -35,7 +35,19 @@ const config = {
   },
   worker: {
     concurrency: parseInt(process.env.QUEUE_CONCURRENCY, 10) || 5,
+    // How long a job's lock is held before it is considered stalled. Must exceed
+    // the worst-case processing time (Stellar verification) or healthy jobs get
+    // re-queued mid-flight. Defaults to 2× the Stellar timeout plus headroom.
+    lockDuration: parseInt(process.env.QUEUE_LOCK_DURATION_MS, 10) || 30000,
+    // How often the worker scans for stalled jobs (crashed/locked-up workers).
+    stalledInterval: parseInt(process.env.QUEUE_STALLED_INTERVAL_MS, 10) || 30000,
+    // How many times a stalled job is recovered before it is failed for good
+    // (and routed to the dead-letter queue). Prevents an infinite stall loop.
+    maxStalledCount: parseInt(process.env.QUEUE_MAX_STALLED_COUNT, 10) || 2,
   },
+  // Jitter applied to the exponential backoff so a thundering herd of jobs that
+  // failed together (e.g. a Horizon outage) don't all retry at the same instant.
+  jitterRatio: parseFloat(process.env.RETRY_JITTER_RATIO) || 0.2,
   stellar: {
     timeout: parseInt(process.env.STELLAR_NETWORK_TIMEOUT_MS, 10) || 10000,
   },
@@ -155,7 +167,6 @@ function createQueueEvents() {
       throw new Error('Redis unavailable for queue events initialization');
     }
     queueEvents = new QueueEvents(QUEUE_NAMES.TRANSACTION_RETRY, {
-const logger = require('../utils/logger').child('TransactionRetryQueue');
       connection: redisConnection,
     });
   }
@@ -163,16 +174,21 @@ const logger = require('../utils/logger').child('TransactionRetryQueue');
 }
 
 /**
- * Calculate exponential backoff delay
+ * Calculate exponential backoff delay with optional jitter.
  * @param {number} attempt - Current attempt number (1-indexed)
+ * @param {boolean} [withJitter=true] - Apply +/- jitterRatio randomisation
  * @returns {number} - Delay in milliseconds
-        logger.error('Redis connection error', { error: err.message });
-function calculateBackoffDelay(attempt) {
-  const delay = Math.min(
+ */
+function calculateBackoffDelay(attempt, withJitter = true) {
+  const base = Math.min(
     config.retry.initialDelay * Math.pow(config.retry.backoffMultiplier, attempt - 1),
     config.retry.maxDelay
-        logger.info('Redis connected successfully');
-  return delay;
+  );
+  if (!withJitter || config.jitterRatio <= 0) return Math.round(base);
+  // Full +/- jitter: spread retries across [base*(1-r), base*(1+r)].
+  const spread = base * config.jitterRatio;
+  const jittered = base - spread + Math.random() * (2 * spread);
+  return Math.max(0, Math.round(Math.min(jittered, config.retry.maxDelay)));
 }
 
 /**
@@ -195,7 +211,7 @@ function logEvent(eventType, data) {
 }
 
 /**
-  logger.info(eventType, { data });
+ * Move failed job to dead-letter queue
  */
 async function moveToDeadLetterQueue(job, error) {
   if (!config.dlq.enabled) {
@@ -233,7 +249,7 @@ async function moveToDeadLetterQueue(job, error) {
     logEvent('DLQ_MOVE_ERROR', {
       jobId: job.id,
       error: dlqError.message,
-    logger.error('Failed to move job to DLQ', { error: dlqError.message });
+    });
   }
 }
 
@@ -282,7 +298,7 @@ async function processTransactionRetryJob(job) {
     const result = await verifyTransaction(transactionHash);
     
     if (!result) {
-      logger.error('Worker error', { error: error.message });
+      // Transaction verification failed - this is a permanent failure
       throw new Error(`Transaction ${transactionHash} verification returned null`);
     }
     
@@ -313,8 +329,7 @@ async function processTransactionRetryJob(job) {
     };
     
   } catch (error) {
-    const isPermanentError = ['TX_FAILED', 'MISSING_MEMO', 'INVALID_DESTINATION', 
-                              'UNSUPPORTED_ASSET', 'DUPLICATE_TX'].includes(error.code);
+    const isPermanentError = require('../services/retryContract').isPermanent(error);
     const hasReachedMaxAttempts = job.attemptsMade >= config.retry.maxAttempts - 1;
     
     if (isPermanentError || hasReachedMaxAttempts) {
@@ -334,7 +349,7 @@ async function processTransactionRetryJob(job) {
       
       throw error;
     } else {
-    logger.error('Failed to setup event listeners', { error: err.message });
+      // Transient error - will be retried with backoff
       const nextDelay = calculateBackoffDelay(job.attemptsMade + 1);
       jobMetrics.retriedJobs++;
       
@@ -343,7 +358,7 @@ async function processTransactionRetryJob(job) {
         transactionHash,
         error: error.message,
         errorCode: error.code,
-  logger.info('Shutting down...');
+        currentAttempt: job.attemptsMade + 1,
         nextAttemptDelay: nextDelay,
       });
       
@@ -369,11 +384,20 @@ function createRetryWorker() {
       {
         connection: initializeRedisConnection(),
         concurrency: config.worker.concurrency,
+        // Stalled-job recovery: jobs whose worker died mid-flight are reclaimed.
+        lockDuration: config.worker.lockDuration,
+        stalledInterval: config.worker.stalledInterval,
+        maxStalledCount: config.worker.maxStalledCount,
+        settings: {
+          // Jobs are added with backoff.type 'custom'; BullMQ resolves the delay
+          // through this strategy, giving us exponential backoff WITH jitter.
+          backoffStrategy: (attemptsMade) => calculateBackoffDelay(attemptsMade + 1),
+        },
       }
     );
     
     // Worker event handlers
-    logger.error('Error during shutdown', { error });
+    retryWorker.on('completed', (job, result) => {
       jobMetrics.lastJobProcessed = new Date().toISOString();
       logEvent('WORKER_JOB_COMPLETED', {
         jobId: job.id,
@@ -381,7 +405,7 @@ function createRetryWorker() {
         result,
       });
     });
-  logger.info('Initializing...');
+    
     retryWorker.on('failed', (job, error) => {
       logEvent('WORKER_JOB_FAILED', {
         jobId: job.id,
@@ -403,7 +427,7 @@ function createRetryWorker() {
     
     logEvent('WORKER_CREATED', {
       concurrency: config.worker.concurrency,
-    logger.info('Initialization complete');
+      queueName: QUEUE_NAMES.TRANSACTION_RETRY,
     });
   }
   return retryWorker;
@@ -413,7 +437,7 @@ function createRetryWorker() {
  * Set up queue event listeners for monitoring
  */
 function setupEventListeners() {
-    logger.error('Initialization failed', { error: err.message });
+  try {
     const events = createQueueEvents();
 
     events.on('waiting', ({ jobId }) => {
@@ -638,45 +662,6 @@ async function shutdownQueue() {
   }
 }
 
-function getWorker() {
-  return retryWorker;
-}
-
-async function drainWorker() {
-  if (!retryWorker) {
-    console.log('[TransactionRetryQueue] No worker to drain');
-    return { drained: true, activeJobs: 0, requeuedJobs: 0 };
-  }
-
-  const WAIT_FOR_ACTIVE_TIMEOUT_MS = parseInt(process.env.DRAIN_TIMEOUT_MS, 10) || 60_000;
-
-  const queue = createTransactionRetryQueue();
-  const activeJobs = await queue.getActive(0, 100);
-
-  console.log(`[TransactionRetryQueue] Draining worker — active: ${activeJobs.length}`);
-
-  const waited = await retryWorker.waitUntilReady({
-    timeout: WAIT_FOR_ACTIVE_TIMEOUT_MS,
-  }).catch((err) => {
-    console.warn('[TransactionRetryQueue] Timeout waiting for active jobs, marking for recovery', {
-      error: err.message,
-      activeRemaining: activeJobs.length,
-    });
-    return false;
-  });
-
-  if (!waited && activeJobs.length > 0) {
-    console.log(`[TransactionRetryQueue] Marking ${activeJobs.length} jobs for recovery on restart`);
-  }
-
-  await retryWorker.close();
-  retryWorker = null;
-
-  console.log('[TransactionRetryQueue] Worker drain complete');
-
-  return { drained: true, activeJobs: activeJobs.length, requeuedJobs: 0 };
-}
-
 /**
  * Initialize the transaction retry queue system
  */
@@ -725,8 +710,6 @@ module.exports = {
   getDLQStats,
   calculateBackoffDelay,
   shutdownQueue,
-  drainWorker,
-  getWorker,
   config,
   QUEUE_NAMES,
 };

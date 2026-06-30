@@ -73,6 +73,40 @@ new client.Gauge({
   },
 });
 
+// queue_failed{queue} — number of jobs currently in the failed state per
+// BullMQ queue, plus the dead-letter backlog. Operators alert on any sustained
+// growth here: a rising failed count means retries are exhausting, and any
+// dead-letter accumulation means jobs need manual inspection (Issue #82).
+new client.Gauge({
+  name: 'queue_failed',
+  help: 'Number of failed/dead-lettered jobs per BullMQ queue',
+  labelNames: ['queue'],
+  registers: [registry],
+  async collect() {
+    try {
+      const { getQueueStats, getDLQStats } = require('../queue/transactionRetryQueue');
+      const [retryResult, dlqResult] = await Promise.allSettled([
+        getQueueStats(),
+        getDLQStats(),
+      ]);
+
+      this.reset();
+
+      if (retryResult.status === 'fulfilled' && retryResult.value?.metrics) {
+        this.set({ queue: 'transaction-retry' }, retryResult.value.metrics.failed || 0);
+      }
+
+      if (dlqResult.status === 'fulfilled' && dlqResult.value?.enabled) {
+        const m = dlqResult.value.metrics;
+        // Dead-lettered jobs land as waiting in the DLQ (no DLQ worker drains them).
+        this.set({ queue: 'transaction-dead-letter' }, (m.waiting || 0) + (m.failed || 0));
+      }
+    } catch (_) {
+      // Redis may not be configured — scrape still succeeds
+    }
+  },
+});
+
 // sse_connected_clients / sse_active_schools — current SSE fan-out registry
 // size on this replica, read live from the SSE service on each scrape.
 new client.Gauge({

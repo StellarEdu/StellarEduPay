@@ -1,0 +1,10 @@
+<p>Dear Parent/Guardian,</p>
+<p>We have received your school fee payment for <strong>{{studentName}}</strong>. Thank you.</p>
+<table style="border-collapse:collapse;margin:16px 0;">
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Amount Paid</td><td><strong>{{amount}}</strong></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Transaction Hash</td><td><code>{{txHash}}</code></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Confirmed At</td><td>{{confirmedAt}}</td></tr>
+  {{#if remainingBalance}}<tr><td style="padding:4px 12px 4px 0;color:#555;">Remaining Balance</td><td>{{remainingBalance}}</td></tr>{{/if}}
+</table>
+<p>This receipt confirms the payment was recorded on the Stellar network. Keep it for your records.</p>
+<p>Thank you,<br/><strong>StellarEduPay</strong></p>

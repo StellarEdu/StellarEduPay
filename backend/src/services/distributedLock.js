@@ -37,17 +37,15 @@
 
 const crypto = require('crypto');
 const logger = require('../utils/logger').child('DistributedLock');
+const { getRedisConnectionOptions } = require('../config/redisClient');
 
 const redisEnabled = Boolean(process.env.REDIS_HOST);
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  lazyConnect: true,
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-};
+// Share the central reconnection policy (Issue #83) so the lock client backs off
+// and treats transient errors identically to every other Redis consumer.
+// maxRetriesPerRequest: null lets a command wait through a reconnect rather than
+// erroring immediately, so a brief blip doesn't spuriously deny every lock.
+const redisConfig = getRedisConnectionOptions({ maxRetriesPerRequest: null });
 
 let client = null;
 

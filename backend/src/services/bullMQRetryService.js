@@ -19,65 +19,26 @@ const logger = require('../utils/logger').child('BullMQRetryService');
 
 const PendingVerification = require('../models/pendingVerificationModel');
 
+// Shared retry contract (Issue #81) — both backends classify failures identically.
+const retryContract = require('./retryContract');
+
 // Singleton queue instance
 let queueInstance = null;
 
 /**
- * Error classification for retry decisions
+ * Error classification for retry decisions. Kept as an exported shape for
+ * backwards compatibility; the canonical lists live in retryContract.
  */
 const ERROR_CLASSIFICATION = {
-  TRANSIENT: [
-    'STELLAR_NETWORK_ERROR',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'ENOTFOUND',
-    'NETWORK_ERROR',
-    'SOCKET_TIMEOUT',
-    'REQUEST_TIMEOUT',
-    'HORIZON_UNAVAILABLE',
-  ],
-  PERMANENT: [
-    'TX_FAILED',
-    'MISSING_MEMO',
-    'INVALID_DESTINATION',
-    'UNSUPPORTED_ASSET',
-    'DUPLICATE_TX',
-    'INVALID_TRANSACTION_HASH',
-    'TRANSACTION_NOT_FOUND',
-  ],
+  TRANSIENT: retryContract.TRANSIENT_ERROR_CODES,
+  PERMANENT: retryContract.PERMANENT_ERROR_CODES,
 };
 
 /**
- * Classify error type for retry decision
+ * Classify error type for retry decision (delegates to the shared contract).
  */
 function classifyError(error) {
-  const errorCode = error.code || '';
-  const errorMessage = error.message || '';
-
-  if (ERROR_CLASSIFICATION.PERMANENT.includes(errorCode)) {
-    return 'permanent';
-  }
-
-  if (ERROR_CLASSIFICATION.TRANSIENT.includes(errorCode)) {
-    return 'transient';
-  }
-
-  // Check error message for transient indicators
-  const transientPatterns = [
-    /network/i,
-    /timeout/i,
-    /connection/i,
-    /unavailable/i,
-    /temporary/i,
-  ];
-
-  for (const pattern of transientPatterns) {
-    if (pattern.test(errorMessage)) {
-      return 'transient';
-    }
-  }
-
-  return 'unknown';
+  return retryContract.classifyError(error);
 }
 
 /**

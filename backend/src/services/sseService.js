@@ -22,6 +22,7 @@
 
 const Redis = require('ioredis');
 const logger = require('../utils/logger').child('SSEService');
+const { getRedisConnectionOptions } = require('../config/redisClient');
 
 // Map of schoolId -> Set of SSE response objects (process-local)
 const clients = new Map();
@@ -37,14 +38,10 @@ const MAX_CONNECTIONS_PER_SCHOOL =
 // cannot issue regular commands such as PUBLISH.
 const redisEnabled = Boolean(process.env.REDIS_HOST);
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  lazyConnect: true,
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-};
+// Shared reconnection policy (Issue #83). pub/sub connections need
+// maxRetriesPerRequest: null so a blocking SUBSCRIBE survives a reconnect; on a
+// total outage emit() degrades to local fan-out (see emit() below).
+const redisConfig = getRedisConnectionOptions({ maxRetriesPerRequest: null });
 
 let publisher = null;
 let subscriber = null;

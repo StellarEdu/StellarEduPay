@@ -193,6 +193,12 @@ const SMTP_FROM = process.env.SMTP_FROM || "noreply@stellaredupay.com";
 // Email provider inbound webhook secret
 const EMAIL_PROVIDER_WEBHOOK_SECRET = process.env.EMAIL_PROVIDER_WEBHOOK_SECRET || null;
 
+// Pluggable email provider (Issue #80): smtp | ses | sendgrid | console.
+// When unset the email module auto-selects smtp (if SMTP_* configured) else console.
+const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || null;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || null;
+const AWS_REGION = process.env.AWS_REGION || null;
+
 // ── Twilio (SMS / WhatsApp) ────────────────────────────────────────────────
 // All Twilio variables are optional. When unset, smsService falls back to
 // console-log (dev mode) so the application starts without SMS credentials.
@@ -243,6 +249,9 @@ const config = Object.freeze({
   TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER,
   TWILIO_WHATSAPP_FROM,
+  EMAIL_PROVIDER,
+  SENDGRID_API_KEY,
+  AWS_REGION,
 });
 
 module.exports = config;
