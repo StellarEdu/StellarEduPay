@@ -16,6 +16,7 @@
 const Student = require('../models/studentModel');
 const School  = require('../models/schoolModel');
 const Payment = require('../models/paymentModel');
+const ReminderLog = require('../models/reminderLogModel');
 const { sendFeeReminder, verifySmtp } = require('./notificationService');
 const config = require('../config');
 const logger = require('../utils/logger').child('ReminderService');
@@ -90,6 +91,18 @@ function isEligible(student) {
   }
 
   return true;
+}
+
+/**
+ * Compute the start of the current calendar day (00:00:00.000) in the school's
+ * timezone.  This is used as the idempotency window — at most one reminder per
+ * student per calendar day regardless of how many replicas fire or restarts occur.
+ */
+function computeWindowStart(timezone) {
+  const opts = { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' };
+  const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(new Date());
+  const isoDate = parts.map(p => p.value).join('').slice(0, 10); // YYYY-MM-DD
+  return new Date(isoDate + 'T00:00:00.000Z');
 }
 
 /**
@@ -175,6 +188,28 @@ async function processReminders() {
           continue;
         }
 
+        // Idempotency: claim this (school, student, day) slot atomically.
+        // If another replica or a mid-batch restart already sent for today, skip.
+        const windowStart = computeWindowStart(school.timezone || 'UTC');
+        try {
+          await ReminderLog.create({
+            schoolId: school.schoolId,
+            studentId: student.studentId,
+            windowStart,
+          });
+        } catch (err) {
+          if (err.code === 11000) { // duplicate key
+            logger.debug('Reminder already sent for today — skipping', {
+              studentId: student.studentId,
+              schoolId: school.schoolId,
+              windowStart,
+            });
+            summary.skipped++;
+            continue;
+          }
+          throw err;
+        }
+
         const result = await sendFeeReminder({
           to:               student.parentEmail,
           studentName:      student.name,
@@ -189,10 +224,16 @@ async function processReminders() {
 
         // Only update tracking fields if email was actually sent
         if (result.sent) {
-          await Student.findByIdAndUpdate(student._id, {
-            $set: { lastReminderSentAt: new Date() },
-            $inc: { reminderCount: 1 },
-          });
+          await Promise.all([
+            Student.findByIdAndUpdate(student._id, {
+              $set: { lastReminderSentAt: new Date() },
+              $inc: { reminderCount: 1 },
+            }),
+            ReminderLog.updateOne(
+              { schoolId: school.schoolId, studentId: student.studentId, windowStart },
+              { $set: { status: 'sent', sentAt: new Date() } }
+            ),
+          ]);
           summary.sent++;
           // Successful send — reset circuit
           if (_circuitState !== 'closed') {
@@ -201,6 +242,12 @@ async function processReminders() {
           }
           _consecutiveFailures = 0;
         } else {
+          // Email wasn't sent (dev mode / no SMTP) — keep the idempotency
+          // record so the same student isn't skipped on the next tick.
+          await ReminderLog.updateOne(
+            { schoolId: school.schoolId, studentId: student.studentId, windowStart },
+            { $set: { status: 'skipped' } }
+          );
           summary.skipped++;
         }
       } catch (err) {
