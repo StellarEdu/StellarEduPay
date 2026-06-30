@@ -8,6 +8,7 @@ const { server } = require('../config/stellarConfig');
 const { extractValidPayment, validatePaymentAgainstFee, detectMemoCollision, detectCrossSchoolMemoCollision, detectAbnormalPatterns, determineConfirmationState } = require('./stellarService');
 const { CONFIRMATION_STATES, isConfirmedOrAbove } = require('./paymentConfirmationStateMachine');
 const { validatePaymentAmount } = require('../utils/paymentLimits');
+const { compareAmounts, toStroops, stroopsToNumber, normalizeToNumber } = require('../utils/stellarAmount');
 const { generateReferenceCode } = require('../utils/generateReferenceCode');
 const { emit: sseEmit } = require('./sseService');
 const lock = require('./distributedLock');
@@ -25,6 +26,10 @@ const SYNC_INTERVAL_MS = config.SYNC_INTERVAL_MS;
 // TTL of the per-school distributed sync lock (crash-safety net).
 const SYNC_LOCK_TTL_MS = config.SYNC_LOCK_TTL_MS;
 const TRANSACTIONS_PER_POLL = 20;
+// Safety cap on how many pages a single poll cycle will drain for one school.
+// Bounds per-cycle work while letting a fresh school's history backfill across
+// cycles (default: up to 50 pages × 20 = 1000 tx/cycle). Configurable.
+const MAX_PAGES_PER_POLL = parseInt(process.env.SYNC_MAX_PAGES_PER_POLL || '50', 10);
 
 // Exponential backoff state — reset on first successful poll after errors.
 // POLL_MAX_BACKOFF_MS defaults to 5 minutes; configurable via env var.
@@ -56,7 +61,8 @@ async function processTransaction(tx, school) {
   }
 
   const { payOp, memo, asset } = valid;
-  const paymentAmount = parseFloat(payOp.amount);
+  // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
+  const paymentAmount = normalizeToNumber(payOp.amount);
 
   // Validate payment amount is within configured limits
   const limitValidation = validatePaymentAmount(paymentAmount);
@@ -112,16 +118,19 @@ async function processTransaction(tx, school) {
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
   const previousTotal = previousPayments.length ? previousPayments[0].total : 0;
-  const cumulativeTotal = parseFloat((previousTotal + paymentAmount).toFixed(7));
-  const remaining = parseFloat((student.feeAmount - cumulativeTotal).toFixed(7));
+  // Sum/diff in exact stroop space (#842) so an exact cumulative match is never
+  // mis-flagged as underpaid/overpaid by a float rounding epsilon.
+  const cumulativeTotal = stroopsToNumber(toStroops(previousTotal) + toStroops(paymentAmount));
+  const remaining = stroopsToNumber(toStroops(student.feeAmount) - toStroops(cumulativeTotal));
 
+  const cumulativeVsFee = compareAmounts(cumulativeTotal, student.feeAmount);
   let cumulativeStatus;
-  if (cumulativeTotal < student.feeAmount) cumulativeStatus = 'underpaid';
-  else if (cumulativeTotal > student.feeAmount) cumulativeStatus = 'overpaid';
+  if (cumulativeVsFee < 0) cumulativeStatus = 'underpaid';
+  else if (cumulativeVsFee > 0) cumulativeStatus = 'overpaid';
   else cumulativeStatus = 'valid';
 
   const excessAmount = cumulativeStatus === 'overpaid'
-    ? parseFloat((cumulativeTotal - student.feeAmount).toFixed(7))
+    ? stroopsToNumber(toStroops(cumulativeTotal) - toStroops(student.feeAmount))
     : 0;
 
   const feeValidation = validatePaymentAgainstFee(paymentAmount, student.feeAmount);
@@ -213,6 +222,26 @@ async function processTransaction(tx, school) {
 /**
  * Poll transactions for a single school.
  *
+ * Cursor management (#839): the poller persists a per-school Horizon
+ * `paging_token` cursor (`school.syncCursor`) and resumes ASCENDING paging from
+ * it every cycle. This is the key to being both gap-free and efficient:
+ *   - Ascending order from the saved cursor means we always move forward and
+ *     never skip a transaction (no missed payments).
+ *   - Persisting the cursor means we never replay history from genesis on each
+ *     cycle (no unbounded re-scans / excess Horizon load). A fresh school with
+ *     no cursor starts from the oldest transaction and backfills across cycles,
+ *     bounded by MAX_PAGES_PER_POLL per cycle.
+ * The cursor is advanced over EVERY examined transaction (processed or skipped)
+ * and persisted after each page, so a crash mid-cycle resumes correctly without
+ * gaps or rescans.
+ *
+ * Horizon 429 / errors: any Horizon failure (including HTTP 429 rate limiting)
+ * throws out of the page fetch and is reported as `horizonError`, which drives
+ * the cycle-level exponential backoff in pollAllSchools. Because the cursor is
+ * only advanced for transactions we actually examined and persisted, a 429
+ * mid-cycle never skips transactions — the next cycle resumes from the last
+ * persisted token.
+ *
  * Wrapped in a per-school distributed lock (Redis SET NX PX) so that, across
  * horizontally-scaled replicas or an overlapping slow poll, only one worker
  * syncs a given school at a time. If the lock is already held the cycle is
@@ -230,24 +259,47 @@ async function pollSchoolTransactions(school) {
     return { schoolId: school.schoolId, processed: 0, skipped: 0, lockSkipped: true };
   }
 
+  let cursor = school.syncCursor || null;
+  const startCursor = cursor;
+  let processedCount = 0;
+  let skippedCount = 0;
+
   try {
-    const transactions = await server
-      .transactions()
-      .forAccount(school.stellarAddress)
-      .order('desc')
-      .limit(TRANSACTIONS_PER_POLL)
-      .call();
+    for (let pages = 0; pages < MAX_PAGES_PER_POLL; pages++) {
+      let builder = server
+        .transactions()
+        .forAccount(school.stellarAddress)
+        .order('asc')
+        .limit(TRANSACTIONS_PER_POLL);
+      // Resume from the persisted cursor; omit on first-ever run so Horizon
+      // returns from the oldest transaction.
+      if (cursor) builder = builder.cursor(cursor);
 
-    let processedCount = 0;
-    let skippedCount = 0;
+      const page = await builder.call();
+      const records = (page && page.records) || [];
+      if (records.length === 0) break;
 
-    for (const tx of transactions.records) {
-      const result = await processTransaction(tx, school);
-      if (result.processed) {
-        processedCount++;
-      } else {
-        skippedCount++;
+      for (const tx of records) {
+        const result = await processTransaction(tx, school);
+        if (result.processed) {
+          processedCount++;
+        } else {
+          skippedCount++;
+        }
+        // Advance past every examined tx — we never need to re-read it. Reorg /
+        // confirmation promotion is handled separately by finalizeConfirmedPayments.
+        if (tx.paging_token) cursor = tx.paging_token;
       }
+
+      // Persist the cursor after each page so a crash resumes without gaps/rescans.
+      if (cursor && cursor !== startCursor) {
+        await School.updateOne(
+          { schoolId: school.schoolId },
+          { $set: { syncCursor: cursor } },
+        );
+      }
+
+      if (records.length < TRANSACTIONS_PER_POLL) break; // drained this cycle
     }
 
     if (processedCount > 0) {
@@ -255,16 +307,20 @@ async function pollSchoolTransactions(school) {
         schoolId: school.schoolId,
         processed: processedCount,
         skipped: skippedCount,
+        cursor,
       });
     }
 
-    return { schoolId: school.schoolId, processed: processedCount, skipped: skippedCount };
+    return { schoolId: school.schoolId, processed: processedCount, skipped: skippedCount, cursor };
   } catch (error) {
+    const status = error.response?.status || error.status || error.statusCode;
     logger.error('Error polling school transactions', {
       schoolId: school.schoolId,
       error: error.message,
+      status,
+      rateLimited: status === 429,
     });
-    return { schoolId: school.schoolId, error: error.message, horizonError: true };
+    return { schoolId: school.schoolId, error: error.message, horizonError: true, status };
   } finally {
     await lock.release(lockKey, token);
   }

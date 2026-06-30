@@ -67,15 +67,42 @@ if (!configuredAsset) {
 const ACCEPTED_ASSETS = { [configuredAsset.code]: configuredAsset };
 
 /**
- * Check whether an asset (by code and type) is accepted by the system.
- * @param {string} assetCode  e.g. 'XLM', 'USDC'
- * @param {string} assetType  Stellar asset type string ('native', 'credit_alphanum4', …)
- * @returns {{ accepted: boolean, asset: object|null }}
+ * Check whether an asset (by code, type, and — for credit assets — issuer) is
+ * accepted by the system.
+ *
+ * Issuer validation (#841) is a security boundary, not a nicety: a non-native
+ * asset is only as trustworthy as its issuer. The asset code "USDC" is just a
+ * 4-character label that ANY account can mint. Without pinning the issuer, a
+ * worthless token coded "USDC" from an attacker's account would be credited at
+ * face value — direct financial fraud. So for credit assets we require the
+ * on-chain `asset_issuer` to exactly match the issuer pinned for the active
+ * network in config (Circle's canonical USDC issuer). Native XLM has no issuer
+ * and must not carry one.
+ *
+ * @param {string} assetCode    e.g. 'XLM', 'USDC'
+ * @param {string} assetType    Stellar asset type ('native', 'credit_alphanum4', …)
+ * @param {string|null} [assetIssuer]  on-chain issuer account (G...) for credit assets
+ * @returns {{ accepted: boolean, asset: object|null, reason?: string }}
  */
-function isAcceptedAsset(assetCode, assetType) {
+function isAcceptedAsset(assetCode, assetType, assetIssuer = null) {
   const asset = ACCEPTED_ASSETS[assetCode];
-  if (!asset) return { accepted: false, asset: null };
-  if (asset.type !== assetType) return { accepted: false, asset: null };
+  if (!asset) return { accepted: false, asset: null, reason: 'unsupported_code' };
+  if (asset.type !== assetType) return { accepted: false, asset: null, reason: 'type_mismatch' };
+
+  // Native asset (XLM): no issuer exists on-chain. Reject any spurious issuer.
+  if (asset.type === 'native') {
+    if (assetIssuer) return { accepted: false, asset: null, reason: 'unexpected_issuer' };
+    return { accepted: true, asset };
+  }
+
+  // Credit asset (e.g. USDC): the pinned issuer must be configured AND must
+  // exactly match the on-chain asset_issuer.
+  if (!asset.issuer) {
+    return { accepted: false, asset: null, reason: 'issuer_not_configured' };
+  }
+  if (assetIssuer !== asset.issuer) {
+    return { accepted: false, asset: null, reason: 'issuer_mismatch' };
+  }
   return { accepted: true, asset };
 }
 

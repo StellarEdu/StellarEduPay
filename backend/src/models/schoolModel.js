@@ -29,6 +29,15 @@ const schoolSchema = new mongoose.Schema(
     },
     network:        { type: String, enum: ['testnet', 'mainnet'], default: 'testnet' },
     isActive:       { type: Boolean, default: true, index: true },
+    /**
+     * Horizon paging cursor for the transaction poller (#839).
+     * Holds the `paging_token` of the most recently examined transaction for
+     * this school's wallet. The poller resumes ascending paging from this value
+     * each cycle, so it never re-scans history from genesis and never skips a
+     * transaction (gap-free, resumable). Null/unset = start from the oldest
+     * transaction on first run.
+     */
+    syncCursor:     { type: String, default: null },
     adminEmail:     { type: String, default: null },
     address:        { type: String, default: null },
     /**

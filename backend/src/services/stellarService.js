@@ -11,17 +11,27 @@ const Payment = require("../models/paymentModel");
 const Student = require("../models/studentModel");
 const PaymentIntent = require("../models/paymentIntentModel");
 const { validatePaymentAmount } = require("../utils/paymentLimits");
+const { toStroops, stroopsToNumber, compareAmounts } = require("../utils/stellarAmount");
 const { withStellarRetry } = require("../utils/withStellarRetry");
 const { savePayment } = require("./transactionService");
 const { deriveCorrelationId } = require("../utils/correlationId");
-const { CONFIRMATION_STATES } = require("./paymentConfirmationStateMachine");
+const {
+  CONFIRMATION_STATES,
+  computeTargetState,
+  resolveNextState,
+  deriveLegacyConfirmationStatus,
+  isConfirmedOrAbove,
+} = require("./paymentConfirmationStateMachine");
 const logger = require("../utils/logger").child("StellarService");
 
 function detectAsset(payOp) {
   const assetType = payOp.asset_type;
   const assetCode = assetType === "native" ? "XLM" : payOp.asset_code;
   const assetIssuer = assetType === "native" ? null : payOp.asset_issuer;
-  const { accepted } = isAcceptedAsset(assetCode, assetType);
+  // Pass the issuer so credit assets (USDC) are validated against the pinned
+  // canonical issuer for the active network (#841). A fake "USDC" from any
+  // other issuer is rejected here.
+  const { accepted } = isAcceptedAsset(assetCode, assetType, assetIssuer);
   if (!accepted) return null;
   return { assetCode, assetType, assetIssuer };
 }
@@ -56,7 +66,11 @@ function normalizeAmount(rawAmount) {
  *   - MEMO_ID, MEMO_HASH, MEMO_RETURN: Unsupported types (UNSUPPORTED_MEMO_TYPE)
  */
 async function extractValidPayment(tx, walletAddress) {
-  if (!tx.successful) return null;
+  // #840 — A transaction can be included in a ledger yet have
+  // `successful === false` (e.g. a failed operation). Such transactions must
+  // NEVER be credited. Require an explicit success flag rather than merely
+  // truthy, so a failed-but-included tx (or one missing the flag) is rejected.
+  if (tx.successful !== true) return null;
 
   // Unwrap fee-bump transaction to get the inner transaction
   const innerTx = tx.inner_transaction || tx;
@@ -85,6 +99,9 @@ async function extractValidPayment(tx, walletAddress) {
   const ops = await withStellarRetry(() => innerTx.operations(), {
     label: "extractValidPayment.operations",
   });
+  // #840 — only a successful `payment` operation landing on the school wallet
+  // is creditable. detectAsset then enforces the asset/issuer (#841): a
+  // wrong-asset or fake-issuer operation yields null and is rejected here.
   const payOp = ops.records.find(
     (op) => op.type === "payment" && op.to === walletAddress,
   );
@@ -97,15 +114,21 @@ async function extractValidPayment(tx, walletAddress) {
 }
 
 function validatePaymentAgainstFee(paymentAmount, expectedFee) {
-  if (paymentAmount < expectedFee) {
+  // Compare in exact integer stroop space (#842). Float comparison of the paid
+  // amount vs the fee can mis-judge an exact-match payment as short/over by a
+  // rounding epsilon; stroop comparison is exact.
+  const paidStroops = toStroops(paymentAmount);
+  const feeStroops = toStroops(expectedFee);
+
+  if (paidStroops < feeStroops) {
     return {
       status: "underpaid",
       excessAmount: 0,
       message: `Payment of ${paymentAmount} is less than the required fee of ${expectedFee}`,
     };
   }
-  if (paymentAmount > expectedFee) {
-    const excess = parseFloat((paymentAmount - expectedFee).toFixed(7));
+  if (paidStroops > feeStroops) {
+    const excess = stroopsToNumber(paidStroops - feeStroops);
     return {
       status: "overpaid",
       excessAmount: excess,
@@ -676,14 +699,17 @@ async function syncPaymentsForSchool(school) {
 
       // Partial payments are accepted in the sync path — cumulative total determines status.
       // A single payment below the fee is recorded as 'partial' (credit toward remainingBalance).
+      // Compare in exact stroop space (#842) so an exact cumulative match is never
+      // mis-classified as partial/overpaid by a float rounding epsilon.
+      const cumulativeVsFee = compareAmounts(cumulativeTotal, student.feeAmount);
       let cumulativeStatus;
-      if (cumulativeTotal < student.feeAmount) cumulativeStatus = "partial";
-      else if (cumulativeTotal > student.feeAmount) cumulativeStatus = "overpaid";
+      if (cumulativeVsFee < 0) cumulativeStatus = "partial";
+      else if (cumulativeVsFee > 0) cumulativeStatus = "overpaid";
       else cumulativeStatus = "valid";
 
       const excessAmount =
         cumulativeStatus === "overpaid"
-          ? parseFloat((cumulativeTotal - student.feeAmount).toFixed(7))
+          ? stroopsToNumber(toStroops(cumulativeTotal) - toStroops(student.feeAmount))
           : 0;
 
       try {

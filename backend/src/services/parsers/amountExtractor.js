@@ -8,27 +8,22 @@
  */
 
 const { isAcceptedAsset } = require('../../config/stellarConfig');
+const { normalizeToNumber } = require('../../utils/stellarAmount');
 const logger = require('../../utils/logger').child('AmountExtractor');
 
 /**
- * Normalize Stellar amount to consistent decimal precision
+ * Normalize a raw Stellar amount to a number with exact 7-decimal precision.
+ * Delegates to the centralized stroop converter (#842) so all monetary
+ * normalization goes through one float-safe code path.
  * @param {string} rawAmount - Raw amount from Stellar API
  * @returns {number} Normalized amount with 7 decimal precision
  */
 function normalizeAmount(rawAmount) {
   if (!rawAmount) return 0;
-  
   try {
-    const parsed = parseFloat(rawAmount);
-    if (isNaN(parsed)) {
-      logger.warn('Invalid amount format', { rawAmount });
-      return 0;
-    }
-    
-    // Stellar uses 7 decimal places for precision
-    return parseFloat(parsed.toFixed(7));
+    return normalizeToNumber(rawAmount);
   } catch (error) {
-    logger.error('Error normalizing amount', { rawAmount, error: error.message });
+    logger.warn('Invalid amount format', { rawAmount, error: error.message });
     return 0;
   }
 }
@@ -208,10 +203,11 @@ function detectAsset(op) {
     const assetCode = assetType === 'native' ? 'XLM' : op.asset_code;
     const assetIssuer = assetType === 'native' ? null : op.asset_issuer;
 
-    // Check if asset is accepted by the system
-    const { accepted, asset } = isAcceptedAsset(assetCode, assetType);
+    // Check if asset is accepted by the system. Pass the issuer so credit
+    // assets (USDC) are validated against the pinned canonical issuer (#841).
+    const { accepted, asset } = isAcceptedAsset(assetCode, assetType, assetIssuer);
     if (!accepted) {
-      logger.debug('Unsupported asset', { assetCode, assetType, assetIssuer });
+      logger.debug('Unsupported or untrusted asset', { assetCode, assetType, assetIssuer });
       return null;
     }
 
@@ -239,7 +235,7 @@ function detectSourceAsset(op) {
     const sourceAssetCode = sourceAssetType === 'native' ? 'XLM' : op.source_asset_code;
     const sourceAssetIssuer = sourceAssetType === 'native' ? null : op.source_asset_issuer;
 
-    const { accepted, asset } = isAcceptedAsset(sourceAssetCode, sourceAssetType);
+    const { accepted, asset } = isAcceptedAsset(sourceAssetCode, sourceAssetType, sourceAssetIssuer);
     if (!accepted) {
       return null;
     }
