@@ -3,7 +3,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const { flagDispute, getDisputes, getDisputeById, resolveDispute } = require('../controllers/dispute.controller');
+const { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence } = require('../controllers/dispute.controller');
 const { resolveSchool } = require('../middleware/schoolContext');
 const { requireAdminAuth } = require('../middleware/auth');
 
@@ -15,7 +15,8 @@ router.post('/',        flagDispute);
 router.get('/',         getDisputes);
 router.get('/:id',      getDisputeById);
 
-// Only admins can update dispute status / resolve
+// Only admins can update dispute status / resolve / add evidence
 router.patch('/:id/resolve', requireAdminAuth, resolveDispute);
+router.post('/:id/evidence', requireAdminAuth, addEvidence);
 
 module.exports = router;
