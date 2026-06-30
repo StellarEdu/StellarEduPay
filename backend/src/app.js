@@ -31,6 +31,7 @@ const receiptsRoutes = require('./routes/receiptsRoutes');
 const feeAdjustmentRoutes = require('./routes/feeAdjustmentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const authRoutes = require('./routes/authRoutes');
+const emailRoutes = require('./routes/emailRoutes');
 const metricsRoute = require('./routes/metricsRoute');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
@@ -145,6 +146,7 @@ app.use('/api/receipts', receiptsRoutes);
 app.use('/api/fee-adjustments', feeAdjustmentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/email', emailRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);

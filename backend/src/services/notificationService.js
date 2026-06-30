@@ -1,86 +1,35 @@
 'use strict';
 
 /**
- * Notification Service
+ * Notification Service — fee reminder emails.
  *
- * Sends fee reminder emails to parents via SMTP (nodemailer).
- * Falls back to console logging when SMTP is not configured — useful
- * for development and environments without email infrastructure.
+ * Issue #80: sending is now delegated to the unified email module
+ * (services/email), giving reminders a pluggable provider (SMTP/SES/SendGrid),
+ * automatic retry, and suppression-list handling. This service is responsible
+ * only for building the reminder content from external templates and the signed
+ * unsubscribe link.
  *
- * Email bodies are loaded from:
+ * Templates:
  *   backend/src/templates/reminderEmail.txt  (plain-text)
  *   backend/src/templates/reminderEmail.html (HTML)
  *
  * Supported placeholders: {{studentName}}, {{studentId}}, {{className}},
- * {{schoolName}}, {{feeAmount}}, {{outstanding}}, {{reminderNote}}
- * The {{#if reminderNote}}…{{/if}} block is stripped when reminderNote is empty.
+ * {{schoolName}}, {{feeAmount}}, {{outstanding}}, {{reminderNote}},
+ * {{unsubscribeUrl}}
  */
 
-const fs = require('fs');
-const path = require('path');
-const nodemailer = require('nodemailer');
 const config = require('../config');
 const logger = require('../utils/logger').child('NotificationService');
 const { generateUnsubscribeToken } = require('../utils/unsubscribeToken');
-
-const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
-
-function loadTemplate(filename) {
-  return fs.readFileSync(path.join(TEMPLATES_DIR, filename), 'utf8');
-}
-
-function renderTemplate(template, vars) {
-  // Replace {{#if key}}…{{/if}} blocks — include content only when key is truthy
-  let out = template.replace(/\{\{#if (\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (_, key, inner) =>
-    vars[key] ? inner : ''
-  );
-  // Replace {{key}} placeholders
-  return out.replace(/\{\{(\w+)\}\}/g, (_, key) => (vars[key] != null ? vars[key] : ''));
-}
-
-let _transporter = null;
+const { renderEmailTemplate } = require('../utils/templateRenderer');
+const email = require('./email');
 
 /**
- * Lazily initialise the nodemailer transporter.
- * Returns null (and logs a warning) when SMTP is not configured.
- */
-function getTransporter() {
-  if (_transporter) return _transporter;
-
-  if (!config.SMTP_HOST || !config.SMTP_USER || !config.SMTP_PASS) {
-    logger.warn('SMTP not configured — reminder emails will be logged only. Set SMTP_HOST, SMTP_USER, SMTP_PASS to enable sending.');
-    return null;
-  }
-
-  _transporter = nodemailer.createTransport({
-    host:   config.SMTP_HOST,
-    port:   config.SMTP_PORT,
-    secure: config.SMTP_SECURE,
-    auth: {
-      user: config.SMTP_USER,
-      pass: config.SMTP_PASS,
-    },
-  });
-
-  return _transporter;
-}
-
-/**
- * Verify SMTP connectivity using nodemailer's built-in verify().
+ * Verify the active email provider is reachable/configured.
  * Returns { ok: true } on success, { ok: false, error } on failure.
  */
 async function verifySmtp() {
-  const transporter = getTransporter();
-  if (!transporter) {
-    return { ok: false, error: 'SMTP not configured' };
-  }
-  try {
-    await transporter.verify();
-    return { ok: true };
-  } catch (err) {
-    logger.error('SMTP verification failed', { error: err.message });
-    return { ok: false, error: err.message };
-  }
+  return email.verify();
 }
 
 /**
@@ -94,9 +43,7 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
     : '';
 
   const vars = { studentName, studentId, className, feeAmount, outstanding, schoolName, reminderNote, unsubscribeUrl: unsubscribeUrl || '' };
-
-  const text = renderTemplate(loadTemplate('reminderEmail.txt'), vars);
-  const html = renderTemplate(loadTemplate('reminderEmail.html'), vars);
+  const { text, html } = renderEmailTemplate('reminderEmail', vars);
 
   return { subject, text, html };
 }
@@ -114,20 +61,27 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
  * @param {number|null} opts.remainingBalance
  * @param {string} opts.schoolName
  * @param {number} opts.reminderCount
- * @returns {Promise<{sent: boolean, messageId?: string, preview?: string}>}
+ * @returns {Promise<{sent: boolean, messageId?: string, preview?: string, suppressed?: boolean}>}
  */
 async function sendFeeReminder(opts) {
-  // Generate a signed unsubscribe token for this student/school pair
   const token = generateUnsubscribeToken(opts.studentId, opts.schoolId || 'unknown', config.JWT_SECRET);
   const baseUrl = config.APP_URL || process.env.APP_URL || 'http://localhost:5000';
   const unsubscribeUrl = `${baseUrl}/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`;
 
   const { subject, text, html } = buildReminderEmail({ ...opts, unsubscribeUrl });
-  const transporter = getTransporter();
 
-  if (!transporter) {
-    // Dev/no-SMTP fallback — log the reminder so it's not silently dropped
-    logger.info('REMINDER (no SMTP)', {
+  const result = await email.sendEmail({
+    to: opts.to,
+    subject,
+    text,
+    html,
+    category: 'reminder',
+  });
+
+  // The console (dev/no-provider) backend logs instead of delivering — preserve
+  // the original "not sent" semantics so reminder tracking isn't advanced in dev.
+  if (result.provider === 'console') {
+    logger.info('REMINDER (console provider)', {
       to: opts.to,
       subject,
       studentId: opts.studentId,
@@ -136,22 +90,25 @@ async function sendFeeReminder(opts) {
     return { sent: false, preview: text };
   }
 
-  const info = await transporter.sendMail({
-    from:    config.SMTP_FROM,
-    to:      opts.to,
-    subject,
-    text,
-    html,
-  });
+  if (result.sent) {
+    logger.info('Reminder email sent', {
+      messageId: result.messageId,
+      to: opts.to,
+      studentId: opts.studentId,
+      reminderCount: opts.reminderCount,
+    });
+    return { sent: true, messageId: result.messageId };
+  }
 
-  logger.info('Reminder email sent', {
-    messageId:    info.messageId,
-    to:           opts.to,
-    studentId:    opts.studentId,
-    reminderCount: opts.reminderCount,
-  });
+  // Suppressed recipient — a deliberate skip, not a provider failure.
+  if (result.suppressed) {
+    logger.info('Reminder skipped — recipient suppressed', { to: opts.to, studentId: opts.studentId });
+    return { sent: false, suppressed: true };
+  }
 
-  return { sent: true, messageId: info.messageId };
+  // Genuine delivery failure after retries — throw so the caller's circuit
+  // breaker counts it (preserves the original sendMail-throws behaviour).
+  throw new Error(result.error || 'Email delivery failed after retries');
 }
 
 module.exports = { sendFeeReminder, verifySmtp };

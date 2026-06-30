@@ -35,7 +35,19 @@ const config = {
   },
   worker: {
     concurrency: parseInt(process.env.QUEUE_CONCURRENCY, 10) || 5,
+    // How long a job's lock is held before it is considered stalled. Must exceed
+    // the worst-case processing time (Stellar verification) or healthy jobs get
+    // re-queued mid-flight. Defaults to 2× the Stellar timeout plus headroom.
+    lockDuration: parseInt(process.env.QUEUE_LOCK_DURATION_MS, 10) || 30000,
+    // How often the worker scans for stalled jobs (crashed/locked-up workers).
+    stalledInterval: parseInt(process.env.QUEUE_STALLED_INTERVAL_MS, 10) || 30000,
+    // How many times a stalled job is recovered before it is failed for good
+    // (and routed to the dead-letter queue). Prevents an infinite stall loop.
+    maxStalledCount: parseInt(process.env.QUEUE_MAX_STALLED_COUNT, 10) || 2,
   },
+  // Jitter applied to the exponential backoff so a thundering herd of jobs that
+  // failed together (e.g. a Horizon outage) don't all retry at the same instant.
+  jitterRatio: parseFloat(process.env.RETRY_JITTER_RATIO) || 0.2,
   stellar: {
     timeout: parseInt(process.env.STELLAR_NETWORK_TIMEOUT_MS, 10) || 10000,
   },
@@ -162,16 +174,21 @@ function createQueueEvents() {
 }
 
 /**
- * Calculate exponential backoff delay
+ * Calculate exponential backoff delay with optional jitter.
  * @param {number} attempt - Current attempt number (1-indexed)
+ * @param {boolean} [withJitter=true] - Apply +/- jitterRatio randomisation
  * @returns {number} - Delay in milliseconds
  */
-function calculateBackoffDelay(attempt) {
-  const delay = Math.min(
+function calculateBackoffDelay(attempt, withJitter = true) {
+  const base = Math.min(
     config.retry.initialDelay * Math.pow(config.retry.backoffMultiplier, attempt - 1),
     config.retry.maxDelay
   );
-  return delay;
+  if (!withJitter || config.jitterRatio <= 0) return Math.round(base);
+  // Full +/- jitter: spread retries across [base*(1-r), base*(1+r)].
+  const spread = base * config.jitterRatio;
+  const jittered = base - spread + Math.random() * (2 * spread);
+  return Math.max(0, Math.round(Math.min(jittered, config.retry.maxDelay)));
 }
 
 /**
@@ -312,8 +329,7 @@ async function processTransactionRetryJob(job) {
     };
     
   } catch (error) {
-    const isPermanentError = ['TX_FAILED', 'MISSING_MEMO', 'INVALID_DESTINATION', 
-                              'UNSUPPORTED_ASSET', 'DUPLICATE_TX'].includes(error.code);
+    const isPermanentError = require('../services/retryContract').isPermanent(error);
     const hasReachedMaxAttempts = job.attemptsMade >= config.retry.maxAttempts - 1;
     
     if (isPermanentError || hasReachedMaxAttempts) {
@@ -368,6 +384,15 @@ function createRetryWorker() {
       {
         connection: initializeRedisConnection(),
         concurrency: config.worker.concurrency,
+        // Stalled-job recovery: jobs whose worker died mid-flight are reclaimed.
+        lockDuration: config.worker.lockDuration,
+        stalledInterval: config.worker.stalledInterval,
+        maxStalledCount: config.worker.maxStalledCount,
+        settings: {
+          // Jobs are added with backoff.type 'custom'; BullMQ resolves the delay
+          // through this strategy, giving us exponential backoff WITH jitter.
+          backoffStrategy: (attemptsMade) => calculateBackoffDelay(attemptsMade + 1),
+        },
       }
     );
     

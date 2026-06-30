@@ -180,6 +180,12 @@ const SMTP_USER = process.env.SMTP_USER || null;
 const SMTP_PASS = process.env.SMTP_PASS || null;
 const SMTP_FROM = process.env.SMTP_FROM || "noreply@stellaredupay.com";
 
+// Pluggable email provider (Issue #80): smtp | ses | sendgrid | console.
+// When unset the email module auto-selects smtp (if SMTP_* configured) else console.
+const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || null;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || null;
+const AWS_REGION = process.env.AWS_REGION || null;
+
 // ── Freeze to prevent accidental mutation at runtime ─────────────────────────
 const config = Object.freeze({
   PORT,
@@ -215,6 +221,9 @@ const config = Object.freeze({
   SMTP_USER,
   SMTP_PASS,
   SMTP_FROM,
+  EMAIL_PROVIDER,
+  SENDGRID_API_KEY,
+  AWS_REGION,
 });
 
 module.exports = config;

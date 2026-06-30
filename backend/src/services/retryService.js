@@ -16,6 +16,7 @@ const { verifyTransaction, recordPayment } = require("./stellarService");
 const { server } = require("../config/stellarConfig");
 const config = require("../config/index");
 const { withStellarRetry } = require("../utils/withStellarRetry");
+const retryContract = require("./retryContract");
 const logger = require("../utils/logger").child("RetryService");
 
 const RETRY_INTERVAL_MS = config.RETRY_INTERVAL_MS;
@@ -235,13 +236,9 @@ async function processPendingVerifications() {
         });
       } catch (err) {
         const attempts = item.attempts + 1;
-        const isPermanentError = [
-          "TX_FAILED",
-          "MISSING_MEMO",
-          "INVALID_DESTINATION",
-          "UNSUPPORTED_ASSET",
-          "DUPLICATE_TX",
-        ].includes(err.code);
+        // Shared retry contract (Issue #81) — same permanent classification as
+        // the BullMQ backend.
+        const isPermanentError = retryContract.isPermanent(err);
         const isStellarError =
           !err.code || err.code === "STELLAR_NETWORK_ERROR";
 
