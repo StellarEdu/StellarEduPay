@@ -39,6 +39,11 @@ const studentSchema = new mongoose.Schema(
     reminderCount: { type: Number, default: 0 },
     reminderOptOut: { type: Boolean, default: false },
 
+    // Dispute hold — set to true when an active dispute is opened for this
+    // student's payment. Suppresses automated reminders and downstream
+    // automation until the dispute is resolved or rejected.
+    disputeHold: { type: Boolean, default: false, index: true },
+
     // Audit fields
     dateOfBirth: { type: Date },
     gender: { type: String },

@@ -35,6 +35,11 @@ const disputeSchema = new mongoose.Schema(
     resolvedBy:   { type: String, default: null },
     resolutionNote: { type: String, default: null },
     resolvedAt:   { type: Date, default: null },
+
+    // Hold tracking — records whether the disputeHold was lifted on this
+    // student when the dispute closed. Always null while the dispute is still
+    // open or under_review.
+    holdLifted:   { type: Boolean, default: null },
   },
   {
     timestamps: true, // createdAt = when dispute was raised, updatedAt = last change

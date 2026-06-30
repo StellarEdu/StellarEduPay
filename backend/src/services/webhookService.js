@@ -495,6 +495,52 @@ function sendPaymentWebhook(url, data, secret = null) {
   return fireWebhook(url, 'payment.confirmed', data, secret);
 }
 
+/**
+ * Notify external system that a dispute has been opened for a payment.
+ * Fires the 'dispute.created' event so the school's webhook receiver can
+ * take immediate action (e.g. pause settlement, alert staff).
+ *
+ * @param {string} webhookUrl - Registered webhook URL
+ * @param {object} dispute - Dispute document from MongoDB
+ * @param {string|null} [secret] - Per-school HMAC secret
+ */
+async function notifyDisputeCreated(webhookUrl, dispute, secret = null) {
+  return fireWebhook(webhookUrl, 'dispute.created', {
+    disputeId:  dispute._id.toString(),
+    schoolId:   dispute.schoolId,
+    txHash:     dispute.txHash,
+    studentId:  dispute.studentId,
+    raisedBy:   dispute.raisedBy,
+    reason:     dispute.reason,
+    status:     dispute.status,
+    holdSet:    true,
+    createdAt:  dispute.createdAt,
+  }, secret);
+}
+
+/**
+ * Notify external system that a dispute has been resolved or rejected.
+ * Fires the 'dispute.resolved' event so the school's webhook receiver can
+ * resume normal processing for the affected payment/student.
+ *
+ * @param {string} webhookUrl - Registered webhook URL
+ * @param {object} dispute - Updated Dispute document from MongoDB
+ * @param {string|null} [secret] - Per-school HMAC secret
+ */
+async function notifyDisputeResolved(webhookUrl, dispute, secret = null) {
+  return fireWebhook(webhookUrl, 'dispute.resolved', {
+    disputeId:      dispute._id.toString(),
+    schoolId:       dispute.schoolId,
+    txHash:         dispute.txHash,
+    studentId:      dispute.studentId,
+    status:         dispute.status,
+    resolvedBy:     dispute.resolvedBy,
+    resolutionNote: dispute.resolutionNote,
+    resolvedAt:     dispute.resolvedAt,
+    holdLifted:     dispute.holdLifted ?? true,
+  }, secret);
+}
+
 module.exports = {
   fireWebhook,
   sendPaymentWebhook,
@@ -503,6 +549,8 @@ module.exports = {
   notifyPaymentFailed,
   notifyPaymentRefunded,
   notifyPaymentSuspicious,
+  notifyDisputeCreated,
+  notifyDisputeResolved,
   generateSignature,
   verifySignature,
   queueWebhookRetry,
