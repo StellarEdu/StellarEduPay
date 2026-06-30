@@ -269,6 +269,10 @@ paymentSchema.post('save', async function () {
           remainingBalance: student.feeAmount - this.amount,
         });
       }
+
+      // Invalidate report cache on new successful payments
+      const reportCacheInvalidator = require('../services/reportCacheInvalidator');
+      reportCacheInvalidator.invalidate(this.schoolId);
     }
   } catch (err) {
     // Log error but don't fail the save

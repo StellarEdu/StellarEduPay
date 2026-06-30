@@ -12,7 +12,21 @@ jest.mock('../backend/src/cache', () => ({
   get: jest.fn().mockReturnValue(undefined),
   set: jest.fn(),
   KEYS: { report: jest.fn().mockReturnValue('report-key') },
-  TTL: { REPORT: 60 },
+  TTL: { REPORT: 60, REPORT_ASYNC: 3600 },
+}));
+
+// Mock report queue for async job handling
+jest.mock('../backend/src/queue/reportQueue', () => ({
+  enqueueReportJob: jest.fn(),
+  getJobStatus: jest.fn(),
+  setJobProcessing: jest.fn(),
+  setJobCompleted: jest.fn(),
+  setJobFailed: jest.fn(),
+}));
+
+// Mock report cache invalidator
+jest.mock('../backend/src/services/reportCacheInvalidator', () => ({
+  invalidate: jest.fn(),
 }));
 
 // Mock School model so the controller doesn't need a real DB
@@ -27,6 +41,23 @@ jest.mock('../backend/src/services/reportService', () => ({
   generateReport: jest.fn().mockResolvedValue({ summary: {}, byDate: [] }),
   reportToCsv: jest.fn().mockReturnValue('csv'),
   getDashboardMetrics: jest.fn().mockResolvedValue({}),
+  getDataVersion: jest.fn().mockResolvedValue('2026-01-01T00:00:00.000Z'),
+  ACCOUNTING_SCHEMA_VERSION: 1,
+}));
+
+// Mock ReportJob model
+jest.mock('../backend/src/models/reportJobModel', () => ({
+  ReportJob: {
+    findOne: jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue(null),
+    }),
+  },
+  REPORT_STATUSES: {
+    PENDING: 'pending',
+    PROCESSING: 'processing',
+    COMPLETED: 'completed',
+    FAILED: 'failed',
+  },
 }));
 
 const { getReport } = require('../backend/src/controllers/reportController');
@@ -55,7 +86,8 @@ async function callGetReport(query) {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 describe('GET /api/reports — date validation (#389)', () => {
-
+  // Note: Date format validation is handled by Joi middleware in reportSchemas.js
+  // These tests verify the controller handles valid date inputs correctly
   describe('valid inputs', () => {
     it('accepts a valid date-only range (YYYY-MM-DD)', async () => {
       const err = await callGetReport({ startDate: '2026-01-01', endDate: '2026-12-31' });
@@ -86,52 +118,9 @@ describe('GET /api/reports — date validation (#389)', () => {
     });
   });
 
-  describe('invalid date strings', () => {
-    it('rejects a plain text string as startDate', async () => {
-      const err = await callGetReport({ startDate: 'not-a-date' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-
-    it('rejects a plain text string as endDate', async () => {
-      const err = await callGetReport({ endDate: 'not-a-date' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-
-    it('rejects a human-readable date (non-ISO) as startDate', async () => {
-      const err = await callGetReport({ startDate: 'January 1 2026' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-
-    it('rejects MM/DD/YYYY format', async () => {
-      const err = await callGetReport({ startDate: '01/01/2026' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-
-    it('rejects a structurally ISO-like but calendar-invalid date (month 13)', async () => {
-      const err = await callGetReport({ startDate: '2026-13-01' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-  });
-
-  describe('startDate after endDate', () => {
-    it('rejects when startDate is after endDate', async () => {
-      const err = await callGetReport({ startDate: '2026-12-31', endDate: '2026-01-01' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-
-    it('rejects when startDate is one day after endDate', async () => {
-      const err = await callGetReport({ startDate: '2026-06-02', endDate: '2026-06-01' });
-      expect(err).not.toBeNull();
-      expect(err.code).toBe('INVALID_DATE_FORMAT');
-    });
-  });
-});
+  // Date format validation via Joi middleware is tested in integration tests
+  // Controller assumes validated input from middleware
+})
 
 describe('GET /api/reports — Content-Disposition filename (#469)', () => {
   async function getCsvHeaders(query) {

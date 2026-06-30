@@ -6,7 +6,6 @@ const NodeCache = require('node-cache');
 // checkperiod: how often (seconds) to check for expired keys
 const cache = new NodeCache({ stdTTL: 0, checkperiod: 60, useClones: false });
 
-// TTL constants (seconds)
 const TTL = {
   ACCEPTED_ASSETS: 3600, // static config — 1 hour
   FEES: 300,             // fee structures change rarely — 5 min
@@ -18,7 +17,8 @@ const TTL = {
   OVERPAYMENTS: 30,
   SUSPICIOUS: 30,
   PENDING: 30,
-  REPORT: 300,           // report aggregation — 5 min
+  REPORT: 300,           // report aggregation — 5 min (short for data freshness)
+  REPORT_ASYNC: 3600,   // async report artifacts — 1 hour before cleanup
 };
 
 // Cache key builders
@@ -34,7 +34,7 @@ const KEYS = {
   overpayments: () => 'overpayments',
   suspicious: () => 'suspicious',
   pending: () => 'pending',
-  report: (startDate, endDate) => `report:${startDate || ''}:${endDate || ''}`,
+  report: (schoolId, startDate, endDate, dataVersion = '') => `report:${schoolId}:${startDate || ''}:${endDate || ''}:v${dataVersion || 'latest'}`,
 };
 
 /**
@@ -67,4 +67,11 @@ function delByPrefix(prefix) {
   if (toDelete.length > 0) cache.del(toDelete);
 }
 
-module.exports = { get, set, del, delByPrefix, KEYS, TTL };
+/**
+ * Get all cache keys.
+ */
+function keys() {
+  return cache.keys();
+}
+
+module.exports = { get, set, del, delByPrefix, KEYS, TTL, keys };

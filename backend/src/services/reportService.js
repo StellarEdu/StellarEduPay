@@ -5,6 +5,23 @@ const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
 
 /**
+ * Get the data version for cache key generation.
+ * Returns the timestamp of the most recent confirmed payment for a school,
+ * which can be used to invalidate cached reports when data changes.
+ *
+ * @param {string} schoolId
+ * @returns {Promise<string>} ISO timestamp or '0' if no payments
+ */
+async function getDataVersion(schoolId) {
+  const latest = await Payment.findOne(
+    { schoolId, status: 'SUCCESS', deletedAt: null },
+    'confirmedAt'
+  ).sort({ confirmedAt: -1 }).lean();
+
+  return latest?.confirmedAt ? new Date(latest.confirmedAt).toISOString() : '0';
+}
+
+/**
  * Aggregate confirmed payments grouped by date (YYYY-MM-DD), scoped to a school.
  *
  * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
@@ -444,4 +461,5 @@ module.exports = {
   generateAccountingCsv,
   ACCOUNTING_SCHEMA_VERSION,
   getDashboardMetrics,
+  getDataVersion,
 };

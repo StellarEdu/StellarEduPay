@@ -14,6 +14,7 @@ const reportQuerySchema = Joi.object({
   endDate:        Joi.string().isoDate().optional(),
   format:         Joi.string().valid('json', 'csv', 'accounting_csv').default('json'),
   schema_version: Joi.number().integer().min(1).max(1).default(1),
+  async:          Joi.boolean().optional(),
 }).custom((value, helpers) => {
   const { startDate, endDate } = value;
   if (startDate && endDate) {
