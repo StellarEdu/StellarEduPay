@@ -6,6 +6,7 @@ const router = express.Router();
 const { createRule, getRules, deleteRule } = require('../controllers/sourceValidationRuleController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { resolveSchool } = require('../middleware/schoolContext');
+const { auditContext } = require('../middleware/auditContext');
 
 /**
  * Source validation rules are tenant-scoped per school.
@@ -19,8 +20,8 @@ const { resolveSchool } = require('../middleware/schoolContext');
  */
 router.use(resolveSchool);
 
-router.post('/',      requireAdminAuth, createRule);
+router.post('/',      requireAdminAuth, auditContext, createRule);
 router.get('/',       requireAdminAuth, getRules);
-router.delete('/:id', requireAdminAuth, deleteRule);
+router.delete('/:id', requireAdminAuth, auditContext, deleteRule);
 
 module.exports = router;

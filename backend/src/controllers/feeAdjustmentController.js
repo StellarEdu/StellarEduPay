@@ -5,6 +5,7 @@ const FeeAdjustmentRule = require('../models/feeAdjustmentRuleModel');
 const Student = require('../models/studentModel');
 const feeAdjustmentService = require('../services/feeAdjustmentService');
 const logger = require('../utils/logger');
+const { logAudit } = require('../services/auditService');
 
 const VALID_TYPES = ['discount_percentage', 'discount_fixed', 'penalty_percentage', 'penalty_fixed', 'waiver'];
 const VALID_POLICIES = ['stack', 'first_only', 'best_for_student'];
@@ -18,6 +19,21 @@ function validateBody(body) {
     return `conflictResolutionPolicy must be one of: ${VALID_POLICIES.join(', ')}`;
   }
   return null;
+}
+
+function audit(req, action, targetId, details) {
+  if (!req.auditContext) return Promise.resolve();
+  return logAudit({
+    schoolId: req.schoolId,
+    action,
+    performedBy: req.auditContext.performedBy,
+    targetId,
+    targetType: 'fee_adjustment_rule',
+    details,
+    result: 'success',
+    ipAddress: req.auditContext.ipAddress,
+    userAgent: req.auditContext.userAgent,
+  });
 }
 
 // POST /api/fee-adjustments
@@ -44,6 +60,9 @@ async function createRule(req, res, next) {
       isActive: true,
     });
 
+    await audit(req, 'fee_adjustment_rule_create', String(rule._id), {
+      name: rule.name, type, value, conditions: conditions || {}, priority: priority ?? 10,
+    });
     res.status(201).json(rule);
   } catch (err) {
     if (err.code === 11000) {
@@ -78,6 +97,10 @@ async function updateRule(req, res, next) {
     }
 
     const { name, type, value, conditions, priority, description, isActive, conflictResolutionPolicy } = req.body;
+
+    // Capture before state for audit trail
+    const before = await FeeAdjustmentRule.findOne({ _id: req.params.id, schoolId: req.schoolId }).lean();
+
     const rule = await FeeAdjustmentRule.findOneAndUpdate(
       { _id: req.params.id, schoolId: req.schoolId },
       { name: name.trim(), type, value, conditions, priority, description, isActive,
@@ -92,6 +115,10 @@ async function updateRule(req, res, next) {
       return next(err);
     }
 
+    await audit(req, 'fee_adjustment_rule_update', String(rule._id), {
+      before: before ? { name: before.name, type: before.type, value: before.value, isActive: before.isActive } : null,
+      after:  { name: rule.name, type: rule.type, value: rule.value, isActive: rule.isActive },
+    });
     res.json(rule);
   } catch (err) {
     if (err.code === 11000) {
@@ -119,6 +146,9 @@ async function deleteRule(req, res, next) {
       return next(err);
     }
 
+    await audit(req, 'fee_adjustment_rule_delete', String(rule._id), {
+      name: rule.name, type: rule.type, value: rule.value,
+    });
     res.json({ message: `Rule "${rule.name}" deactivated` });
   } catch (err) {
     next(err);

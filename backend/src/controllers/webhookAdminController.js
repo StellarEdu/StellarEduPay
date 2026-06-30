@@ -2,6 +2,7 @@
 
 const WebhookRetry = require('../models/webhookRetryModel');
 const logger = require('../utils/logger');
+const { logAudit } = require('../services/auditService');
 
 /**
  * GET /api/admin/webhooks/dlq
@@ -57,6 +58,24 @@ async function retryDLQEntry(req, res, next) {
     );
 
     logger.info('DLQ entry re-queued by admin', { deliveryId: entry.deliveryId, url: entry.url });
+
+    await logAudit({
+      schoolId: 'system',
+      action: 'webhook_dlq_retry',
+      performedBy: req.auditContext?.performedBy || 'unknown',
+      targetId: String(entry._id),
+      targetType: 'webhook',
+      details: {
+        deliveryId: entry.deliveryId,
+        url: entry.url,
+        event: entry.event,
+        previousAttemptCount: entry.attemptCount,
+      },
+      result: 'success',
+      ipAddress: req.auditContext?.ipAddress,
+      userAgent: req.auditContext?.userAgent,
+    });
+
     res.json({ success: true, deliveryId: entry.deliveryId });
   } catch (err) {
     next(err);

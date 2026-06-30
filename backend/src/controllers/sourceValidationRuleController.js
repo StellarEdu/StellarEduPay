@@ -16,6 +16,24 @@
  */
 
 const SourceValidationRule = require('../models/sourceValidationRuleModel');
+const { logAudit } = require('../services/auditService');
+
+// Source validation rules are global (not per-school).
+// We use schoolId: 'system' to keep audit entries in the same chain.
+function audit(req, action, targetId, details) {
+  if (!req.auditContext) return Promise.resolve();
+  return logAudit({
+    schoolId: 'system',
+    action,
+    performedBy: req.auditContext.performedBy,
+    targetId,
+    targetType: 'source_validation_rule',
+    details,
+    result: 'success',
+    ipAddress: req.auditContext.ipAddress,
+    userAgent: req.auditContext.userAgent,
+  });
+}
 
 // POST /api/source-rules
 async function createRule(req, res, next) {
@@ -66,6 +84,9 @@ async function createRule(req, res, next) {
       maxTransactionsPerDay: type === 'new_sender_limit' ? (maxTransactionsPerDay || 1) : null,
     });
 
+    await audit(req, 'source_validation_rule_create', String(rule._id), {
+      name: rule.name, type: rule.type, value: rule.value, priority: rule.priority,
+    });
     res.status(201).json(rule);
   } catch (err) {
     if (err.code === 11000) {
@@ -104,6 +125,9 @@ async function deleteRule(req, res, next) {
     if (!rule) {
       return res.status(404).json({ error: 'Rule not found.', code: 'NOT_FOUND' });
     }
+    await audit(req, 'source_validation_rule_delete', String(rule._id), {
+      name: rule.name, type: rule.type, value: rule.value,
+    });
     res.json({ message: `Rule "${rule.name}" deleted.` });
   } catch (err) {
     next(err);
