@@ -46,8 +46,8 @@ export default function Navbar() {
     <>
       <style>{`
         .nav {
-          background: #131830;
-          background-image: radial-gradient(600px 120px at 18% 0%, rgba(99,102,241,0.18), transparent 70%);
+          background: #0e1424;
+          background-image: radial-gradient(600px 120px at 18% 0%, rgba(16,185,129,0.20), transparent 70%);
           border-bottom: 1px solid rgba(255, 255, 255, 0.07);
           position: sticky;
           top: 0;
@@ -73,13 +73,13 @@ export default function Navbar() {
         }
         .nav-logo {
           width: 32px; height: 32px;
-          background: linear-gradient(135deg, #22d3ee 0%, #6366f1 50%, #8b5cf6 100%);
+          background: linear-gradient(135deg, #34d399 0%, #059669 55%, #0d9488 100%);
           border-radius: 9px;
           display: flex; align-items: center; justify-content: center;
           font-weight: 900; font-size: 0.85rem; color: #fff;
           flex-shrink: 0;
           letter-spacing: -0.05em;
-          box-shadow: 0 4px 14px -2px rgba(99,102,241,0.6);
+          box-shadow: 0 4px 14px -2px rgba(5,150,105,0.6);
         }
         .nav-name {
           color: #f1f5f9;
@@ -143,16 +143,16 @@ export default function Navbar() {
           background: rgba(255, 255, 255, 0.06);
         }
         .nav-pill-accent {
-          background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
           border: none;
           color: #fff;
           font-weight: 700;
-          box-shadow: 0 4px 14px -3px rgba(99,102,241,0.6);
+          box-shadow: 0 4px 14px -3px rgba(5,150,105,0.6);
         }
         .nav-pill-accent:hover {
-          filter: brightness(1.1);
+          filter: brightness(1.08);
           color: #fff;
-          background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
         }
         .nav-hamburger {
           display: none;

@@ -144,59 +144,7 @@ export default function PaymentForm() {
 
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: `
-        .pf-section-label {
-          font-size: 0.68rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.09em;
-          color: var(--text-muted);
-          margin-bottom: 0.35rem;
-          display: block;
-        }
-        .pf-code-row {
-          display: flex;
-          gap: 0.5rem;
-          align-items: center;
-        }
-        .pf-code {
-          flex: 1;
-          background: var(--bg-subtle, var(--bg));
-          border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
-          padding: 0.5rem 0.75rem;
-          font-family: 'SF Mono', 'Fira Code', monospace;
-          font-size: 0.8rem;
-          word-break: break-all;
-          color: var(--text);
-          min-width: 0;
-        }
-        .pf-payment-item {
-          border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
-          padding: 1rem;
-          margin-bottom: 0.625rem;
-          background: var(--card-bg);
-          transition: border-color 0.15s;
-        }
-        .pf-payment-item:hover { border-color: var(--border-strong); }
-        .pf-search-icon {
-          position: absolute;
-          left: 0.7rem;
-          top: 50%;
-          transform: translateY(-50%);
-          color: var(--text-muted);
-          pointer-events: none;
-          display: flex;
-        }
-        .pf-id-input-wrap {
-          position: relative;
-          margin-bottom: 0.875rem;
-        }
-        .pf-id-input-wrap input {
-          padding-left: 2.25rem;
-        }
-      `}} />
+      
 
       <div className="card pf-wrap">
         <div className="card-header">
