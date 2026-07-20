@@ -261,8 +261,57 @@ const notificationSentTotal = new client.Counter({
   registers: [registry],
 });
 
+// ── Coordinated Horizon poll budget (#1124) ─────────────────────────────────
+// Polling draws from a single per-cycle request allowance shared across all
+// schools, spent in priority order. These expose whether that allowance binds,
+// how far the adaptive ceiling has been pulled down by observed 429s, and — the
+// SLA-relevant one — the worst staleness any tenant is currently experiencing.
+const horizonPollBudgetRemaining = new client.Gauge({
+  name: 'horizon_poll_budget_remaining',
+  help: 'Horizon request tokens left in the current poll cycle budget',
+  registers: [registry],
+});
+
+const horizonPollBudgetCeiling = new client.Gauge({
+  name: 'horizon_poll_budget_ceiling',
+  help: 'Current adaptive per-cycle Horizon request ceiling (AIMD-adjusted)',
+  registers: [registry],
+});
+
+const horizonPollDeferredSchools = new client.Gauge({
+  name: 'horizon_poll_deferred_schools',
+  help: 'Number of schools currently deferred because the poll budget was exhausted',
+  registers: [registry],
+});
+
+// The direct input to the documented max-sync-delay SLA: worst-case delay is
+// approximately (this value + 1) x the poll interval.
+const horizonPollMaxDeferralCycles = new client.Gauge({
+  name: 'horizon_poll_max_deferral_cycles',
+  help: 'Highest number of consecutive cycles any single school has been deferred',
+  registers: [registry],
+});
+
+const horizonPollRequestsTotal = new client.Counter({
+  name: 'horizon_poll_requests_total',
+  help: 'Total Horizon page requests issued by the transaction poller',
+  registers: [registry],
+});
+
+const horizonRateLimitedTotal = new client.Counter({
+  name: 'horizon_rate_limited_total',
+  help: 'Number of Horizon responses observed as HTTP 429 by the poller',
+  registers: [registry],
+});
+
 module.exports = {
   registry,
+  horizonPollBudgetRemaining,
+  horizonPollBudgetCeiling,
+  horizonPollDeferredSchools,
+  horizonPollMaxDeferralCycles,
+  horizonPollRequestsTotal,
+  horizonRateLimitedTotal,
   syncDurationSeconds,
   httpRequestDurationSeconds,
   suspiciousPaymentFlagged,

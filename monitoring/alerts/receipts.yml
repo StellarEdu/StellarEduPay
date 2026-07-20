@@ -1,0 +1,48 @@
+groups:
+  - name: receipts
+    interval: 60s
+    rules:
+      # ── Warning: receipts are failing at a low but sustained rate ────────
+      # receipt_generation_failures_total{source} is incremented by both the
+      # inline verify path and the payment-saved subscriber (#1122). Before
+      # that metric existed, the inline path swallowed errors entirely and a
+      # broken receipt pipeline was invisible until a parent complained.
+      #
+      # Any sustained non-zero rate is worth a look: receipt generation is
+      # idempotent and should not fail transiently at volume.
+      - alert: ReceiptGenerationFailures
+        expr: sum(rate(receipt_generation_failures_total[10m])) by (source) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Receipt generation failing via {{ $labels.source }}"
+          description: >
+            Receipt generation has been failing on the {{ $labels.source }} path
+            for 10 minutes ({{ $value | printf "%.3f" }}/s). Payments are still
+            being confirmed on-chain, but parents and admins will not receive
+            receipts. Search logs for "receipt generation failed" or "Receipt
+            subscriber failed" to get the txHash and underlying error.
+
+      # ── Critical: receipts are failing for essentially every payment ─────
+      # Compares receipt failures against confirmed-payment throughput. A ratio
+      # near 1 means the receipt pipeline is systemically down (bad template,
+      # receipt-model/DB fault, downstream dependency outage) rather than
+      # hitting isolated bad records.
+      - alert: ReceiptGenerationSystemicFailure
+        expr: >
+          sum(rate(receipt_generation_failures_total[15m]))
+            /
+          clamp_min(sum(rate(payment_funnel_total{stage="confirmed"}[15m])), 0.001)
+            > 0.5
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Receipt generation is systemically broken"
+          description: >
+            More than half of confirmed payments have failed to produce a
+            receipt over the last 15 minutes. This is an outage of the receipt
+            pipeline, not isolated bad data. Payments themselves are unaffected
+            (funds are on-chain and recorded), but every affected payment will
+            need its receipt backfilled once the root cause is fixed.

@@ -1,0 +1,76 @@
+groups:
+  - name: horizon_poll
+    interval: 60s
+    rules:
+      # ── Warning: some tenant is falling behind the documented SLA ─────────
+      # horizon_poll_max_deferral_cycles is the direct input to the max
+      # sync-delay figure in docs/horizon-rate-limits.md:
+      #   max delay ≈ (max_deferral_cycles + 1) × poll interval
+      # A sustained value above 5 means at least one school is being deferred
+      # repeatedly and its parents are seeing stale payment state.
+      - alert: HorizonPollSchoolFallingBehind
+        expr: horizon_poll_max_deferral_cycles > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A school is repeatedly deferred by the Horizon poll budget"
+          description: >
+            At least one school has been deferred for {{ $value }} consecutive
+            poll cycles, putting it outside the documented sync-delay SLA. The
+            fleet has likely outgrown its Horizon allowance. See the
+            "Operational guidance" section of docs/horizon-rate-limits.md.
+
+      # ── Warning: we are still hitting the real limit ──────────────────────
+      # In steady state the budget should keep the poller below Horizon's
+      # limit, so any sustained 429 rate means the configured limit is higher
+      # than the real one, or HORIZON_POLL_REPLICA_COUNT is wrong and N
+      # replicas are each spending a full budget.
+      - alert: HorizonRateLimitedDespiteBudget
+        expr: rate(horizon_rate_limited_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Horizon is returning 429s even with poll budgeting active"
+          description: >
+            The poller is still being rate limited ({{ $value | printf "%.3f" }}/s).
+            Either HORIZON_RATE_LIMIT_PER_HOUR exceeds the real allowance, or
+            HORIZON_POLL_REPLICA_COUNT does not match the running replica count
+            (each replica then spends a full budget). Check both before adding
+            tenants.
+
+      # ── Critical: adaptive ceiling has collapsed ──────────────────────────
+      # AIMD halves the ceiling on every 429-affected cycle. Sitting near the
+      # floor means the configured limit is badly wrong and sync throughput is
+      # a small fraction of what operators think it is.
+      - alert: HorizonPollBudgetCollapsed
+        expr: horizon_poll_budget_ceiling <= 4
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Horizon poll budget has collapsed to its floor"
+          description: >
+            The adaptive per-cycle budget has been pulled down to the minimum
+            for 30 minutes, meaning sustained rate limiting. Payment sync is
+            running at a small fraction of nominal throughput and delays will
+            be far outside the documented SLA for every tenant.
+
+      # ── Warning: budget is chronically saturated ──────────────────────────
+      # Deferrals are a normal, ordered response to a bound budget — but a
+      # persistently non-zero deferred count is the signal that the fleet has
+      # outgrown its allowance and needs a capacity decision.
+      - alert: HorizonPollBudgetSaturated
+        expr: horizon_poll_deferred_schools > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Horizon poll budget saturated for an hour"
+          description: >
+            {{ $value }} schools have been deferred continuously for an hour.
+            Polling is keeping up only by prioritising; quiet schools are being
+            served purely by the aging guard. Raise the Horizon allowance, move
+            to a dedicated Horizon instance, lengthen the poll interval, or
+            shard schools across replicas.
