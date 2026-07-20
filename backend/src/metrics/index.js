@@ -261,8 +261,21 @@ const notificationSentTotal = new client.Counter({
   registers: [registry],
 });
 
+// receipt_generation_failures_total{source} — counts receipt-generation
+// failures so a systemic outage (bad template, receipt-model/DB fault,
+// downstream dependency down) is visible and alertable instead of only
+// surfacing when a parent reports a missing receipt (#1122). Sources:
+// 'verify_controller' (inline fire-and-forget path), 'payment_saved_subscriber'.
+const receiptGenerationFailuresTotal = new client.Counter({
+  name: 'receipt_generation_failures_total',
+  help: 'Number of receipt-generation failures grouped by the code path that attempted it',
+  labelNames: ['source'],
+  registers: [registry],
+});
+
 module.exports = {
   registry,
+  receiptGenerationFailuresTotal,
   syncDurationSeconds,
   httpRequestDurationSeconds,
   suspiciousPaymentFlagged,
