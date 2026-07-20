@@ -6,6 +6,7 @@ import {
   deleteFeeAdjustmentRule,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
+import { validateStellarAmount } from "../utils/stellarAmount";
 import { IconAlertTriangle, IconCheck } from "../components/Icons";
 import PageHero from "../components/PageHero";
 
@@ -27,6 +28,14 @@ const EMPTY_FORM = {
   description: "",
   isActive: true,
 };
+
+/**
+ * Fixed-value rule types carry an XLM amount (as opposed to a percentage or a
+ * valueless waiver), so they are the ones subject to Stellar stroop precision.
+ */
+function isFixedAmountType(type) {
+  return type === "discount_fixed" || type === "penalty_fixed";
+}
 
 function RuleTypePill({ type }) {
   const t = RULE_TYPES.find(r => r.value === type);
@@ -89,9 +98,33 @@ export default function FeeAdjustments() {
     e.preventDefault();
     setFormError(null);
     setFormSuccess(false);
+
+    // Fixed-value rules are XLM amounts, so they must satisfy the same
+    // stroop-precision rules the backend applies (#1123). Validating here means
+    // an over-precise or sub-stroop value is caught with a clear message rather
+    // than being silently rounded once it reaches the server. Percentage rules
+    // are not amounts and keep their own 0–100 bound; waivers carry no value.
+    const isFixedAmount = isFixedAmountType(form.type);
+    let amountCheck = null;
+    if (isFixedAmount) {
+      amountCheck = validateStellarAmount(form.value);
+      if (!amountCheck.valid) {
+        setFormError(amountCheck.error);
+        return;
+      }
+    } else if (form.type !== "waiver") {
+      const pct = Number(form.value);
+      if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+        setFormError("Percentage must be greater than 0 and at most 100");
+        return;
+      }
+    }
+
     const payload = {
       ...form,
-      value: Number(form.value),
+      // Round-trip fixed amounts through stroop space so the value we send is
+      // exactly what the backend will store — never a float artifact.
+      value: isFixedAmount ? Number(amountCheck.normalized) : Number(form.value),
       priority: Number(form.priority),
     };
     setSaving(true);
@@ -218,12 +251,19 @@ export default function FeeAdjustments() {
                   <label className="form-label">
                     Value{form.type === "waiver" ? " (N/A)" : " *"}
                   </label>
+                  {/*
+                    Fixed values are XLM amounts, so they step by one stroop —
+                    the browser's own validation then matches the backend's
+                    7-decimal precision instead of accepting anything (#1123).
+                    Percentages keep a free step but gain a 0–100 bound.
+                  */}
                   <input
                     required={form.type !== "waiver"}
                     disabled={form.type === "waiver"}
                     type="number"
                     min="0"
-                    step="any"
+                    step={isFixedAmountType(form.type) ? "0.0000001" : "any"}
+                    max={form.type.includes("percentage") ? "100" : undefined}
                     className="form-input"
                     value={form.value}
                     onChange={e => setForm(f => ({ ...f, value: e.target.value }))}

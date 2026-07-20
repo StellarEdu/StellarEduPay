@@ -1,3 +1,5 @@
+import { validateStellarAmount } from './stellarAmount';
+
 /**
  * Generate a Stellar SEP-0007 payment URI
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0007.md
@@ -23,13 +25,21 @@ export function generateStellarPaymentUri({
     throw new Error('Destination wallet address is required');
   }
   
-  if (!amount || parseFloat(amount) <= 0) {
-    throw new Error('Valid payment amount is required');
+  // Validate in stroop space using the same rules as the backend (#1123).
+  // `parseFloat(amount) > 0` used to be enough here, which let sub-stroop
+  // amounts (0.00000001) and scientific notation (1e-8) into the QR code — both
+  // parse as positive numbers but are not amounts a Stellar wallet or the
+  // backend will honour.
+  const amountCheck = validateStellarAmount(amount);
+  if (!amountCheck.valid) {
+    throw new Error(`Valid payment amount is required: ${amountCheck.error}`);
   }
 
   const params = new URLSearchParams();
   params.append('destination', destination);
-  params.append('amount', String(amount));
+  // Emit the canonical 7-decimal form so the wallet, the QR code and the
+  // backend all see the identical value.
+  params.append('amount', amountCheck.normalized);
   
   if (memo) {
     params.append('memo', memo);
