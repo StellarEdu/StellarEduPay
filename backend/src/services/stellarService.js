@@ -501,7 +501,10 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
   const amount = normalizeAmount(payOp.amount);
 
   // 5. Validate payment amount is within configured limits
-  const limitValidation = validatePaymentAmount(amount);
+  const limitValidation = await validatePaymentAmount(amount, {
+    schoolId,
+    asset: asset?.code,
+  });
   if (!limitValidation.valid) {
     const err = new Error(limitValidation.error);
     err.code = limitValidation.code;
@@ -616,7 +619,8 @@ async function syncPaymentsForSchool(school) {
         continue;
       }
 
-      const { payOp, memo } = valid;
+      // `asset` is destructured for the per-asset limit lookup (#1117).
+      const { payOp, memo, asset } = valid;
 
       // Explicit destination check — defence-in-depth beyond extractValidPayment
       if (payOp.to !== stellarAddress) {
@@ -645,7 +649,10 @@ async function syncPaymentsForSchool(school) {
 
       const paymentAmount = parseFloat(payOp.amount);
 
-      const limitValidation = validatePaymentAmount(paymentAmount);
+      const limitValidation = await validatePaymentAmount(paymentAmount, {
+        schoolId,
+        asset: asset?.code,
+      });
       if (!limitValidation.valid) {
         summary.failed++;
         summary.failedDetails.push({ txHash: tx.hash, reason: limitValidation.code });

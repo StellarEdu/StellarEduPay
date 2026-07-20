@@ -10,6 +10,11 @@ const {
   getDeadLetterVerification,
   retryDeadLetterVerification,
 } = require('../controllers/pendingVerificationAdminController');
+const {
+  getLimits,
+  updateLimits,
+  deleteSchoolLimits,
+} = require('../controllers/paymentLimitsAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
@@ -27,5 +32,11 @@ router.get('/pending-verifications/backlog', requireAdminAuth, getBacklog);
 router.get('/pending-verifications/dead-letter', requireAdminAuth, listDeadLetterVerifications);
 router.get('/pending-verifications/:id', requireAdminAuth, getDeadLetterVerification);
 router.post('/pending-verifications/:id/retry', requireAdminAuth, auditContext, retryDeadLetterVerification);
+
+// Payment limits — runtime-configurable fraud control (#1117). Every mutation
+// is audit-logged by the controller.
+router.get('/payment-limits', requireAdminAuth, getLimits);
+router.put('/payment-limits', requireAdminAuth, auditContext, updateLimits);
+router.delete('/payment-limits/:schoolId', requireAdminAuth, auditContext, deleteSchoolLimits);
 
 module.exports = router;
