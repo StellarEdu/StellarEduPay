@@ -16,6 +16,7 @@ const config = require('../config');
 const logger = require('../utils/logger').child('TransactionPollingService');
 const { deriveCorrelationId } = require('../utils/correlationId');
 const { captureFiatSnapshot } = require('./currencyConversionService');
+const { HorizonPollBudget, orderSchoolsByPriority } = require('./horizonPollBudget');
 
 // Metrics — imported lazily inside helpers to survive jest module resets.
 function _incFunnel(stage, schoolId) {
@@ -49,6 +50,19 @@ const MAX_TRANSACTIONS_PER_POLL = 50;
 const POLL_MAX_BACKOFF_MS = parseInt(process.env.POLL_MAX_BACKOFF_MS || '300000', 10);
 let consecutiveErrors = 0;
 let currentIntervalMs = SYNC_INTERVAL_MS;
+
+// Coordinated cross-school Horizon request budget (#1124). Schools no longer
+// poll as independent operations that each assume the whole rate limit is
+// theirs; they draw page fetches from this single shared per-cycle allowance,
+// spent in priority order. See services/horizonPollBudget.js for the rationale
+// and docs/horizon-rate-limits.md for the SLA this underpins.
+let pollBudget = new HorizonPollBudget({ intervalMs: SYNC_INTERVAL_MS });
+
+// How many schools may be in flight at once. Bounded so a large tenant count
+// can't open an unbounded number of simultaneous Horizon connections — the
+// budget caps total requests, this caps their burstiness.
+const MAX_CONCURRENT_SCHOOL_POLLS = Math.max(1, parseInt(
+  process.env.SYNC_MAX_CONCURRENT_SCHOOLS || '4', 10));
 
 /**
  * Process a single transaction for a school
@@ -308,7 +322,7 @@ function getEffectiveBatchSize(queueDepth) {
   return Math.max(MIN_TRANSACTIONS_PER_POLL, Math.min(MAX_TRANSACTIONS_PER_POLL, scaled));
 }
 
-async function pollSchoolTransactions(school) {
+async function pollSchoolTransactions(school, budget = null) {
   const backpressure = getQueueBackpressureState();
   if (backpressure.queueDepth >= backpressure.highWater) {
     logger.warn('Skipping school poll due to high payment processor queue depth', {
@@ -343,6 +357,7 @@ async function pollSchoolTransactions(school) {
   const startCursor = cursor;
   let processedCount = 0;
   let skippedCount = 0;
+  let budgetExhausted = false;
 
   try {
     // Adaptive batch size based on queue backpressure (#972). The early
@@ -358,6 +373,22 @@ async function pollSchoolTransactions(school) {
     }
 
     for (let pages = 0; pages < MAX_PAGES_PER_POLL; pages++) {
+      // Draw from the shared cross-school budget before every page fetch
+      // (#1124). Running out is a normal, ordered outcome: we stop here, the
+      // cursor is already persisted, and the remaining pages resume next cycle
+      // with this school's priority raised by aging. That is strictly better
+      // than issuing the request and being 429'd, which costs the same quota
+      // and returns nothing.
+      if (budget && !budget.tryConsume(1)) {
+        budgetExhausted = true;
+        logger.debug('Poll budget exhausted mid-school — deferring remaining pages', {
+          schoolId: school.schoolId,
+          pagesFetched: pages,
+          processed: processedCount,
+        });
+        break;
+      }
+
       let builder = server
         .transactions()
         .forAccount(school.stellarAddress)
@@ -391,7 +422,12 @@ async function pollSchoolTransactions(school) {
         );
       }
 
-      if (records.length < batchSize) break; // drained this cycle
+      if (records.length < batchSize) {
+        // Drained — this school needs no more of the budget this cycle. The
+        // token for the page we're inside was already spent, so nothing to
+        // refund; we simply stop competing for the rest.
+        break;
+      }
     }
 
     if (processedCount > 0) {
@@ -403,19 +439,147 @@ async function pollSchoolTransactions(school) {
       });
     }
 
-    return { schoolId: school.schoolId, processed: processedCount, skipped: skippedCount, cursor };
+    return {
+      schoolId: school.schoolId,
+      processed: processedCount,
+      skipped: skippedCount,
+      cursor,
+      budgetExhausted,
+    };
   } catch (error) {
     const status = error.response?.status || error.status || error.statusCode;
+    const rateLimited = status === 429;
+    // Feed observed 429s back into the budget so the next cycle's ceiling
+    // reflects Horizon's real limit rather than the configured guess (#1124).
+    if (rateLimited && budget) budget.recordRateLimited();
     logger.error('Error polling school transactions', {
       schoolId: school.schoolId,
       error: error.message,
       status,
-      rateLimited: status === 429,
+      rateLimited,
     });
-    return { schoolId: school.schoolId, error: error.message, horizonError: true, status };
+    return {
+      schoolId: school.schoolId,
+      error: error.message,
+      horizonError: true,
+      status,
+      rateLimited,
+    };
   } finally {
     if (stopWatchdog) stopWatchdog();
     await lock.release(lockKey, token);
+  }
+}
+
+/**
+ * Gather the per-school signals that drive priority ordering (#1124).
+ *
+ * Deliberately ONE aggregate query for all schools rather than a query per
+ * school: this runs every cycle, and a per-tenant query would reintroduce the
+ * very linear-scaling problem we're fixing — just against MongoDB instead of
+ * Horizon.
+ *
+ * Signals are best-effort. If the query fails, every school scores 0 from this
+ * source and ordering falls back to aging alone, which is still correct — just
+ * less well-informed. Polling must never stop because prioritisation couldn't
+ * be computed.
+ *
+ * @param {Array<object>} schools
+ * @param {HorizonPollBudget} budget
+ * @returns {Promise<Map<string, object>>} schoolId → signals
+ */
+async function gatherSchoolSignals(schools, budget) {
+  const signals = new Map();
+
+  // Aging applies regardless of whether the DB lookup succeeds.
+  for (const school of schools) {
+    signals.set(school.schoolId, {
+      pendingCount: 0,
+      lastActivityAt: null,
+      cyclesDeferred: budget.getDeferralCount(school.schoolId),
+    });
+  }
+
+  try {
+    const schoolIds = schools.map(s => s.schoolId);
+    const rows = await Payment.aggregate([
+      { $match: { schoolId: { $in: schoolIds }, deletedAt: null } },
+      {
+        $group: {
+          _id: '$schoolId',
+          // Payments seen on-chain but not yet fully confirmed — the parents
+          // behind these are the ones actively waiting.
+          pendingCount: {
+            $sum: {
+              $cond: [{ $ne: ['$confirmationStatus', 'confirmed'] }, 1, 0],
+            },
+          },
+          lastActivityAt: { $max: '$confirmedAt' },
+        },
+      },
+    ]);
+
+    for (const row of rows) {
+      const existing = signals.get(row._id);
+      if (existing) {
+        existing.pendingCount = row.pendingCount || 0;
+        existing.lastActivityAt = row.lastActivityAt || null;
+      }
+    }
+  } catch (error) {
+    logger.warn('Could not gather school priority signals — falling back to aging only', {
+      error: error.message,
+    });
+  }
+
+  return signals;
+}
+
+/**
+ * Run `worker` over `items` with at most `limit` in flight, preserving input
+ * order in the results and never rejecting — each entry mirrors the
+ * Promise.allSettled shape the caller already expects.
+ *
+ * Replaces the previous unbounded `Promise.allSettled(schools.map(...))`, which
+ * opened one Horizon conversation per school simultaneously (#1124).
+ */
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+
+  async function runner() {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = { status: 'fulfilled', value: await worker(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runner()),
+  );
+
+  return results;
+}
+
+function _recordBudgetMetrics(stats) {
+  try {
+    const metrics = require('../metrics');
+    metrics.horizonPollBudgetRemaining.set(stats.remaining);
+    metrics.horizonPollBudgetCeiling.set(stats.currentCeiling);
+    metrics.horizonPollDeferredSchools.set(stats.deferredSchools);
+    metrics.horizonPollMaxDeferralCycles.set(stats.maxDeferralCycles);
+    if (stats.consumedThisCycle > 0) {
+      metrics.horizonPollRequestsTotal.inc(stats.consumedThisCycle);
+    }
+    if (stats.rateLimitEventsThisCycle > 0) {
+      metrics.horizonRateLimitedTotal.inc(stats.rateLimitEventsThisCycle);
+    }
+  } catch (_) {
+    // metrics module unavailable — polling proceeds without instrumentation
   }
 }
 
@@ -438,8 +602,25 @@ async function pollAllSchools() {
 
     logger.debug(`Polling ${schools.length} active schools`);
 
-    const results = await Promise.allSettled(
-      schools.map(school => pollSchoolTransactions(school))
+    // ── Coordinated budgeting (#1124) ──────────────────────────────────────
+    // Open the cycle's shared allowance, then decide the ORDER in which to
+    // spend it. Ordering is what keeps user-visible delay low when the budget
+    // binds: a school with payments awaiting confirmation is polled before a
+    // settled school whose poll would return nothing.
+    const budgetForCycle = pollBudget.startCycle();
+    const signals = await gatherSchoolSignals(schools, pollBudget);
+    const ordered = orderSchoolsByPriority(schools, signals);
+
+    logger.debug('Poll cycle budget opened', {
+      schools: schools.length,
+      budget: budgetForCycle,
+      topPriority: ordered[0] ? ordered[0].school.schoolId : null,
+    });
+
+    const results = await runWithConcurrency(
+      ordered,
+      MAX_CONCURRENT_SCHOOL_POLLS,
+      ({ school }) => pollSchoolTransactions(school, pollBudget),
     );
 
     const summary = results.reduce((acc, result) => {
@@ -447,11 +628,39 @@ async function pollAllSchools() {
         acc.processed += result.value.processed || 0;
         acc.skipped += result.value.skipped || 0;
         if (result.value.horizonError) acc.errors++;
+        if (result.value.rateLimited) acc.rateLimited++;
+        if (result.value.budgetExhausted) acc.budgetDeferred++;
       } else {
         acc.errors++;
       }
       return acc;
-    }, { processed: 0, skipped: 0, errors: 0 });
+    }, { processed: 0, skipped: 0, errors: 0, rateLimited: 0, budgetDeferred: 0 });
+
+    // Update aging counters: a school that got no budget at all this cycle
+    // gains priority for the next one, which is what bounds worst-case
+    // staleness for quiet tenants.
+    for (let i = 0; i < ordered.length; i++) {
+      const { school } = ordered[i];
+      const result = results[i];
+      const polled = result.status === 'fulfilled' &&
+        !result.value.budgetExhausted &&
+        !result.value.lockSkipped &&
+        !result.value.loadPaused;
+      if (polled) {
+        pollBudget.recordPolled(school.schoolId);
+      } else {
+        pollBudget.recordDeferred(school.schoolId);
+      }
+    }
+
+    _recordBudgetMetrics(pollBudget.getStats());
+
+    if (summary.budgetDeferred > 0) {
+      logger.info('Poll budget bound this cycle — some schools deferred', {
+        ...pollBudget.getStats(),
+        deferredThisCycle: summary.budgetDeferred,
+      });
+    }
 
     if (summary.errors > 0) {
       // At least one school hit a Horizon error — back off.
@@ -541,9 +750,14 @@ module.exports = {
   processTransaction,
   // Exposed for testing
   _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
+  _getBudgetStats: () => pollBudget.getStats(),
+  _setPollBudget: (budget) => { pollBudget = budget; },
+  _runWithConcurrency: runWithConcurrency,
+  _gatherSchoolSignals: gatherSchoolSignals,
   _resetBackoffState: () => {
     consecutiveErrors = 0;
     currentIntervalMs = SYNC_INTERVAL_MS;
+    pollBudget = new HorizonPollBudget({ intervalMs: SYNC_INTERVAL_MS });
     isPolling = true; // allow direct pollAllSchools() calls in tests
     if (pollingInterval) { clearTimeout(pollingInterval); pollingInterval = null; }
   },

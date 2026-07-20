@@ -261,21 +261,57 @@ const notificationSentTotal = new client.Counter({
   registers: [registry],
 });
 
-// receipt_generation_failures_total{source} — counts receipt-generation
-// failures so a systemic outage (bad template, receipt-model/DB fault,
-// downstream dependency down) is visible and alertable instead of only
-// surfacing when a parent reports a missing receipt (#1122). Sources:
-// 'verify_controller' (inline fire-and-forget path), 'payment_saved_subscriber'.
-const receiptGenerationFailuresTotal = new client.Counter({
-  name: 'receipt_generation_failures_total',
-  help: 'Number of receipt-generation failures grouped by the code path that attempted it',
-  labelNames: ['source'],
+// ── Coordinated Horizon poll budget (#1124) ─────────────────────────────────
+// Polling draws from a single per-cycle request allowance shared across all
+// schools, spent in priority order. These expose whether that allowance binds,
+// how far the adaptive ceiling has been pulled down by observed 429s, and — the
+// SLA-relevant one — the worst staleness any tenant is currently experiencing.
+const horizonPollBudgetRemaining = new client.Gauge({
+  name: 'horizon_poll_budget_remaining',
+  help: 'Horizon request tokens left in the current poll cycle budget',
+  registers: [registry],
+});
+
+const horizonPollBudgetCeiling = new client.Gauge({
+  name: 'horizon_poll_budget_ceiling',
+  help: 'Current adaptive per-cycle Horizon request ceiling (AIMD-adjusted)',
+  registers: [registry],
+});
+
+const horizonPollDeferredSchools = new client.Gauge({
+  name: 'horizon_poll_deferred_schools',
+  help: 'Number of schools currently deferred because the poll budget was exhausted',
+  registers: [registry],
+});
+
+// The direct input to the documented max-sync-delay SLA: worst-case delay is
+// approximately (this value + 1) x the poll interval.
+const horizonPollMaxDeferralCycles = new client.Gauge({
+  name: 'horizon_poll_max_deferral_cycles',
+  help: 'Highest number of consecutive cycles any single school has been deferred',
+  registers: [registry],
+});
+
+const horizonPollRequestsTotal = new client.Counter({
+  name: 'horizon_poll_requests_total',
+  help: 'Total Horizon page requests issued by the transaction poller',
+  registers: [registry],
+});
+
+const horizonRateLimitedTotal = new client.Counter({
+  name: 'horizon_rate_limited_total',
+  help: 'Number of Horizon responses observed as HTTP 429 by the poller',
   registers: [registry],
 });
 
 module.exports = {
   registry,
-  receiptGenerationFailuresTotal,
+  horizonPollBudgetRemaining,
+  horizonPollBudgetCeiling,
+  horizonPollDeferredSchools,
+  horizonPollMaxDeferralCycles,
+  horizonPollRequestsTotal,
+  horizonRateLimitedTotal,
   syncDurationSeconds,
   httpRequestDurationSeconds,
   suspiciousPaymentFlagged,
