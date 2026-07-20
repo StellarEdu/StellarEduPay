@@ -639,6 +639,28 @@ async function syncPaymentsForSchool(school) {
       } else {
         student = await Student.findOne({ schoolId, studentId: memo });
       }
+
+      // A memo (or a still-pending intent) can point at a student who has since
+      // been soft-deleted (#77/#390). The funds already left the payer's wallet,
+      // so record them against the deleted student (studentDeleted=true) for the
+      // existing deleted-student payments audit view (getDeletedStudentPayments)
+      // instead of dropping them into the generic unmatched bucket, where they'd
+      // be indistinguishable from a mistyped memo and never surfaced for review.
+      let studentDeleted = false;
+      if (!student) {
+        const targetStudentId = intent ? intent.studentId : memo;
+        student = await Student.findOne({
+          schoolId,
+          studentId: targetStudentId,
+          deletedAt: { $ne: null },
+        });
+        studentDeleted = Boolean(student);
+        if (studentDeleted) {
+          logger.warn('Transaction matched a soft-deleted student — recording for manual review', {
+            txHash: tx.hash, schoolId, studentId: targetStudentId,
+          });
+        }
+      }
       if (!student) { summary.unmatched++; continue; }
 
       summary.matched++;
@@ -737,9 +759,10 @@ async function syncPaymentsForSchool(school) {
             confirmationStatus,
             confirmationState: confirmation.state,
             confirmedAt: txDate,
+            studentDeleted,
           }, { session });
 
-          if (isConfirmed && !isSuspicious) {
+          if (isConfirmed && !isSuspicious && !studentDeleted) {
             const updateData = {
               totalPaid: cumulativeTotal,
               remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeTotal).toFixed(7)),
