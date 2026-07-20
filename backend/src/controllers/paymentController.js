@@ -432,7 +432,24 @@ async function verifyPayment(req, res, next) {
         feeValidationStatus,
         memo: result.memo,
         confirmedAt: result.date ? new Date(result.date) : now,
-      }).catch(() => {});
+      }).catch(err => {
+        // Fire-and-forget, but never silent (#1122). A systemic receipt failure
+        // (bad template, receipt-model fault, downstream outage) must leave a
+        // log trail and a metric, not wait for a parent to report it missing.
+        logger.error('[PaymentController] receipt generation failed', {
+          txHash: result.hash,
+          correlationId: req.correlationId,
+          schoolId,
+          studentId: studentStrId,
+          error: err.message,
+          stack: err.stack,
+        });
+        try {
+          require('../metrics').receiptGenerationFailuresTotal.inc({ source: 'verify_controller' });
+        } catch (_) {
+          // metrics module unavailable — logging above is still the primary signal
+        }
+      });
 
       const targetCurrency = req.school.localCurrency || 'USD';
       const conversion = await convertToLocalCurrency(result.amount, result.assetCode || 'XLM', targetCurrency);

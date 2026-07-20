@@ -70,6 +70,11 @@ async function onPaymentSavedReceipt(payment) {
     await createReceipt(payment);
   } catch (err) {
     logger.error('Receipt subscriber failed', { txHash: payment.txHash, correlationId: payment.correlationId, error: err.message });
+    try {
+      require('../metrics').receiptGenerationFailuresTotal.inc({ source: 'payment_saved_subscriber' });
+    } catch (_) {
+      // metrics module unavailable — logging above is still the primary signal
+    }
   }
 }
 
