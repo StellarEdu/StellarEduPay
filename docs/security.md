@@ -1,5 +1,11 @@
 # Security
 
+## Credential rotation
+
+JWT secrets and the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`) have scripted
+rotation — see `scripts/rotate-jwt-secret.js` and `scripts/rotate-signer-master-key.js`, and
+the "Key Rotation" section of `docs/operator-runbooks.md` for when and how to run them.
+
 ## Content Security Policy (CSP)
 
 StellarEduPay enforces a Content Security Policy on all HTTP responses to mitigate XSS attacks. The policy is applied at two layers: the Next.js frontend and the Express backend.
