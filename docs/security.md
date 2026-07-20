@@ -1,5 +1,12 @@
 # Security
 
+## Dependency vulnerability exceptions
+
+Deferred high/critical `npm audit` findings are tracked as dated, expiring entries in
+[`security-exceptions.json`](../security-exceptions.json) at the repo root, not as prose here.
+CI (`scripts/check-dependency-audit.js`) fails the build if a high/critical advisory has no
+matching, non-expired entry in that file. See `docs/dependency-triage.md` for the process.
+
 ## Content Security Policy (CSP)
 
 StellarEduPay enforces a Content Security Policy on all HTTP responses to mitigate XSS attacks. The policy is applied at two layers: the Next.js frontend and the Express backend.
