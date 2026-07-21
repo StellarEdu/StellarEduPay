@@ -1,11 +1,10 @@
 # Security
 
-## Dependency vulnerability exceptions
+## Credential rotation
 
-Deferred high/critical `npm audit` findings are tracked as dated, expiring entries in
-[`security-exceptions.json`](../security-exceptions.json) at the repo root, not as prose here.
-CI (`scripts/check-dependency-audit.js`) fails the build if a high/critical advisory has no
-matching, non-expired entry in that file. See `docs/dependency-triage.md` for the process.
+JWT secrets and the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`) have scripted
+rotation — see `scripts/rotate-jwt-secret.js` and `scripts/rotate-signer-master-key.js`, and
+the "Key Rotation" section of `docs/operator-runbooks.md` for when and how to run them.
 
 ## Content Security Policy (CSP)
 

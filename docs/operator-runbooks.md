@@ -38,9 +38,23 @@ Procedure: if a transaction hash exists, query Stellar/Horizon directly. If conf
 
 ## Key Rotation
 
-Rotate JWT or session secrets, webhook secrets, database credentials, queue credentials, deployment tokens, and Stellar signing credentials when compromise is suspected, operator membership changes, or the scheduled interval expires.
+Rotate JWT secrets, webhook secrets, database credentials, queue credentials, deployment tokens, and Stellar signing credentials when compromise is suspected, operator membership changes, or the scheduled interval expires.
 
-Rotation order: create replacement secret, deploy dual-read support if required, rotate provider-side secret, redeploy API and workers, revoke old secret, verify operations, and record rotation time and operator.
+General rotation order (used for any credential not covered by a script below): create replacement secret, deploy dual-read support if required, rotate provider-side secret, redeploy API and workers, revoke old secret, verify operations, and record rotation time and operator.
+
+### JWT secret — `node scripts/rotate-jwt-secret.js --confirm`
+
+Generates a new secret, patches the `stellaredupay` Kubernetes Secret's `JWT_SECRET`, and rolls `deployment/backend` — the create/rotate/redeploy/revoke sequence above run as one script instead of hand-typed `kubectl` commands, removing the risk of doing those steps out of order.
+
+This is a hard cutover (JWT_SECRET has no dual-secret verification support): every live session is invalidated immediately, and stored MFA secrets — encrypted with a key derived from JWT_SECRET — become undecryptable, so enrolled users must re-enroll MFA. `--confirm` is required and is the human review/approval gate: read the script's header comment for the full list of side effects before running it. Pass `--secret-name`, `--deployment`, or `--namespace` to target a non-default Secret/Deployment/namespace (e.g. to rehearse against a staging cluster first).
+
+### Stellar signing credential — `node scripts/rotate-signer-master-key.js [--apply]`
+
+Rotates `SIGNER_MASTER_KEY`, the key that encrypts Stellar signing secret keys at rest (`backend/src/utils/signerKeyManager.js`). Set `SIGNER_MASTER_KEY_OLD` to the key currently protecting stored records and `SIGNER_MASTER_KEY` to the replacement, then run the script: it re-encrypts every school's stored signing key under the new key and reports per-record success/failure. Defaults to a dry run (decrypts and re-encrypts in memory without writing) so a bad key pair is caught before any record is touched; pass `--apply` to persist. After a successful `--apply` run, update the deployment's `SIGNER_MASTER_KEY` secret (dropping `SIGNER_MASTER_KEY_OLD`), redeploy, verify a test decrypt/sign, and record the rotation time and operator.
+
+### Other credentials
+
+Webhook secrets, database credentials, queue credentials, and deployment tokens do not yet have scripted rotation — follow the general rotation order above and record the rotation in the incident log.
 
 ## Restore Procedure
 
