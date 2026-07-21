@@ -233,6 +233,39 @@ These tests complement existing tests in `stellar.test.js`:
 - `parseIncomingTransaction` - Tests transaction parsing
 - `validatePaymentAgainstFee` - Tests fee validation
 
+### 4. Transaction with Memo Matching a Soft-Deleted Student
+
+**Scenario**: A transaction's memo (or a still-pending intent it resolves to)
+identifies a student who has since been soft-deleted (`deletedAt` set).
+
+**Test**: `records payment for memo matching a soft-deleted student instead of
+dropping it (flagged for manual review)`
+
+**Verified behavior**: The funds already left the payer's wallet, so the
+payment is recorded with `studentDeleted: true` — the same flag used
+elsewhere when an existing student (with prior payments) is deleted — instead
+of being dropped into the generic unmatched-memo bucket. The (deleted)
+student's stored balance is never mutated. The payment is visible via the
+existing `getDeletedStudentPayments` audit endpoint for manual review, and is
+excluded from active reports/balances by the existing `studentDeleted: { $ne:
+true }` filters used throughout reporting and student-balance code.
+
+### 5. Transaction with Memo Matching an Already-Completed Payment Intent
+
+**Scenario**: A transaction's memo matches a `PaymentIntent` that has already
+transitioned to `status: 'completed'` (e.g. a delayed or duplicate
+submission arriving after the intent was already fully paid).
+
+**Test**: `credits a transaction whose memo matches an already-completed
+payment intent (intent-decoupled fallback match)`
+
+**Verified behavior**: The `status: 'pending'` intent lookup finds nothing,
+so the sync falls back to matching the student directly by `studentId` (the
+intent-decoupled crediting path from #848). The transaction is credited to
+the student as an additional payment (raising `totalPaid`, and marking the
+payment `overpaid` if it exceeds the fee) rather than being dropped — funds
+are never silently lost.
+
 ## Future Enhancements
 
 Potential additional test scenarios:
@@ -241,8 +274,6 @@ Potential additional test scenarios:
 2. Transaction with memo containing special characters
 3. Transaction with memo that's too long
 4. Multiple transactions with same unmatched memo
-5. Transaction with memo matching deleted student
-6. Transaction with memo matching completed payment intent
 
 ## Acceptance Criteria
 
@@ -252,3 +283,5 @@ Potential additional test scenarios:
 ✅ Both cases are covered by passing tests
 ✅ No Student documents are updated for invalid transactions
 ✅ Sync process continues gracefully after encountering invalid transactions
+✅ Memo-matches-deleted-student transactions are recorded (studentDeleted: true) for manual review, not dropped
+✅ Memo-matches-completed-intent transactions are credited via the intent-decoupled fallback, not dropped
