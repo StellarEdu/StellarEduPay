@@ -10,6 +10,20 @@ const { updateFeeStructure } = require('../backend/src/controllers/feeController
 
 jest.mock('../backend/src/models/feeStructureModel');
 jest.mock('../backend/src/models/studentModel');
+jest.mock('../backend/src/models/paymentModel');
+jest.mock('../backend/src/models/studentFeeHistoryModel');
+// The cascade path wraps its writes in a mongoose transaction; without a mock,
+// mongoose.connection.startSession() has no live DB and hangs to timeout.
+// Delegate to the real (backend copy) mongoose so auto-mocked models can still
+// build `new mongoose.Schema`, but override startSession to a no-DB session.
+jest.mock('../backend/node_modules/mongoose', () => {
+  const actual = jest.requireActual('../backend/node_modules/mongoose');
+  actual.connection.startSession = jest.fn().mockResolvedValue({
+    withTransaction: async (fn) => { await fn(); },
+    endSession: jest.fn(),
+  });
+  return actual;
+});
 jest.mock('../backend/src/cache', () => ({
   get: jest.fn().mockReturnValue(undefined),
   set: jest.fn(),
@@ -26,7 +40,19 @@ jest.mock('../backend/src/services/auditService', () => ({
 
 const FeeStructure = require('../backend/src/models/feeStructureModel');
 const Student = require('../backend/src/models/studentModel');
+const Payment = require('../backend/src/models/paymentModel');
+const StudentFeeHistory = require('../backend/src/models/studentFeeHistoryModel');
 const { logAudit } = require('../backend/src/services/auditService');
+
+// The cascade path runs `Student.find(...).session(session)` and
+// `Payment.aggregate(...).session(session)`, then bulkWrite + insertMany.
+// Wire the chainable .session() mocks that return the given students / totals.
+function setupCascadeMocks(students, paymentTotals = []) {
+  Student.find = jest.fn(() => ({ session: jest.fn().mockResolvedValue(students) }));
+  Student.bulkWrite = jest.fn().mockResolvedValue({});
+  Payment.aggregate = jest.fn(() => ({ session: jest.fn().mockResolvedValue(paymentTotals) }));
+  StudentFeeHistory.insertMany = jest.fn().mockResolvedValue([]);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -92,18 +118,18 @@ describe('PUT /api/fees/:className — issue #454', () => {
 
   it('200 updates fee with cascadeToStudents: true', async () => {
     FeeStructure.findOneAndUpdate = jest.fn().mockResolvedValue(mockFee);
-    // Controller uses Student.find + per-doc save, not updateMany
+    // Controller runs a transactional bulkWrite over the matched students.
     const mockStudents = Array.from({ length: 5 }, (_, i) => ({
-      feeAmount: 250, remainingBalance: 250, feePaid: false, totalPaid: 0,
-      save: jest.fn().mockResolvedValue(true),
+      _id: `stu-${i}`, studentId: `STU-${i}`, feeAmount: 250,
     }));
-    Student.find = jest.fn().mockResolvedValue(mockStudents);
+    setupCascadeMocks(mockStudents);
     const req = mockReq({ feeAmount: 300, cascadeToStudents: true });
     const res = mockRes();
     await updateFeeStructure(req, res, next);
     expect(Student.find).toHaveBeenCalledWith(
       { schoolId: 'SCH-TEST', class: 'Grade 5A', deletedAt: null }
     );
+    expect(Student.bulkWrite).toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({ fee: mockFee, studentsUpdated: 5 });
   });
 
@@ -143,11 +169,10 @@ describe('PUT /api/fees/:className — issue #454', () => {
 
   it('audit log includes studentsUpdated count', async () => {
     FeeStructure.findOneAndUpdate = jest.fn().mockResolvedValue(mockFee);
-    const mockStudents = Array.from({ length: 3 }, () => ({
-      feeAmount: 250, remainingBalance: 250, feePaid: false, totalPaid: 0,
-      save: jest.fn().mockResolvedValue(true),
+    const mockStudents = Array.from({ length: 3 }, (_, i) => ({
+      _id: `stu-${i}`, studentId: `STU-${i}`, feeAmount: 250,
     }));
-    Student.find = jest.fn().mockResolvedValue(mockStudents);
+    setupCascadeMocks(mockStudents);
     const req = mockReq({ feeAmount: 300, cascadeToStudents: true });
     const res = mockRes();
     await updateFeeStructure(req, res, next);

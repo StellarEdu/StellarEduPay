@@ -172,13 +172,16 @@ describe('Payment schema — assetCode enum', () => {
 // ── Precision normalization pre-save hook ─────────────────────────────────────
 describe('Payment schema — precision normalization (pre-save hook)', () => {
   /**
-   * Invoke the pre-save hook registered on the schema.
-   * Mongoose 8 + kareem 3.x use async hooks; execPre is now async and
-   * takes (name, context, args) — the old callback-style is not supported.
-   * The pre-save hook was converted to async function to match this API.
+   * Invoke the pre-save hooks registered on the schema.
+   * kareem's execPre(name, context, args, callback) treats a 3-argument call
+   * as (name, context, callback) — so we must pass an explicit args array AND
+   * a callback. We wrap it in a Promise so the async normalization hook is
+   * actually awaited before we assert.
    */
-  async function runPreSaveHook(doc) {
-    await doc.schema.s.hooks.execPre('save', doc, []);
+  function runPreSaveHook(doc) {
+    return new Promise((resolve, reject) => {
+      doc.schema.s.hooks.execPre('save', doc, [], (err) => (err ? reject(err) : resolve()));
+    });
   }
 
   it('normalizes amount to 7 decimal places', async () => {

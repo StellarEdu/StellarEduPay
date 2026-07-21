@@ -83,6 +83,7 @@ jest.mock('../backend/src/services/reportService', () => ({
   reportToCsv:           jest.fn().mockReturnValue('date,amount\n'),
   getDashboardMetrics:   jest.fn().mockResolvedValue({ totalPayments: 0 }),
   generateAccountingCsv: jest.fn().mockResolvedValue({ csv: '' }),
+  getDataVersion:        jest.fn().mockResolvedValue('0'),
   ACCOUNTING_SCHEMA_VERSION: 1,
 }));
 

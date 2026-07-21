@@ -49,14 +49,40 @@ describe('memoExtractor', () => {
       expect(result.type).toBe('MEMO_TEXT');
     });
 
-    it('should reject MEMO_ID type', () => {
+    // #1118 — MEMO_ID and MEMO_HASH now resolve to the canonical payment
+    // reference so wallets that cannot send free-text memos still match.
+    it('should decode MEMO_ID to the canonical payment reference', () => {
       const memoData = { type: 'id', value: '12345' };
+      const result = extractByType(memoData);
+      expect(result.content).toBe('00003039');
+      expect(result.type).toBe('MEMO_ID');
+    });
+
+    it('should reject a MEMO_ID outside the 32-bit reference space', () => {
+      // Exchange-style routing identifiers must not be truncated into a match.
+      const memoData = { type: 'id', value: '18446744073709551615' };
       const result = extractByType(memoData);
       expect(result.content).toBeNull();
       expect(result.type).toBe('MEMO_ID');
     });
 
-    it('should reject MEMO_HASH type', () => {
+    it('should decode a MEMO_HASH carrying a canonical reference', () => {
+      const memoData = { type: 'hash', value: `${'00'.repeat(28)}a3f91b2c` };
+      const result = extractByType(memoData);
+      expect(result.content).toBe('A3F91B2C');
+      expect(result.type).toBe('MEMO_HASH');
+      expect(result.encoding).toBe('hex');
+    });
+
+    it('should reject a MEMO_HASH that is a foreign 32-byte value', () => {
+      const memoData = { type: 'hash', value: 'ab'.repeat(32) };
+      const result = extractByType(memoData);
+      expect(result.content).toBeNull();
+      expect(result.type).toBe('MEMO_HASH');
+      expect(result.encoding).toBe('hex');
+    });
+
+    it('should reject a malformed MEMO_HASH', () => {
       const memoData = { type: 'hash', value: 'abc123def456' };
       const result = extractByType(memoData);
       expect(result.content).toBeNull();

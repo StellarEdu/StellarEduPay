@@ -26,7 +26,8 @@ const mockLock = {
     if (existing && existing.expiresAt > now) return null;
     const token = newToken();
     sharedLockStore.set(key, { token, expiresAt: now + ttlMs });
-    return token;
+    // Real distributedLock.acquire() returns { token, fencingToken } | null.
+    return { token, fencingToken: sharedLockStore.size };
   }),
   release: jest.fn(async (key, token) => {
     const existing = sharedLockStore.get(key);
@@ -208,10 +209,11 @@ async function verifyPaymentLockHarness(req, res, _next, innerFn) {
   }
 
   const verifyLockKey = `sync:lock:${schoolId}:verify:${txHash}`;
-  const verifyToken = await mockLock.acquire(verifyLockKey, 30000);
-  if (!verifyToken) {
+  const acquired = await mockLock.acquire(verifyLockKey, 30000);
+  if (!acquired) {
     return res.status(409).json({ error: 'Sync already in progress', code: 'SYNC_IN_PROGRESS' });
   }
+  const { token: verifyToken } = acquired;
 
   try {
     const result = await innerFn();

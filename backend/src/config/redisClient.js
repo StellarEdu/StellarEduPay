@@ -55,7 +55,10 @@ function getRedisConnectionOptions(overrides = {}) {
     password: process.env.REDIS_PASSWORD || undefined,
     lazyConnect: true,
     enableOfflineQueue: false,
-    maxRetriesPerRequest: 1,
+    // Must be null: this single shared client is also handed to BullMQ
+    // (transactionRetryQueue), whose blocking Worker/QueueEvents connections
+    // throw "Your redis options maxRetriesPerRequest must be null" otherwise.
+    maxRetriesPerRequest: null,
     connectTimeout: 10000,
     retryStrategy(times) {
       if (times >= REDIS_RECONNECT_MAX_ATTEMPTS) {

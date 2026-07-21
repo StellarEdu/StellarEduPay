@@ -26,6 +26,13 @@ jest.mock('../src/models/paymentModel', () => ({
   create: (...args) => mockCreate(...args),
 }));
 
+// savePayment now writes a "payment.saved" event to the outbox (real mongoose
+// model) instead of emitting synchronously — mock it so it doesn't hit a DB.
+const mockOutboxCreate = jest.fn().mockResolvedValue({});
+jest.mock('../src/models/outboxModel', () => ({
+  create: (...args) => mockOutboxCreate(...args),
+}));
+
 const paymentEvents = require('../src/events/paymentEvents');
 
 beforeEach(() => {
@@ -45,6 +52,9 @@ function freshService() {
   jest.mock('../src/models/paymentModel', () => ({
     create: (...args) => mockCreate(...args),
   }));
+  jest.mock('../src/models/outboxModel', () => ({
+    create: (...args) => mockOutboxCreate(...args),
+  }));
   return require('../src/services/transactionService');
 }
 
@@ -57,8 +67,8 @@ const BASE_DATA = {
 };
 
 describe('savePayment — happy path', () => {
-  it('creates the payment and emits payment.saved', async () => {
-    const saved = { ...BASE_DATA, _id: 'doc1' };
+  it('creates the payment and writes a payment.saved outbox event', async () => {
+    const saved = { ...BASE_DATA, _id: 'doc1', toObject() { return this; } };
     mockCreate.mockResolvedValueOnce(saved);
 
     const { savePayment } = require('../src/services/transactionService');
@@ -66,7 +76,10 @@ describe('savePayment — happy path', () => {
 
     expect(result).toBe(saved);
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(paymentEvents.emit).toHaveBeenCalledWith('payment.saved', saved);
+    expect(mockOutboxCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'payment.saved', aggregateId: BASE_DATA.txHash }),
+      expect.anything()
+    );
   });
 });
 
@@ -106,7 +119,7 @@ describe('savePayment — duplicate key (DB unique index)', () => {
 
 describe('savePayment — concurrent race (same txHash, same schoolId)', () => {
   it('one call wins, the other gets DUPLICATE_TX — exactly one record created', async () => {
-    const saved = { ...BASE_DATA, _id: 'doc1' };
+    const saved = { ...BASE_DATA, _id: 'doc1', toObject() { return this; } };
     const dupErr = Object.assign(new Error('E11000'), { code: 11000 });
 
     // Simulate two concurrent inserts: first resolves, second hits the unique index.

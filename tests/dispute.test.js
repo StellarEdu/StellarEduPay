@@ -834,8 +834,8 @@ describe('Dispute creation — notifications and hold', () => {
     expect(auditService.logAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         schoolId:    'SCH001',
-        action:      'dispute.created',
-        targetType:  'payment',
+        action:      'dispute_created',
+        targetType:  'dispute',
         result:      'success',
       })
     );
@@ -866,6 +866,10 @@ describe('Dispute resolution — hold lifted on terminal status', () => {
     sseService    = require('../backend/src/services/sseService');
     webhookService = require('../backend/src/services/webhookService');
     auditService  = require('../backend/src/services/auditService');
+
+    // The controller loads the current dispute (#895 state-machine check) before
+    // applying the transition; default it to an open dispute so transitions validate.
+    Dispute.findOne.mockResolvedValue({ ...MOCK_DISPUTE, status: 'open' });
 
     // Restore default school mock after clearAllMocks wipes mock return values.
     School.findOne.mockReturnValue({
@@ -989,8 +993,8 @@ describe('Dispute resolution — hold lifted on terminal status', () => {
     expect(auditService.logAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         schoolId:   'SCH001',
-        action:     'dispute.resolved',
-        targetType: 'payment',
+        action:     'dispute_resolved',
+        targetType: 'dispute',
         result:     'success',
       })
     );

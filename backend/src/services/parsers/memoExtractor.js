@@ -8,6 +8,7 @@
  */
 
 const logger = require('../../utils/logger').child('MemoExtractor');
+const { decodeMemoToCanonical } = require('../../utils/stellarMemo');
 
 /**
  * Extract memo from transaction, handling all Stellar memo types
@@ -69,8 +70,8 @@ function extractMemo(tx) {
 
 /**
  * Extract memo based on type (TEXT, ID, HASH, RETURN)
- * Only MEMO_TEXT is accepted for student ID matching.
- * MEMO_HASH and MEMO_RETURN are rejected to prevent accidental matching.
+ * MEMO_TEXT, MEMO_ID and MEMO_HASH all resolve to a canonical payment
+ * reference (#1118). MEMO_RETURN has no such encoding and is still rejected.
  * @param {object} memoData - Raw memo data from transaction
  * @returns {ExtractedMemo} Processed memo with type and content
  */
@@ -89,26 +90,37 @@ function extractByType(memoData) {
       };
 
     case 'id':
-    case 'MEMO_ID':
-      // MEMO_ID is not supported for student ID matching
-      logger.warn('MEMO_ID type not supported for payment matching', { memoValue });
+    case 'MEMO_ID': {
+      // #1118 — decoded back to the canonical intent memo for wallets that
+      // cannot send free text. Values outside our 32-bit memo space decode to
+      // null rather than being truncated into a false match.
+      const idContent = decodeMemoToCanonical(memoValue, 'MEMO_ID');
+      if (!idContent) {
+        logger.warn('MEMO_ID is not a valid payment reference', { memoValue });
+      }
       return {
-        content: null,
+        content: idContent,
         type: 'MEMO_ID',
         raw: memoData,
         encoding: null
       };
+    }
 
     case 'hash':
-    case 'MEMO_HASH':
-      // MEMO_HASH is not supported — could contain arbitrary bytes
-      logger.warn('MEMO_HASH type not supported for payment matching', { memoValue });
+    case 'MEMO_HASH': {
+      // #1118 — only hashes carrying our zero-padded canonical memo decode;
+      // any other 32-byte value belongs to a different protocol and yields null.
+      const hashContent = decodeMemoToCanonical(memoValue, 'MEMO_HASH');
+      if (!hashContent) {
+        logger.warn('MEMO_HASH is not a valid payment reference', { memoValue });
+      }
       return {
-        content: null,
+        content: hashContent,
         type: 'MEMO_HASH',
         raw: memoData,
         encoding: 'hex'
       };
+    }
 
     case 'return':
     case 'MEMO_RETURN':

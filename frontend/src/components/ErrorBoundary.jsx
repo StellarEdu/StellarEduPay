@@ -38,7 +38,7 @@ export default class ErrorBoundary extends Component {
                 padding: "0.5rem 1.25rem",
                 borderRadius: "8px",
                 border: "none",
-                background: "var(--grad-brand, #6366f1)",
+                background: "var(--grad-brand, #059669)",
                 color: "#fff",
                 fontWeight: 600,
                 cursor: "pointer",

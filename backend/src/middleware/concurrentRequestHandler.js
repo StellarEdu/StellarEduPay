@@ -579,5 +579,5 @@ module.exports = {
   // exported for testing
   _inMemoryIncrement,
   _getRedisClient: getRedisClient,
-  _resetRedisClient: () => { _redisClient = null; },
+  _resetRedisClient: () => { resetRedisClient(); },
 };

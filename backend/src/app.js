@@ -297,6 +297,18 @@ connectDatabase().then(async () => {
     logger.warn('REDIS_HOST is not configured — using MongoDB retry backend. Rate-limit counters are in-process only and will reset on restart. Set REDIS_HOST for production deployments.');
     logger.info('All services initialized successfully (MongoDB retry backend)');
   }
+}).catch((err) => {
+  // A permanent DB-connection or startup-initialization failure must never
+  // become an unhandled promise rejection (which crashes the process abruptly
+  // and, under Jest, kills the whole test run). Log it, and in a real runtime
+  // exit non-zero so the orchestrator restarts us. Under tests there is no live
+  // database, so we simply log and let the suite continue with mocked models.
+  logger.error('[Startup] Database connection or service initialization failed', {
+    error: err.message,
+  });
+  if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
+    process.exit(1);
+  }
 });
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -364,4 +376,8 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 setupEnforceConsoleErrorLogging();
 
-module.exports = { app, isReady };
+// Export the Express app as the default so `require('./app')` yields the app
+// directly (used by supertest and the server bootstrap). The shutdown readiness
+// probe is attached as a property for any consumer that needs it.
+app.isReady = isReady;
+module.exports = app;

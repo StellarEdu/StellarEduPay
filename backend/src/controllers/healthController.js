@@ -15,10 +15,16 @@ const STELLAR_CHECK_TIMEOUT_MS = 3000; // 3 second timeout for Stellar health ch
 
 async function checkStellar() {
   const start = Date.now();
+  let timeoutHandle;
   try {
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Horizon did not respond within ${STELLAR_CHECK_TIMEOUT_MS}ms`)), STELLAR_CHECK_TIMEOUT_MS)
-    );
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Horizon did not respond within ${STELLAR_CHECK_TIMEOUT_MS}ms`)),
+        STELLAR_CHECK_TIMEOUT_MS
+      );
+      // Don't let this probe timer keep the event loop (or a test runner) alive.
+      if (timeoutHandle.unref) timeoutHandle.unref();
+    });
     // Use horizonClient.call() so the health probe itself benefits from failover
     await Promise.race([
       horizonClient.call((server) => server.ledgers().limit(1).call()),
@@ -38,6 +44,10 @@ async function checkStellar() {
       activeUrl: horizonClient.activeUrl,
       endpoints: horizonClient.getCircuitBreakerStatus(),
     };
+  } finally {
+    // Always clear the probe timeout so it can't reject after the race has
+    // already settled (which would surface as an unhandled rejection later).
+    clearTimeout(timeoutHandle);
   }
 }
 

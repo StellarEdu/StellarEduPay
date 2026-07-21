@@ -13,6 +13,11 @@ const Student = require("../models/studentModel");
 const PaymentIntent = require("../models/paymentIntentModel");
 const { validatePaymentAmount } = require("../utils/paymentLimits");
 const { toStroops, stroopsToNumber, compareAmounts } = require("../utils/stellarAmount");
+const {
+  SUPPORTED_MEMO_TYPES,
+  normalizeMemoType,
+  decodeMemoToCanonical,
+} = require("../utils/stellarMemo");
 const { withStellarRetry } = require("../utils/withStellarRetry");
 const { savePayment } = require("./transactionService");
 const { deriveCorrelationId } = require("../utils/correlationId");
@@ -84,8 +89,8 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
   
-  if (memoType !== 'text') {
-    // MEMO_ID, MEMO_HASH, or MEMO_RETURN — unsupported for student ID matching
+  if (!normalizeMemoType(memoType)) {
+    // MEMO_RETURN — no canonical encoding, so it cannot identify a payment.
     logger.warn('Transaction has unsupported memo type', {
       txHash: tx.hash,
       memoType,
@@ -94,8 +99,15 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
 
-  const memo = innerTx.memo ? innerTx.memo.trim() : null;
-  if (!memo) return null;
+  // MEMO_ID / MEMO_HASH decode back to the canonical intent memo (#1118).
+  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
+  if (!memo) {
+    logger.warn('Transaction memo could not be decoded to a payment reference', {
+      txHash: tx.hash,
+      memoType,
+    });
+    return null;
+  }
 
   const ops = await withStellarRetry(() => innerTx.operations(), {
     label: "extractValidPayment.operations",
@@ -480,17 +492,30 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
     throw err;
   }
 
-  if (memoType !== 'text') {
+  // MEMO_ID and MEMO_HASH are decoded back to the canonical intent memo (#1118)
+  // so wallets that cannot send free-text memos still match. MEMO_RETURN has no
+  // encoding and stays unsupported.
+  if (!normalizeMemoType(memoType)) {
     const err = new Error(
-      `Transaction memo type '${memoType}' is not supported. Only MEMO_TEXT is accepted for student ID matching.`,
+      `Transaction memo type '${memoType}' is not supported. Accepted types: ${SUPPORTED_MEMO_TYPES.join(', ')}.`,
     );
     err.code = "UNSUPPORTED_MEMO_TYPE";
     err.memoType = memoType;
     throw err;
   }
 
-  const memo = innerTx.memo ? innerTx.memo.trim() : null;
+  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
   if (!memo) {
+    // A non-text memo that fails to decode carries no student identity — it is
+    // an unrecognised value rather than a missing one, so report it as such.
+    if (normalizeMemoType(memoType) !== 'MEMO_TEXT') {
+      const err = new Error(
+        `Transaction memo of type '${memoType}' could not be decoded to a payment reference.`,
+      );
+      err.code = "UNSUPPORTED_MEMO_TYPE";
+      err.memoType = memoType;
+      throw err;
+    }
     const err = new Error(
       "Transaction memo is missing or empty — cannot identify student",
     );
@@ -501,7 +526,10 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
   const amount = normalizeAmount(payOp.amount);
 
   // 5. Validate payment amount is within configured limits
-  const limitValidation = validatePaymentAmount(amount);
+  const limitValidation = await validatePaymentAmount(amount, {
+    schoolId,
+    asset: asset?.code,
+  });
   if (!limitValidation.valid) {
     const err = new Error(limitValidation.error);
     err.code = limitValidation.code;
@@ -616,7 +644,8 @@ async function syncPaymentsForSchool(school) {
         continue;
       }
 
-      const { payOp, memo } = valid;
+      // `asset` is destructured for the per-asset limit lookup (#1117).
+      const { payOp, memo, asset } = valid;
 
       // Explicit destination check — defence-in-depth beyond extractValidPayment
       if (payOp.to !== stellarAddress) {
@@ -639,13 +668,38 @@ async function syncPaymentsForSchool(school) {
       } else {
         student = await Student.findOne({ schoolId, studentId: memo });
       }
+
+      // A memo (or a still-pending intent) can point at a student who has since
+      // been soft-deleted (#77/#390). The funds already left the payer's wallet,
+      // so record them against the deleted student (studentDeleted=true) for the
+      // existing deleted-student payments audit view (getDeletedStudentPayments)
+      // instead of dropping them into the generic unmatched bucket, where they'd
+      // be indistinguishable from a mistyped memo and never surfaced for review.
+      let studentDeleted = false;
+      if (!student) {
+        const targetStudentId = intent ? intent.studentId : memo;
+        student = await Student.findOne({
+          schoolId,
+          studentId: targetStudentId,
+          deletedAt: { $ne: null },
+        });
+        studentDeleted = Boolean(student);
+        if (studentDeleted) {
+          logger.warn('Transaction matched a soft-deleted student — recording for manual review', {
+            txHash: tx.hash, schoolId, studentId: targetStudentId,
+          });
+        }
+      }
       if (!student) { summary.unmatched++; continue; }
 
       summary.matched++;
 
       const paymentAmount = parseFloat(payOp.amount);
 
-      const limitValidation = validatePaymentAmount(paymentAmount);
+      const limitValidation = await validatePaymentAmount(paymentAmount, {
+        schoolId,
+        asset: asset?.code,
+      });
       if (!limitValidation.valid) {
         summary.failed++;
         summary.failedDetails.push({ txHash: tx.hash, reason: limitValidation.code });
@@ -737,9 +791,10 @@ async function syncPaymentsForSchool(school) {
             confirmationStatus,
             confirmationState: confirmation.state,
             confirmedAt: txDate,
+            studentDeleted,
           }, { session });
 
-          if (isConfirmed && !isSuspicious) {
+          if (isConfirmed && !isSuspicious && !studentDeleted) {
             const updateData = {
               totalPaid: cumulativeTotal,
               remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeTotal).toFixed(7)),
@@ -1008,6 +1063,9 @@ module.exports = {
   detectAbnormalPatterns,
   computeHistoricalAmountStats,
   checkConfirmationStatus,
+  // Consumed by transactionPollingService (import + call) and covered by tests —
+  // must be exported or those callers invoke `undefined`.
+  determineConfirmationState,
   // recordPayment was moved to transactionService.savePayment (db layer split);
   // re-exported under its original name since paymentController, retryService,
   // transactionQueueService, and transactionRetryQueue still import it from here.

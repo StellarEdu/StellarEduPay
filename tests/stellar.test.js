@@ -17,6 +17,26 @@ jest.mock('@stellar/stellar-sdk', () => ({
   Asset: { native: jest.fn(() => ({ isNative: () => true })) },
 }), { virtual: true });
 
+// syncPaymentsForSchool's "matched" path wraps the write in a session/transaction —
+// mock mongoose so no real MongoDB connection is required.
+var mockWithTransaction = jest.fn(async (cb) => cb());
+var mockEndSession = jest.fn().mockResolvedValue(undefined);
+var mockStartSession = jest.fn().mockResolvedValue({
+  withTransaction: mockWithTransaction,
+  endSession: mockEndSession,
+});
+// stellarService.js resolves 'mongoose' from backend/node_modules (its own
+// install, separate from the root-level copy) — mock that exact resolved
+// path so the session stub actually intercepts the call.
+jest.mock(require.resolve('../backend/node_modules/mongoose'), () => ({
+  connection: { startSession: mockStartSession },
+}));
+
+// savePayment (transactionService) writes an outbox event alongside the payment.
+jest.mock('../backend/src/models/outboxModel', () => ({
+  create: jest.fn().mockResolvedValue({}),
+}));
+
 const {
   verifyTransaction,
   syncPaymentsForSchool,
@@ -67,8 +87,9 @@ jest.mock('../backend/src/config/stellarConfig', () => ({
 
 jest.mock('../backend/src/models/paymentModel', () => ({
   findOne: jest.fn(),
-  create: jest.fn().mockResolvedValue({}),
+  create: jest.fn().mockResolvedValue({ toObject: () => ({}) }),
   exists: jest.fn().mockResolvedValue(false),
+  aggregate: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../backend/src/models/paymentIntentModel', () => ({
@@ -308,6 +329,7 @@ function makeSyncTx(amount, memo = 'STU001') {
     hash: `tx-${amount}`,
     successful: true,
     memo,
+    memo_type: 'text',
     created_at: new Date().toISOString(),
     ledger_attr: 90, // below CONFIRMATION_THRESHOLD of 2 from sequence 100 → confirmed
     operations: jest.fn().mockResolvedValue({
@@ -331,6 +353,13 @@ describe('syncPaymentsForSchool', () => {
     jest.clearAllMocks();
     Payment.findOne.mockResolvedValue(null); // tx not yet recorded
     Payment.exists.mockResolvedValue(false);
+    Payment.create.mockResolvedValue({ toObject: () => ({}) });
+    Payment.aggregate.mockResolvedValue([]);
+    mockWithTransaction.mockImplementation(async (cb) => cb());
+    mockStartSession.mockResolvedValue({
+      withTransaction: mockWithTransaction,
+      endSession: mockEndSession,
+    });
   });
 
   test('resolves without error when no transactions exist', async () => {
@@ -472,6 +501,84 @@ describe('syncPaymentsForSchool', () => {
     expect(studentUpdateSpy).not.toHaveBeenCalled();
 
     // Restore
+    stellarConfig.server.transactions = origTransactions;
+  });
+
+  test('records payment for memo matching a soft-deleted student instead of dropping it (flagged for manual review)', async () => {
+    const school = { schoolId: 'SCH001', stellarAddress: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' };
+    const tx = makeSyncTx(100, 'STU_DEL');
+
+    const stellarConfig = require('../backend/src/config/stellarConfig');
+    const origTransactions = stellarConfig.server.transactions;
+    stellarConfig.server.transactions = () => ({
+      forAccount: () => ({
+        order: () => ({
+          limit: () => ({
+            call: async () => ({ records: [tx], next: async () => ({ records: [] }) }),
+          }),
+        }),
+      }),
+    });
+
+    // No pending intent for this memo — falls back to a direct studentId lookup.
+    const PaymentIntent = require('../backend/src/models/paymentIntentModel');
+    PaymentIntent.findOne.mockResolvedValue(null);
+
+    // Active lookup misses (the student is soft-deleted, excluded by the
+    // softDelete plugin); the explicit deletedAt-filtered lookup finds them.
+    Student.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ schoolId: 'SCH001', studentId: 'STU_DEL', feeAmount: 100, deletedAt: new Date() });
+
+    const summary = await syncPaymentsForSchool(school);
+
+    // Funds are recorded, not silently unmatched.
+    expect(Payment.create).toHaveBeenCalledWith(
+      expect.objectContaining({ txHash: tx.hash, studentId: 'STU_DEL', studentDeleted: true }),
+      expect.anything(),
+    );
+    // The deleted student's stored balance is never mutated.
+    expect(Student.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(summary.unmatched).toBe(0);
+
+    stellarConfig.server.transactions = origTransactions;
+  });
+
+  test('credits a transaction whose memo matches an already-completed payment intent (intent-decoupled fallback match)', async () => {
+    const school = { schoolId: 'SCH001', stellarAddress: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' };
+    const tx = makeSyncTx(100, 'STU001');
+
+    const stellarConfig = require('../backend/src/config/stellarConfig');
+    const origTransactions = stellarConfig.server.transactions;
+    stellarConfig.server.transactions = () => ({
+      forAccount: () => ({
+        order: () => ({
+          limit: () => ({
+            call: async () => ({ records: [tx], next: async () => ({ records: [] }) }),
+          }),
+        }),
+      }),
+    });
+
+    // The intent for this memo is already completed — the pending-only query finds nothing.
+    const PaymentIntent = require('../backend/src/models/paymentIntentModel');
+    PaymentIntent.findOne.mockResolvedValue(null);
+
+    // Fallback direct studentId lookup finds the (still-active) student.
+    Student.findOne.mockResolvedValueOnce({ schoolId: 'SCH001', studentId: 'STU001', feeAmount: 100 });
+
+    const summary = await syncPaymentsForSchool(school);
+
+    // The late/duplicate transaction is credited to the student, not dropped.
+    expect(Payment.create).toHaveBeenCalledWith(
+      expect.objectContaining({ txHash: tx.hash, studentId: 'STU001', studentDeleted: false }),
+      expect.anything(),
+    );
+    expect(Student.findOneAndUpdate).toHaveBeenCalled();
+    // No pending intent existed, so nothing is marked completed a second time.
+    expect(PaymentIntent.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(summary.unmatched).toBe(0);
+
     stellarConfig.server.transactions = origTransactions;
   });
 

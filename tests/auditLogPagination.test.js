@@ -23,6 +23,7 @@ jest.mock('../backend/src/models/auditLogModel', () => ({
 
 function makeChain(results) {
   const chain = {
+    hint:  jest.fn().mockReturnThis(),
     sort:  jest.fn().mockReturnThis(),
     skip:  jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),

@@ -58,7 +58,7 @@ describe('Body size limit — configuration', () => {
 
 describe('Body size limit — app.js middleware', () => {
   it('applies express.json with config.MAX_BODY_SIZE as the global limit', () => {
-    expect(APP_SRC).toMatch(/express\.json\(\s*\{\s*limit\s*:\s*config\.MAX_BODY_SIZE\s*\}\s*\)/);
+    expect(APP_SRC).toMatch(/express\.json\(\s*\{[\s\S]*?limit\s*:\s*config\.MAX_BODY_SIZE/);
   });
 
   it('does not use express.json() without a limit option globally', () => {

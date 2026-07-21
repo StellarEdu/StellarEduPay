@@ -14,7 +14,7 @@ const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
-const { fireWebhook } = require('../services/webhookService');
+const { fireWebhook, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
 
@@ -71,6 +71,8 @@ function isValidTransition(from, to) {
  * Never throws — failures are logged but do not abort the response.
  */
 async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
+  const holdLifted = TERMINAL_STATUSES.has(disputeDoc.status);
+
   // SSE — real-time push to connected browser clients
   try {
     sseEmit(schoolId, eventName, {
@@ -79,27 +81,36 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
       studentId:  disputeDoc.studentId,
       status:     disputeDoc.status,
       resolvedBy: disputeDoc.resolvedBy,
+      holdLifted,
       updatedAt:  disputeDoc.updatedAt,
     });
   } catch (err) {
     logger.warn('SSE emit failed for dispute event', { schoolId, eventName, error: err.message });
   }
 
-  // Webhook — HMAC-signed HTTP call to the school's registered endpoint
+  // Webhook — HMAC-signed HTTP call to the school's registered endpoint.
+  // Route through the dispute.* notification helpers so the payload shape stays
+  // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).
   try {
     const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1 }).lean();
     if (school && school.webhookUrl) {
-      await fireWebhook(school.webhookUrl, eventName, {
-        disputeId:       String(disputeDoc._id),
-        txHash:          disputeDoc.txHash,
-        studentId:       disputeDoc.studentId,
-        schoolId,
-        status:          disputeDoc.status,
-        resolvedBy:      disputeDoc.resolvedBy,
-        resolutionNote:  disputeDoc.resolutionNote,
-        resolvedAt:      disputeDoc.resolvedAt,
-        updatedAt:       disputeDoc.updatedAt,
-      }, school.webhookSecret || null);
+      const secret = school.webhookSecret || null;
+      if (eventName === 'dispute.created') {
+        await notifyDisputeCreated(school.webhookUrl, disputeDoc, secret);
+      } else if (holdLifted) {
+        await notifyDisputeResolved(school.webhookUrl, disputeDoc, secret);
+      } else {
+        // Intermediate transitions (under_review / reopened) keep their own event name.
+        await fireWebhook(school.webhookUrl, eventName, {
+          disputeId:  String(disputeDoc._id),
+          schoolId,
+          txHash:     disputeDoc.txHash,
+          studentId:  disputeDoc.studentId,
+          status:     disputeDoc.status,
+          resolvedBy: disputeDoc.resolvedBy,
+          updatedAt:  disputeDoc.updatedAt,
+        }, secret);
+      }
     }
   } catch (err) {
     logger.warn('Webhook fire failed for dispute event', { schoolId, eventName, error: err.message });

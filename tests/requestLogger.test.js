@@ -23,6 +23,7 @@ function makeRes() {
   const listeners = {};
   return {
     on: (event, cb) => { listeners[event] = cb; },
+    setHeader: () => {},
     statusCode: 200,
     _emit: (event) => listeners[event] && listeners[event](),
   };

@@ -1,0 +1,56 @@
+groups:
+  - name: payment_limits
+    interval: 60s
+    rules:
+      # ── Warning: limits are rejecting payments at a sustained rate ───────
+      # payment_limit_triggered_total{school_id,asset,code} is incremented
+      # whenever a payment is rejected by the configured min/max (#1117).
+      # Before this metric, limits were a control with no feedback loop: there
+      # was no signal telling an operator that the configured values were
+      # mismatched to real payment behaviour, and adjusting them needed a
+      # redeploy anyway.
+      #
+      # A sustained AMOUNT_TOO_HIGH rate is the interesting one — it is either
+      # a fee structure the ceiling no longer fits, or someone probing with
+      # large amounts. AMOUNT_TOO_LOW is usually dust or a misconfigured
+      # minimum.
+      - alert: PaymentLimitTriggeredFrequently
+        expr: sum(rate(payment_limit_triggered_total[15m])) by (school_id, asset, code) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payment limit {{ $labels.code }} rejecting payments for {{ $labels.school_id }}"
+          description: >
+            Payments in {{ $labels.asset }} for school {{ $labels.school_id }}
+            have been rejected as {{ $labels.code }} for 15 minutes
+            ({{ $value | printf "%.4f" }}/s). Either the configured limits no
+            longer match this school's fee structure, or someone is probing with
+            out-of-range amounts. Review the effective limits via
+            GET /api/admin/payment-limits?schoolId={{ $labels.school_id }} and
+            adjust with PUT if warranted — this no longer requires a redeploy.
+
+      # ── Critical: the limits are rejecting most attempted payments ───────
+      # Compares rejections against payments entering the funnel. A high ratio
+      # means the limits are misconfigured badly enough to be an outage for
+      # parents trying to pay, not a fraud signal.
+      - alert: PaymentLimitBlockingMostPayments
+        expr: >
+          sum(rate(payment_limit_triggered_total[15m])) by (school_id)
+            /
+          clamp_min(sum(rate(payment_funnel_total{stage="received"}[15m])) by (school_id), 0.001)
+            > 0.5
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment limits are blocking most payments for {{ $labels.school_id }}"
+          description: >
+            More than half of payments received for school
+            {{ $labels.school_id }} over the last 15 minutes were rejected by
+            the configured payment limits. This is very likely a
+            misconfiguration — a limit set in the wrong asset's value range will
+            do exactly this. Parents cannot pay. Check
+            GET /api/admin/payment-limits?schoolId={{ $labels.school_id }}; the
+            `source` field shows which layer (school override, global, or the
+            env fallback) supplied the active value.

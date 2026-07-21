@@ -11,6 +11,10 @@
  *   5. If Redis is unavailable the job is still persisted to MongoDB.
  */
 
+// REDIS_HOST must be set before transactionQueue loads, otherwise getRedisClient()
+// returns null, the BullMQ queue is never created, and enqueue/recover become no-ops.
+process.env.REDIS_HOST = '127.0.0.1';
+
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // Mock ioredis so no real Redis connection is attempted
@@ -53,6 +57,7 @@ jest.mock('../backend/src/utils/logger', () => ({
   info:  jest.fn(),
   warn:  jest.fn(),
   error: jest.fn(),
+  debug: jest.fn(),
   child: jest.fn().mockReturnThis(),
 }));
 
@@ -118,6 +123,7 @@ describe('transactionQueue — durability (issue #388)', () => {
   describe('recoverPendingJobs() — restart recovery', () => {
     it('re-enqueues pending and processing jobs found in MongoDB', async () => {
       mockFind.mockReturnValue({
+        bypassTenantScope: jest.fn().mockReturnThis(),
         lean: jest.fn().mockResolvedValue([
           { txHash: 'tx-pending',    schoolId: 'school-1', studentId: 'STU001', status: 'pending' },
           { txHash: 'tx-processing', schoolId: 'school-1', studentId: 'STU002', status: 'processing' },
@@ -142,6 +148,7 @@ describe('transactionQueue — durability (issue #388)', () => {
 
     it('resets processing → pending before re-enqueuing', async () => {
       mockFind.mockReturnValue({
+        bypassTenantScope: jest.fn().mockReturnThis(),
         lean: jest.fn().mockResolvedValue([
           { txHash: 'tx-was-processing', schoolId: 'school-1', studentId: null, status: 'processing' },
         ]),
@@ -149,15 +156,15 @@ describe('transactionQueue — durability (issue #388)', () => {
 
       await recoverPendingJobs();
 
-      // Should have reset status to pending
+      // Should have reset status to pending (filter is scoped by schoolId from the doc)
       expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
-        { txHash: 'tx-was-processing', status: 'processing' },
+        { txHash: 'tx-was-processing', schoolId: 'school-1', status: 'processing' },
         { status: 'pending' }
       );
     });
 
     it('returns 0 when there are no unresolved jobs', async () => {
-      mockFind.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+      mockFind.mockReturnValue({ bypassTenantScope: jest.fn().mockReturnThis(), lean: jest.fn().mockResolvedValue([]) });
 
       const recovered = await recoverPendingJobs();
       expect(recovered).toBe(0);
@@ -166,6 +173,7 @@ describe('transactionQueue — durability (issue #388)', () => {
 
     it('continues recovering remaining jobs if one re-enqueue fails', async () => {
       mockFind.mockReturnValue({
+        bypassTenantScope: jest.fn().mockReturnThis(),
         lean: jest.fn().mockResolvedValue([
           { txHash: 'tx-fail',  schoolId: 'school-1', studentId: null, status: 'pending' },
           { txHash: 'tx-ok',    schoolId: 'school-1', studentId: null, status: 'pending' },
@@ -188,7 +196,8 @@ describe('transactionQueue — durability (issue #388)', () => {
 
       expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
         { txHash: 'done-tx' },
-        expect.objectContaining({ status: 'resolved' })
+        expect.objectContaining({ status: 'resolved' }),
+        expect.objectContaining({ _bypassTenantScope: true })
       );
     });
   });
@@ -200,7 +209,8 @@ describe('transactionQueue — durability (issue #388)', () => {
 
       expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
         { txHash: 'bad-tx' },
-        expect.objectContaining({ status: 'dead_letter', lastError: 'Unsupported asset' })
+        expect.objectContaining({ status: 'dead_letter', lastError: 'Unsupported asset' }),
+        expect.objectContaining({ _bypassTenantScope: true })
       );
     });
   });

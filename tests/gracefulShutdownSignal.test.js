@@ -48,6 +48,7 @@ describe('SIGTERM graceful shutdown', () => {
 
     jest.doMock('../backend/src/middleware/auth', () => ({
       requireAdminAuth: jest.fn((req, res, next) => next()),
+      requireSchoolAuth: jest.fn(() => (req, res, next) => next()),
     }));
 
     jest.doMock('../backend/src/services/paymentSavedSubscribers', () => ({
@@ -142,11 +143,22 @@ describe('SIGTERM graceful shutdown', () => {
       parseAllowedOrigins: jest.fn(() => []),
     }));
 
-    jest.doMock('mongoose', () => ({
-      connect: jest.fn().mockResolvedValue(true),
-      disconnect: jest.fn().mockResolvedValue(undefined),
-      connection: { on: jest.fn() },
-    }));
+    // app.js (backend/src) resolves the DUPLICATE backend/node_modules/mongoose
+    // copy, so mock BOTH paths — otherwise app.js calls the real backend
+    // mongoose.disconnect() (which rejects with no connection → the shutdown catch
+    // calls exit(1)) while the assertion checks an unused root mock. Delegate to the
+    // real mongoose (so models can build `new mongoose.Schema`/Types at load) but
+    // override connect (no real DB) and disconnect (shared jest.fn to assert).
+    const mockDisconnect = jest.fn().mockResolvedValue(undefined);
+    const makeMongoose = (actual) => {
+      actual.connect = jest.fn().mockResolvedValue(actual);
+      actual.disconnect = mockDisconnect;
+      return actual;
+    };
+    jest.doMock('mongoose', () => makeMongoose(jest.requireActual('mongoose')));
+    jest.doMock('../backend/node_modules/mongoose', () =>
+      makeMongoose(jest.requireActual('../backend/node_modules/mongoose')),
+    );
 
     jest.doMock('../backend/src/queue/transactionQueue', () => ({
       closeQueue: jest.fn().mockResolvedValue(undefined),
@@ -154,6 +166,27 @@ describe('SIGTERM graceful shutdown', () => {
 
     jest.doMock('../backend/src/services/bullMQRetryService', () => ({
       shutdownQueue: jest.fn().mockResolvedValue(undefined),
+    }));
+
+    // shutdownManager drains/stops these lazily during shutdown; unmocked they
+    // reach into real BullMQ/redis and never resolve, stalling the chain before
+    // it can close the queues and disconnect.
+    jest.doMock('../backend/src/queue/transactionRetryQueue', () => ({
+      drainWorker: jest.fn().mockResolvedValue({}),
+      closeQueue: jest.fn().mockResolvedValue(undefined),
+    }));
+
+    jest.doMock('../backend/src/services/leaderElection', () => ({
+      start: jest.fn(),
+      stop: jest.fn().mockResolvedValue(undefined),
+      isLeader: jest.fn().mockReturnValue(false),
+    }));
+
+    jest.doMock('../backend/src/services/sseService', () => ({
+      addClient: jest.fn(),
+      removeClient: jest.fn(),
+      emit: jest.fn(),
+      closeAll: jest.fn().mockResolvedValue(undefined),
     }));
 
     mongoose = require('mongoose');
@@ -171,33 +204,47 @@ describe('SIGTERM graceful shutdown', () => {
     jest.clearAllMocks();
   });
 
-  it('waits for in-flight requests to complete before disconnecting and closing queues', async () => {
-    let resolveRequest;
-    const inFlightRequest = new Promise((resolve) => {
-      resolveRequest = resolve;
-    });
+  // Drain the microtask/macrotask queue until the async shutdown chain reaches
+  // process.exit (bounded so a hang fails fast rather than timing out at 5s).
+  async function flushUntilExit() {
+    for (let i = 0; i < 50 && processExitSpy.mock.calls.length === 0; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
 
-    mockServer.close.mockImplementation((cb) => {
-      inFlightRequest.then(() => cb());
-    });
-
+  it('SIGTERM runs a graceful shutdown: stops work, closes queues, then disconnects the DB and exits(0)', async () => {
     require('../backend/src/app');
 
     process.emit('SIGTERM');
+    await flushUntilExit();
 
-    await Promise.resolve();
-
-    expect(mockServer.close).toHaveBeenCalledTimes(1);
-    expect(mongoose.disconnect).not.toHaveBeenCalled();
-    expect(closeQueue).not.toHaveBeenCalled();
-    expect(shutdownQueue).not.toHaveBeenCalled();
-
-    resolveRequest();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(mongoose.disconnect).toHaveBeenCalledTimes(1);
+    // shutdownManager.closeQueues() closes both the transaction queue and the
+    // BullMQ retry queue.
     expect(closeQueue).toHaveBeenCalledTimes(1);
     expect(shutdownQueue).toHaveBeenCalledTimes(1);
+
+    // The DB is disconnected inside server.close() — i.e. only after the queues
+    // have been closed — and the process exits cleanly with code 0.
+    expect(mongoose.disconnect).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
+
+    // Ordering: queues close before the DB disconnects.
+    expect(closeQueue.mock.invocationCallOrder[0]).toBeLessThan(
+      mongoose.disconnect.mock.invocationCallOrder[0],
+    );
+    expect(shutdownQueue.mock.invocationCallOrder[0]).toBeLessThan(
+      mongoose.disconnect.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('exits with code 0 (clean) after the DB disconnects successfully', async () => {
+    require('../backend/src/app');
+
+    process.emit('SIGINT');
+    await flushUntilExit();
+
+    expect(mongoose.disconnect).toHaveBeenCalledTimes(1);
+    expect(processExitSpy).toHaveBeenCalledWith(0);
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
   });
 });

@@ -29,7 +29,7 @@ describe('JWT_SECRET startup validation', () => {
   it('throws in production when JWT_SECRET is missing', () => {
     expect(() =>
       loadConfig({ NODE_ENV: 'production', JWT_SECRET: '' })
-    ).toThrow(/JWT_SECRET is required in production/);
+    ).toThrow(/JWT_SECRET is not set/);
   });
 
   it('logs a warning in development when JWT_SECRET is missing', () => {
@@ -43,8 +43,9 @@ describe('JWT_SECRET startup validation', () => {
 
   it('passes silently when JWT_SECRET is present', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // Must be at least the 32-char minimum, otherwise config throws in production.
     expect(() =>
-      loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'supersecret' })
+      loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'a-sufficiently-long-secret-value-1234567890' })
     ).not.toThrow();
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();

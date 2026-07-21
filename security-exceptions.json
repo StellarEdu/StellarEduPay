@@ -1,0 +1,5 @@
+{
+  "description": "Machine-readable record of high/critical npm audit findings that are deferred rather than fixed. Read by scripts/check-dependency-audit.js in CI. See docs/dependency-triage.md for the process.",
+  "exceptions": [
+  ]
+}

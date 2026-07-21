@@ -33,12 +33,30 @@ jest.mock('../backend/src/services/auditService', () => ({ logAudit: jest.fn() }
 // Top-level mongoose mock used by migration tests.
 // The mockCollection function is shared so individual tests can swap it out.
 const mockCollectionObj = { updateMany: jest.fn().mockResolvedValue({ modifiedCount: 0 }) };
-jest.mock('mongoose', () => ({
-  connection: { collection: jest.fn(() => mockCollectionObj) },
-}));
+// Delegate to the real mongoose (so the schema test that builds `new mongoose.Schema`
+// via jest.requireActual works) but override connection.collection so the migration
+// test hits our mock collection instead of a real (absent) DB.
+jest.mock('mongoose', () => {
+  const actual = jest.requireActual('mongoose');
+  actual.connection.collection = jest.fn(() => mockCollectionObj);
+  return actual;
+});
+// The migration and models under backend/ require the DUPLICATE
+// backend/node_modules/mongoose copy, which the bare 'mongoose' mock above does not
+// reach — mock it the same way so both copies share the mock collection.
+jest.mock('../backend/node_modules/mongoose', () => {
+  const actual = jest.requireActual('../backend/node_modules/mongoose');
+  actual.connection.collection = jest.fn(() => mockCollectionObj);
+  return actual;
+});
 
 const FeeStructure = require('../backend/src/models/feeStructureModel');
 const { deleteFeeStructure } = require('../backend/src/controllers/feeController');
+
+// The controller-level tests below drive FeeStructure.findOneAndUpdate through the
+// mock; replace the real Mongoose static with a jest.fn (shared module singleton, so
+// the controller's own reference sees it too).
+FeeStructure.findOneAndUpdate = jest.fn();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

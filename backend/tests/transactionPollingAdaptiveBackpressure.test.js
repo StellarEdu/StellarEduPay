@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'a'.repeat(32);
 
 const mockTransactionsCall = jest.fn();
 const mockLimit = jest.fn(() => ({ call: mockTransactionsCall }));
-const mockAcquire = jest.fn(async () => 'token');
+const mockAcquire = jest.fn(async () => ({ token: 'token', fencingToken: 1 }));
 const mockRelease = jest.fn(async () => 1);
 const mockFindOne = jest.fn(async () => null);
 const mockAggregate = jest.fn(async () => []);
@@ -70,7 +70,7 @@ jest.mock('../src/services/sseService', () => ({ emit: jest.fn() }));
 jest.mock('../src/utils/paymentLimits', () => ({ validatePaymentAmount: jest.fn().mockReturnValue({ valid: true }) }));
 jest.mock('../src/utils/generateReferenceCode', () => ({ generateReferenceCode: jest.fn().mockResolvedValue('REF-TEST') }));
 jest.mock('../src/services/currencyConversionService', () => ({ captureFiatSnapshot: jest.fn().mockResolvedValue(null) }));
-jest.mock('../src/services/distributedLock', () => ({ acquire: (...args) => mockAcquire(...args), release: (...args) => mockRelease(...args) }));
+jest.mock('../src/services/distributedLock', () => ({ acquire: (...args) => mockAcquire(...args), release: (...args) => mockRelease(...args), getCurrentFence: jest.fn().mockResolvedValue(null) }));
 jest.mock('../src/services/concurrentPaymentProcessor', () => ({ concurrentPaymentProcessor: { getStats: () => mockGetStats() } }));
 jest.mock('../src/utils/logger', () => ({ child: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }) }));
 
@@ -81,7 +81,7 @@ const TX = { hash: 'TX1', created_at: '2026-06-18T00:00:00Z', ledger: 100, fee_p
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockAcquire.mockResolvedValue('token');
+  mockAcquire.mockResolvedValue({ token: 'token', fencingToken: 1 });
   mockLimit.mockReturnValue({ call: mockTransactionsCall });
   mockTransactionsCall.mockResolvedValue({ records: [TX] });
   mockGetStats.mockReturnValue({ queueDepth: 0, maxQueueDepth: 100 });

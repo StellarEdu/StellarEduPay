@@ -11,6 +11,7 @@ const request = require('supertest');
 
 jest.mock('../backend/src/middleware/auth', () => ({
   requireAdminAuth: (req, res, next) => next(),
+  requireSchoolAuth: () => (req, res, next) => next(),
 }));
 
 jest.mock('mongoose', () => ({

@@ -75,14 +75,16 @@ describe('#595 JWT refresh token flow', () => {
 
       expect(res.status).not.toHaveBeenCalled();
       const [body] = res.json.mock.calls[0];
-      // Token is now in the HttpOnly cookie, not the response body
+      // Both access and refresh tokens are now delivered as HttpOnly cookies
+      // (#821), not in the response body.
       expect(body.token).toBeUndefined();
+      expect(body.refreshToken).toBeUndefined();
       expect(body.isAdmin).toBe(true);
-      expect(body.refreshToken).toBeDefined();
       expect(typeof body.expiresIn).toBe('number');
       expect(typeof body.refreshExpiresIn).toBe('number');
-      // Cookie must have been set
+      // Both cookies must have been set.
       expect(res.cookie).toHaveBeenCalledWith('admin_token', expect.any(String), expect.objectContaining({ httpOnly: true }));
+      expect(res.cookie).toHaveBeenCalledWith('admin_refresh_token', expect.any(String), expect.objectContaining({ httpOnly: true }));
     });
 
     it('access token TTL respects JWT_ACCESS_TOKEN_TTL env var', async () => {
@@ -117,15 +119,18 @@ describe('#595 JWT refresh token flow', () => {
     it('issues a new access token for a valid refresh token', async () => {
       const loginRes = mockRes();
       await handleLogin({ body: { username: 'admin', password: 'correct-password' } }, loginRes);
-      const { refreshToken } = loginRes.json.mock.calls[0][0];
+      // The refresh token is delivered via the admin_refresh_token cookie (#821).
+      const refreshCookie = loginRes.cookie.mock.calls.find(c => c[0] === 'admin_refresh_token');
+      const refreshToken = refreshCookie[1];
 
       const refreshRes = mockRes();
       await handleRefresh({ body: { refreshToken } }, refreshRes);
 
       expect(refreshRes.status).not.toHaveBeenCalled();
       const [body] = refreshRes.json.mock.calls[0];
-      expect(body.token).toBeDefined();
+      // New access token comes back as a cookie; body carries only TTL metadata.
       expect(body.expiresIn).toBeDefined();
+      expect(refreshRes.cookie).toHaveBeenCalledWith('admin_token', expect.any(String), expect.objectContaining({ httpOnly: true }));
     });
 
     it('returns 401 for an unknown refresh token', async () => {

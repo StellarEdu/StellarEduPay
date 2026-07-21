@@ -1,5 +1,6 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const SystemConfig = require('../models/systemConfigModel');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('MaintenanceMode');
@@ -9,6 +10,11 @@ const EXEMPT_PATHS = /^\/(health|metrics|api\/docs)/;
 async function maintenanceMode(req, res, next) {
   try {
     if (EXEMPT_PATHS.test(req.path)) return next();
+
+    // Skip the DB-backed maintenance check when the database isn't connected
+    // (e.g. unit tests with mocked models). Without this, every request would
+    // stall on mongoose command buffering until the ~10s buffer timeout.
+    if (mongoose.connection?.readyState !== 1) return next();
 
     const globalMaintenance = await SystemConfig.get('maintenanceMode');
     if (globalMaintenance) {

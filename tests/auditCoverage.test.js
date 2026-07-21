@@ -81,7 +81,7 @@ jest.mock('../backend/src/models/sourceValidationRuleModel', () => ({
   create:            jest.fn(),
   find:              jest.fn(),
   findOne:           jest.fn(),
-  findByIdAndDelete: jest.fn(),
+  findOneAndDelete:  jest.fn(),
 }));
 
 jest.mock('../backend/src/models/webhookRetryModel', () => ({
@@ -232,7 +232,7 @@ describe('Audit — flagDispute', () => {
     expect(res.status).toBe(201);
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        action:     'dispute_flag',
+        action:     'dispute_created',
         targetType: 'dispute',
         details:    expect.objectContaining({ txHash: MOCK_PAYMENT.txHash, studentId: 'STU001' }),
       })
@@ -264,8 +264,9 @@ describe('Audit — resolveDispute', () => {
     resolvedAt: new Date().toISOString(),
   };
 
-  test('emits audit entry with action=dispute_resolve and before/after details', async () => {
+  test('emits audit entry with action=dispute_resolved and before/after details', async () => {
     const Dispute = require('../backend/src/models/disputeModel');
+    Dispute.findOne.mockResolvedValueOnce({ _id: DISPUTE_ID, schoolId: 'SCH001', status: 'open', txHash: 'a'.repeat(64), studentId: 'STU001' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(RESOLVED);
 
     const res = await adminApi('patch', `/api/disputes/${DISPUTE_ID}/resolve`)
@@ -274,32 +275,33 @@ describe('Audit — resolveDispute', () => {
     expect(res.status).toBe(200);
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        action:     'dispute_resolve',
+        action:     'dispute_resolved',
         targetType: 'dispute',
         targetId:   DISPUTE_ID,
         details:    expect.objectContaining({
-          newStatus:      'resolved',
+          toStatus:       'resolved',
           resolutionNote: 'Verified and closed',
         }),
       })
     );
   });
 
-  test('captures resolvedBy from the JWT actor', async () => {
+  test('captures the resolving actor from the JWT', async () => {
     const Dispute = require('../backend/src/models/disputeModel');
+    Dispute.findOne.mockResolvedValueOnce({ _id: DISPUTE_ID, schoolId: 'SCH001', status: 'open', txHash: 'a'.repeat(64), studentId: 'STU001' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(RESOLVED);
 
     await adminApi('patch', `/api/disputes/${DISPUTE_ID}/resolve`)
       .send({ resolutionNote: 'Done' });
 
     const call = mockLogAudit.mock.calls[0][0];
-    expect(call.details).toHaveProperty('resolvedBy');
-    expect(typeof call.details.resolvedBy).toBe('string');
-    expect(call.details.resolvedBy.length).toBeGreaterThan(0);
+    expect(typeof call.performedBy).toBe('string');
+    expect(call.performedBy.length).toBeGreaterThan(0);
   });
 
   test('does NOT emit audit when dispute is not found', async () => {
     const Dispute = require('../backend/src/models/disputeModel');
+    Dispute.findOne.mockResolvedValueOnce({ _id: DISPUTE_ID, schoolId: 'SCH001', status: 'open', txHash: 'a'.repeat(64), studentId: 'STU001' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(null);
 
     const res = await adminApi('patch', `/api/disputes/${DISPUTE_ID}/resolve`)
@@ -311,6 +313,7 @@ describe('Audit — resolveDispute', () => {
 
   test('includes schoolId in audit entry', async () => {
     const Dispute = require('../backend/src/models/disputeModel');
+    Dispute.findOne.mockResolvedValueOnce({ _id: DISPUTE_ID, schoolId: 'SCH001', status: 'open', txHash: 'a'.repeat(64), studentId: 'STU001' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(RESOLVED);
 
     await adminApi('patch', `/api/disputes/${DISPUTE_ID}/resolve`)
@@ -563,7 +566,7 @@ describe('Audit — source validation deleteRule', () => {
 
   test('emits audit entry with action=source_validation_rule_delete on success', async () => {
     const SourceValidationRule = require('../backend/src/models/sourceValidationRuleModel');
-    SourceValidationRule.findByIdAndDelete.mockResolvedValueOnce(MOCK_RULE);
+    SourceValidationRule.findOneAndDelete.mockResolvedValueOnce(MOCK_RULE);
 
     const res = await adminApi('delete', `/api/source-rules/${RULE_ID}`);
 
@@ -580,7 +583,7 @@ describe('Audit — source validation deleteRule', () => {
 
   test('uses schoolId="system" for global rule deletion', async () => {
     const SourceValidationRule = require('../backend/src/models/sourceValidationRuleModel');
-    SourceValidationRule.findByIdAndDelete.mockResolvedValueOnce(MOCK_RULE);
+    SourceValidationRule.findOneAndDelete.mockResolvedValueOnce(MOCK_RULE);
 
     await adminApi('delete', `/api/source-rules/${RULE_ID}`);
 
@@ -591,7 +594,7 @@ describe('Audit — source validation deleteRule', () => {
 
   test('does NOT emit audit when rule is not found', async () => {
     const SourceValidationRule = require('../backend/src/models/sourceValidationRuleModel');
-    SourceValidationRule.findByIdAndDelete.mockResolvedValueOnce(null);
+    SourceValidationRule.findOneAndDelete.mockResolvedValueOnce(null);
 
     const res = await adminApi('delete', `/api/source-rules/${RULE_ID}`);
 

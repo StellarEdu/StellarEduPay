@@ -50,7 +50,7 @@ export default function LoginPage() {
         .login-page {
           min-height: calc(100vh - 60px);
           background:
-            radial-gradient(700px 400px at 50% -10%, rgba(139,92,246,0.16), transparent 60%),
+            radial-gradient(700px 400px at 50% -10%, rgba(5,150,105,0.16), transparent 60%),
             radial-gradient(600px 350px at 100% 100%, rgba(6,182,212,0.12), transparent 55%),
             #f6f7fb;
           display: flex;
@@ -70,12 +70,12 @@ export default function LoginPage() {
         }
         .login-icon {
           width: 56px; height: 56px;
-          background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
           border-radius: 16px;
           display: flex; align-items: center; justify-content: center;
           font-size: 1.4rem;
           margin: 0 auto 1.5rem;
-          box-shadow: 0 12px 28px -8px rgba(99,102,241,0.6);
+          box-shadow: 0 12px 28px -8px rgba(5,150,105,0.6);
         }
         .login-card h1 {
           font-size: 1.5rem !important;
@@ -112,8 +112,8 @@ export default function LoginPage() {
           font-family: inherit;
         }
         .login-input:focus {
-          border-color: #6366f1;
-          box-shadow: 0 0 0 4px rgba(99,102,241,0.18);
+          border-color: #059669;
+          box-shadow: 0 0 0 4px rgba(5,150,105,0.18);
           background: #fff;
         }
         .login-error {
@@ -128,7 +128,7 @@ export default function LoginPage() {
         }
         .login-btn {
           width: 100%;
-          background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
           color: #fff;
           border: none;
           border-radius: 10px;
@@ -138,7 +138,7 @@ export default function LoginPage() {
           transition: filter 0.15s, transform 0.1s, box-shadow 0.15s;
           margin-top: 0.5rem;
           letter-spacing: -0.01em;
-          box-shadow: 0 10px 24px -8px rgba(99,102,241,0.6);
+          box-shadow: 0 10px 24px -8px rgba(5,150,105,0.6);
         }
         .login-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
         .login-btn:active:not(:disabled) { transform: scale(0.99); }
@@ -168,12 +168,12 @@ export default function LoginPage() {
         html.dark .login-label { color: #94a3b8; }
         html.dark .login-page {
           background:
-            radial-gradient(700px 400px at 50% -10%, rgba(139,92,246,0.2), transparent 60%),
+            radial-gradient(700px 400px at 50% -10%, rgba(5,150,105,0.2), transparent 60%),
             radial-gradient(600px 350px at 100% 100%, rgba(6,182,212,0.14), transparent 55%),
             #0a0e1f;
         }
         html.dark .login-input { background: #0a0e1f; border-color: #25304d; color: #f1f5f9; }
-        html.dark .login-input:focus { border-color: #818cf8; background: #0a0e1f; box-shadow: 0 0 0 4px rgba(129,140,248,0.22); }
+        html.dark .login-input:focus { border-color: #34d399; background: #0a0e1f; box-shadow: 0 0 0 4px rgba(52,211,153,0.22); }
       `}</style>
 
       <div className="login-page">

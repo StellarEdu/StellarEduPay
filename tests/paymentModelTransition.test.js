@@ -34,7 +34,12 @@ jest.mock('../backend/src/services/paymentConfirmationStateMachine', () => ({
   },
 }));
 
-jest.mock('mongoose', () => {
+// Shared factory (mock-prefixed so babel-jest allows referencing it from the
+// hoisted jest.mock calls). paymentModel resolves the DUPLICATE
+// backend/node_modules/mongoose copy, so BOTH the root and backend copies must be
+// mocked identically — otherwise the real backend mongoose is used and the pre-save
+// hook is never captured (global.__preSaveHook stays null).
+const mockMongooseFactory = () => {
   class MockSchema {
     constructor() {
       this.index   = jest.fn().mockReturnThis();
@@ -51,7 +56,9 @@ jest.mock('mongoose', () => {
     Schema: MockSchema,
     model: jest.fn().mockReturnValue({}),
   };
-});
+};
+jest.mock('mongoose', () => mockMongooseFactory());
+jest.mock('../backend/node_modules/mongoose', () => mockMongooseFactory());
 jest.mock('../backend/src/utils/softDelete', () => jest.fn());
 jest.mock('../backend/src/utils/memoEncryption', () => ({
   encryptMemo: jest.fn(v => v),
@@ -84,10 +91,10 @@ function makeDoc({ originalStatus, newStatus, isNew = false, adminOverride = fal
   };
 }
 
+// The pre-save hook is a modern async function (no `next` callback) — Mongoose
+// awaits the returned promise. Invoke it and surface its resolution/rejection.
 function callHook(doc) {
-  return new Promise((resolve, reject) => {
-    global.__preSaveHook.call(doc, (err) => (err ? reject(err) : resolve()));
-  });
+  return global.__preSaveHook.call(doc);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

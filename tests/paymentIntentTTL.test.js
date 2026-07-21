@@ -10,9 +10,22 @@ const mockCollectionObj = {
   dropIndex:   jest.fn().mockResolvedValue({}),
   indexes:     jest.fn().mockResolvedValue([]),
 };
-jest.mock('mongoose', () => ({
-  connection: { collection: jest.fn(() => mockCollectionObj) },
-}));
+// Delegate to the real mongoose (so schema tests that build `new mongoose.Schema`
+// via jest.requireActual still work) but override connection.collection so the
+// migration tests hit our mock collection instead of a real (absent) DB.
+jest.mock('mongoose', () => {
+  const actual = jest.requireActual('mongoose');
+  actual.connection.collection = jest.fn(() => mockCollectionObj);
+  return actual;
+});
+// The migration and models under backend/ require the DUPLICATE
+// backend/node_modules/mongoose copy, which the bare 'mongoose' mock above does
+// not reach — mock it the same way so both copies share the mock collection.
+jest.mock('../backend/node_modules/mongoose', () => {
+  const actual = jest.requireActual('../backend/node_modules/mongoose');
+  actual.connection.collection = jest.fn(() => mockCollectionObj);
+  return actual;
+});
 
 describe('paymentIntentModel — TTL index on createdAt', () => {
   const ORIGINAL_TTL = process.env.PAYMENT_INTENT_TTL_SECONDS;

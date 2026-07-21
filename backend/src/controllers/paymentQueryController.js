@@ -44,7 +44,7 @@ async function getAcceptedAssets(req, res, next) {
 
 async function getPaymentLimitsEndpoint(req, res, next) {
   try {
-    const limits = getPaymentLimits();
+    const limits = await getPaymentLimits({ schoolId: req.schoolId });
     res.json({
       min: limits.min,
       max: limits.max,
@@ -128,7 +128,7 @@ async function getAllPayments(req, res, next) {
     if (isSuspicious !== undefined) filter.isSuspicious = isSuspicious === 'true';
 
     const pageNum = Math.max(1, parseInt(page, 10));
-    const pageSize = Math.min(200, Math.max(1, parseInt(limit, 10)));
+    const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10)));
     const skip = (pageNum - 1) * pageSize;
 
     const [payments, total] = await Promise.all([
@@ -161,7 +161,7 @@ async function getAllPayments(req, res, next) {
 async function getOverpayments(req, res, next) {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (page - 1) * limit;
 
     const filter = { schoolId: req.schoolId, feeValidationStatus: 'overpaid' };
@@ -264,8 +264,28 @@ async function getStudentBalance(req, res, next) {
 
 async function getSuspiciousPayments(req, res, next) {
   try {
-    const suspicious = await Payment.find({ schoolId: req.schoolId, isSuspicious: true }).sort({ confirmedAt: -1 });
-    res.json({ count: suspicious.length, suspicious });
+    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const skip = (pageNum - 1) * pageSize;
+    const filter = { schoolId: req.schoolId, isSuspicious: true };
+
+    const [suspicious, total] = await Promise.all([
+      Payment.find(filter).sort({ confirmedAt: -1 }).skip(skip).limit(pageSize),
+      Payment.countDocuments(filter),
+    ]);
+
+    res.json({
+      count: suspicious.length,
+      suspicious,
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: pageNum < Math.ceil(total / pageSize),
+        hasPrev: pageNum > 1,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -274,7 +294,7 @@ async function getSuspiciousPayments(req, res, next) {
 async function getPendingPayments(req, res, next) {
   try {
     const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const skip = (pageNum - 1) * pageSize;
     const filter = { schoolId: req.schoolId, confirmationStatus: 'pending_confirmation' };
 

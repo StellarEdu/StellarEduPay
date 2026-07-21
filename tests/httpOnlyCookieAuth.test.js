@@ -29,6 +29,12 @@ jest.mock('jsonwebtoken', () => ({
   },
 }), { virtual: true });
 
+// The auth-failure path awaits logAudit(); without this mock it would try to
+// write to a (nonexistent) Mongo and the request hangs until the test times out.
+jest.mock('../backend/src/services/auditService', () => ({
+  logAudit: jest.fn().mockResolvedValue(undefined),
+}));
+
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const request = require('supertest');
@@ -135,8 +141,11 @@ describe('HttpOnly cookie JWT — backend', () => {
       .get('/api/auth/me')
       .set('Cookie', cookie);
 
+    // The frontend treats a 200 from /auth/me as "is admin" (it reads r.ok, not
+    // a body flag). handleMe returns the session's roles rather than an isAdmin
+    // field, so assert the admin role is present.
     expect(meRes.status).toBe(200);
-    expect(meRes.body.isAdmin).toBe(true);
+    expect(meRes.body.roles).toEqual(expect.arrayContaining(['super_admin']));
   });
 });
 

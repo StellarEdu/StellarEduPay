@@ -5,17 +5,24 @@ process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NA
 
 // Jest hoists jest.mock() — variable must be prefixed with 'mock' to be accessible inside factory
 const mockAxiosPost = jest.fn();
-jest.mock('axios', () => ({ post: mockAxiosPost }));
+// The service sends via an axios instance (axios.create().post), so create()
+// must return an object whose post is the same spy the tests assert on.
+jest.mock('axios', () => ({ post: mockAxiosPost, create: () => ({ post: mockAxiosPost }) }));
 jest.mock('uuid', () => ({ v4: () => 'test-uuid-1234' }));
 
 jest.mock('../backend/src/models/webhookRetryModel', () => ({
   create: jest.fn(),
   find: jest.fn(),
   updateOne: jest.fn(),
+  // Issue #74: pending retries are now claimed atomically via findOneAndUpdate
+  // (lease model), and stuck leases are recovered the same way.
+  findOneAndUpdate: jest.fn(),
 }));
 
 jest.mock('../backend/src/utils/validateWebhookUrl', () => ({
   validateWebhookUrl: jest.fn().mockResolvedValue({ valid: true }),
+  // Send-time SSRF re-check; { blocked: false } means the resolved IP is allowed.
+  validateResolvedIp: jest.fn().mockReturnValue({ blocked: false }),
 }));
 
 jest.mock('../backend/src/utils/logger', () => ({
@@ -50,6 +57,8 @@ beforeEach(() => {
   WebhookRetry.create.mockResolvedValue({ ...BASE_DOC });
   WebhookRetry.find.mockReturnValue({ limit: jest.fn().mockResolvedValue([]) });
   WebhookRetry.updateOne.mockResolvedValue({});
+  // Default: nothing stuck and nothing pending to claim.
+  WebhookRetry.findOneAndUpdate.mockResolvedValue(null);
 });
 
 // ─── getBackoffDelay ──────────────────────────────────────────────────────────
@@ -118,7 +127,9 @@ describe('retryWebhook', () => {
     await retryWebhook({ ...BASE_DOC, attemptCount: 0, maxAttempts: 3 });
 
     const setFields = WebhookRetry.updateOne.mock.calls[0][1].$set;
-    expect(setFields.status).toBeUndefined();
+    // When attempts remain the delivery is re-queued (status back to 'pending'),
+    // never marked 'failed'.
+    expect(setFields.status).not.toBe('failed');
     expect(setFields.nextRetryAt).toBeInstanceOf(Date);
   });
 
@@ -137,13 +148,20 @@ describe('retryWebhook', () => {
 describe('processPendingRetries', () => {
   test('processes pending retries and returns count', async () => {
     mockAxiosPost.mockResolvedValue({ status: 200 });
-    WebhookRetry.find.mockReturnValueOnce({ limit: jest.fn().mockResolvedValue([{ ...BASE_DOC }]) });
+    // #74: recoverStuckLeases finds nothing (null), then one pending retry is
+    // claimed atomically, then no more.
+    WebhookRetry.findOneAndUpdate
+      .mockResolvedValueOnce(null)              // recoverStuckLeases: none stuck
+      .mockResolvedValueOnce({ ...BASE_DOC })   // claim one pending retry
+      .mockResolvedValueOnce(null);             // no more pending
 
     const result = await processPendingRetries();
     expect(result.processed).toBe(1);
   });
 
   test('returns 0 when no retries are pending', async () => {
+    // findOneAndUpdate returns null for both stuck-lease recovery and claiming.
+    WebhookRetry.findOneAndUpdate.mockResolvedValue(null);
     const result = await processPendingRetries();
     expect(result.processed).toBe(0);
   });

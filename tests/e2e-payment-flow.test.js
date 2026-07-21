@@ -11,10 +11,10 @@
  *   1. Payment intent creation
  *   2. Exact payment (valid)         → feeValidationStatus: 'valid'
  *   3. Overpayment                   → feeValidationStatus: 'overpaid'
- *   4. Underpayment                  → 400 UNDERPAID
+ *   4. Underpayment                  → recorded as 'partial' (#846)
  *   5. Duplicate transaction hash    → 200 cached: true
  *   6. Missing memo                  → 400 MISSING_MEMO
- *   7. Expired payment intent        → 410 INTENT_EXPIRED
+ *   7. Expired payment intent        → recorded anyway, intent marked expired (#848)
  *   8. Sync flow                     → student feePaid updated after sync
  *   9. txHash missing/null/empty     → 400 VALIDATION_ERROR  (#582)
  */
@@ -355,8 +355,11 @@ describe('E2E Scenario 2 — overpayment', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario 3: Underpayment — rejected with UNDERPAID
 // ─────────────────────────────────────────────────────────────────────────────
-describe('E2E Scenario 3 — underpayment (UNDERPAID)', () => {
-  test('verifyPayment calls next() with UNDERPAID error and does NOT record payment', async () => {
+describe('E2E Scenario 3 — underpayment (accepted as partial)', () => {
+  // #846: a single payment below the fee is no longer rejected — a parent may be
+  // paying in installments and the money is already on-chain. The cumulative
+  // total drives the status, so an under-fee amount is recorded as 'partial'.
+  test('verifyPayment records the payment as "partial" and does NOT reject', async () => {
     mockVerifyTransaction.mockResolvedValueOnce(txResult({
       hash: UNDER_HASH,
       amount: 100,
@@ -370,11 +373,13 @@ describe('E2E Scenario 3 — underpayment (UNDERPAID)', () => {
 
     await verifyPayment(req, res, next);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0];
-    expect(err.code).toBe('UNDERPAID');
-    expect(err.status).toBe(400);
-    expect(mockRecordPayment).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    const body = res.json.mock.calls[0][0];
+    expect(body.verified).toBe(true);
+    expect(body.feeValidation.status).toBe('partial');
+    expect(mockRecordPayment).toHaveBeenCalledWith(
+      expect.objectContaining({ feeValidationStatus: 'partial', excessAmount: 0 })
+    );
   });
 });
 
@@ -446,8 +451,11 @@ describe('E2E Scenario 5 — missing memo (MISSING_MEMO)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenario 6: Expired payment intent — rejected with INTENT_EXPIRED
 // ─────────────────────────────────────────────────────────────────────────────
-describe('E2E Scenario 6 — expired payment intent (INTENT_EXPIRED)', () => {
-  test('verifyPayment calls next() with INTENT_EXPIRED (410) when the intent has passed its TTL', async () => {
+describe('E2E Scenario 6 — expired payment intent (recorded anyway)', () => {
+  // #848: intents are a UX convenience; an expired intent must not block
+  // crediting a payment that already settled on-chain. The intent is marked
+  // expired for bookkeeping, but the payment is still recorded.
+  test('verifyPayment records the payment and marks the intent expired without rejecting', async () => {
     mockVerifyTransaction.mockResolvedValueOnce(txResult({ hash: EXP_HASH }));
     mockIntentFindOne.mockResolvedValueOnce(freshIntent({
       expiresAt: new Date(Date.now() - 1000), // expired 1 second ago
@@ -459,12 +467,11 @@ describe('E2E Scenario 6 — expired payment intent (INTENT_EXPIRED)', () => {
 
     await verifyPayment(req, res, next);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0];
-    expect(err.code).toBe('INTENT_EXPIRED');
-    expect(err.status).toBe(410);
-    expect(mockRecordPayment).not.toHaveBeenCalled();
-    // The intent should be marked expired in the DB
+    expect(next).not.toHaveBeenCalled();
+    const body = res.json.mock.calls[0][0];
+    expect(body.verified).toBe(true);
+    expect(mockRecordPayment).toHaveBeenCalled();
+    // The intent is still marked expired in the DB for bookkeeping.
     expect(mockIntentFindByIdUpdate).toHaveBeenCalledWith('intent001', { status: 'expired' });
   });
 });

@@ -21,6 +21,7 @@ const { server } = require('../config/stellarConfig');
 const { ACCEPTED_ASSETS } = require('../config/stellarConfig');
 const { validateTransactionHash } = require('../utils/hashValidator');
 const { getPaymentLimits, validatePaymentAmount } = require('../utils/paymentLimits');
+const { SUPPORTED_MEMO_TYPES } = require('../utils/stellarMemo');
 const { convertToLocalCurrency } = require('../services/currencyConversionService');
 const { withStellarRetry } = require('../utils/withStellarRetry');
 const { makePaymentAuditLogger } = require('../utils/paymentAuditLogger');
@@ -59,7 +60,6 @@ function wrapStellarError(err) {
 // ====================== PAYMENT INSTRUCTIONS ======================
 async function getPaymentInstructions(req, res, next) {
   try {
-    const limits = getPaymentLimits();
     const targetCurrency = req.school.localCurrency || 'USD';
     const { feeCategory, asset } = req.query;
 
@@ -70,6 +70,12 @@ async function getPaymentInstructions(req, res, next) {
         return res.status(400).json({ error: `Asset ${assetCode} is not accepted by this school`, code: 'ASSET_NOT_ACCEPTED', supportedAssets });
       }
     }
+
+    // Resolved after the asset is known so per-asset limits apply (#1117).
+    const limits = await getPaymentLimits({
+      schoolId: req.schoolId,
+      asset: asset ? asset.split(':')[0] : undefined,
+    });
 
     const student = await Student.findOne({ schoolId: req.schoolId, studentId: req.params.studentId });
 
@@ -105,8 +111,12 @@ async function getPaymentInstructions(req, res, next) {
       feeLocalEquivalent: feeConversion?.available
         ? { amount: feeConversion.localAmount, currency: feeConversion.currency, rate: feeConversion.rate, rateTimestamp: feeConversion.rateTimestamp }
         : null,
-      note: 'Include the payment intent memo exactly when sending payment. The memo must be sent as a text memo (MEMO_TEXT). Other memo types (MEMO_ID, MEMO_HASH, MEMO_RETURN) will not be recognised and your payment will not be matched.',
+      note: 'Include the payment intent memo exactly when sending payment. MEMO_TEXT is recommended; wallets that cannot send text memos may use MEMO_ID or MEMO_HASH with the encoded form of the same reference. MEMO_RETURN is not recognised and such payments will not be matched.',
+      // `memoType` keeps its original 'text' spelling — it is part of the
+      // published API response and existing clients compare against it
+      // directly. New clients should read `supportedMemoTypes` (#1118).
       memoType: 'text',
+      supportedMemoTypes: SUPPORTED_MEMO_TYPES,
     });
   } catch (err) {
     next(err);
@@ -132,7 +142,7 @@ async function createPaymentIntent(req, res, next) {
       categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: fee.remainingBalance || fee.amount };
     }
 
-    const limitValidation = validatePaymentAmount(feeAmount);
+    const limitValidation = await validatePaymentAmount(feeAmount, { schoolId });
     if (!limitValidation.valid) return res.status(400).json({ error: limitValidation.error, code: limitValidation.code });
 
     const memo = crypto.randomBytes(4).toString('hex').toUpperCase();
@@ -291,10 +301,13 @@ async function verifyPayment(req, res, next) {
     // dedup guard.  The lock is keyed per (school, txHash) so only identical
     // concurrent verify calls contend — different hashes proceed in parallel.
     const verifyLockKey = `sync:lock:${schoolId}:verify:${normalizedHash}`;
-    const verifyToken = await lock.acquire(verifyLockKey, VERIFY_LOCK_TTL_MS);
-    if (!verifyToken) {
+    // acquire() returns { token, fencingToken } (or null); release() needs the
+    // raw token string, so destructure it — otherwise the lock never releases.
+    const verifyLockInfo = await lock.acquire(verifyLockKey, VERIFY_LOCK_TTL_MS);
+    if (!verifyLockInfo) {
       return res.status(409).json({ error: 'Sync already in progress', code: 'SYNC_IN_PROGRESS' });
     }
+    const verifyToken = verifyLockInfo.token;
 
     try {
       let result;

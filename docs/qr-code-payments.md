@@ -11,14 +11,44 @@ The QR code payment feature allows parents to scan a QR code with their Stellar-
 The QR code encodes a Stellar payment URI following the [SEP-0007 specification](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0007.md):
 
 ```
-web+stellar:pay?destination=<WALLET_ADDRESS>&amount=<AMOUNT>&memo=<MEMO>&memo_type=TEXT
+web+stellar:pay?destination=<WALLET_ADDRESS>&amount=<AMOUNT>&memo=<MEMO>&memo_type=MEMO_TEXT
 ```
 
 ### Components
 
 1. **stellarUri.js** - Utility function to generate SEP-0007 compliant payment URIs
-2. **PaymentForm.jsx** - Updated to display QR code after student lookup
-3. **qrcode.react** - Library used to render QR codes as SVG
+2. **stellarMemo.js** - Encodes/decodes the payment reference across memo types
+3. **PaymentForm.jsx** - Updated to display QR code after student lookup
+4. **qrcode.react** - Library used to render QR codes as SVG
+
+### Memo types
+
+Most wallets accept a free-text memo, but some — particularly exchange-style and
+programmatic integrations — can only send a numeric or hash memo. The QR code
+therefore offers the payment reference in three interchangeable forms:
+
+| Memo type   | Wire form for reference `A3F91B2C` | Notes |
+| ----------- | ---------------------------------- | ----- |
+| `MEMO_TEXT` | `A3F91B2C`                         | Default. Sent verbatim, 28-byte on-chain limit. |
+| `MEMO_ID`   | `2751011628`                       | The same 32-bit value as an unsigned decimal. |
+| `MEMO_HASH` | 32 bytes, base64                   | The value right-aligned in 32 bytes, zero-padded. |
+
+All three decode back to the identical reference, so payment matching stays a
+single lookup — there is no separate matching path per type. A memo type is only
+offered when the memo can actually be represented in it: a free-text memo such as
+a raw student ID has no numeric equivalent and is `MEMO_TEXT` only.
+
+`MEMO_RETURN` is **not** supported. It carries a 32-byte hash for refund routing
+and has no payment-reference encoding.
+
+Decoding deliberately rejects values that merely *look* plausible: a `MEMO_ID`
+above the 32-bit reference space (exchanges routinely use large routing IDs) and
+a `MEMO_HASH` whose padding bytes are non-zero both fail to decode rather than
+being truncated into a false match against an unrelated payment.
+
+The backend decoder in `backend/src/utils/stellarMemo.js` mirrors the frontend
+encoder. The two must stay in sync; `backend/tests/stellarMemo.test.js` pins the
+exact wire forms the frontend produces so a drift in either direction fails CI.
 
 ### Features
 
@@ -86,6 +116,5 @@ The network is determined by the backend configuration (`STELLAR_NETWORK` enviro
 ## Future Enhancements
 
 - Add download/share QR code functionality
-- Support for additional memo types (MEMO_ID, MEMO_HASH)
 - Dynamic QR code sizing based on screen size
 - Print-friendly QR code format for paper invoices

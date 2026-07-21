@@ -264,7 +264,7 @@ function parseTTL(envVar, defaultSeconds) {
 
 function extractDeviceInfo(req) {
   return {
-    userAgent: req.headers['user-agent'] || null,
+    userAgent: req.headers?.['user-agent'] || null,
     ip: req.ip || req.connection?.remoteAddress || null,
   };
 }
@@ -398,7 +398,7 @@ async function handleLogin(req, res) {
           return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
         }
         const User = require('../models/userModel');
-        User.findByIdAndUpdate(user._id, { $set: { [`mfaBackupCodes.${bcIdx].used`]: true } }).catch(() => logger.debug('[AuthController] mark user backup code used missed'));
+        User.findByIdAndUpdate(user._id, { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }).catch(() => logger.debug('[AuthController] mark user backup code used missed'));
       }
     } else if (user.schoolId) {
       const School = require('../models/schoolModel');
@@ -423,7 +423,7 @@ async function handleLogin(req, res) {
           school.mfaBackupCodes[bcIdx].used = true;
           School.findOneAndUpdate(
             { schoolId: user.schoolId },
-            { $set: { [`mfaBackupCodes.${bcIdx].used`]: true } }
+            { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }
           ).catch(() => logger.debug('[AuthController] mark school backup code used missed'));
         }
       }

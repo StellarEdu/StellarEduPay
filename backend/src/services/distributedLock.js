@@ -297,4 +297,6 @@ module.exports = {
   close,
   _isRedisEnabled: () => Boolean(client),
   _getFenceKey: getFenceKey,
+  // Test-only: clear the in-process fallback lock map between test cases.
+  _resetLocalLocks: () => localLocks.clear(),
 };

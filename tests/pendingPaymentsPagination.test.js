@@ -123,12 +123,12 @@ describe('#639 getPendingPayments pagination', () => {
     });
   });
 
-  it('caps limit at 200', async () => {
+  it('caps limit at 100', async () => {
     _mockDocs = [];
     _mockTotal = 0;
 
     await getPendingPayments(mockReq({ limit: '9999' }), mockRes(), jest.fn());
 
-    expect(_lastLimit).toBe(200);
+    expect(_lastLimit).toBe(100);
   });
 });
