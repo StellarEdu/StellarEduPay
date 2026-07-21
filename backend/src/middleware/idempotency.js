@@ -3,6 +3,7 @@
 const { deriveIdempotencyKey, fingerprintRequest } = require('../utils/idempotencyKey');
 const idempotencyStore = require('../services/idempotencyStore');
 const currencyConversionService = require('../services/currencyConversionService');
+const logger = require('../utils/logger').child('Idempotency');
 
 /**
  * Idempotency middleware.
@@ -76,7 +77,6 @@ async function refreshVolatileFields(body) {
       },
     };
   } catch (err) {
-    const logger = require('../utils/logger').child('Idempotency');
     logger.warn('Failed to refresh currency rate on idempotent replay, serving cached value', {
       error: err.message,
     });
@@ -157,12 +157,13 @@ function idempotency(req, res, next) {
                     fingerprint,
                   })
                   .catch((err) => {
-                    const logger = require('../utils/logger').child('Idempotency');
                     logger.error('Failed to cache response', { error: err.message });
                   });
             } else {
               // 5xx is never cached — release the reservation so the client can retry.
-              idempotencyStore.release(canonicalKey).catch(() => logger.debug('[Idempotency] release missed'));
+              idempotencyStore.release(canonicalKey).catch((err) => {
+                logger.debug('[Idempotency] release missed', { error: err.message });
+              });
             }
             return originalJson(body);
           };
@@ -171,7 +172,6 @@ function idempotency(req, res, next) {
         });
     })
     .catch((err) => {
-      const logger = require('../utils/logger').child('Idempotency');
       logger.error('store operation failed', { error: err.message });
       // Fail open — let the request through rather than blocking the user.
       next();
