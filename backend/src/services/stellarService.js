@@ -1008,6 +1008,9 @@ module.exports = {
   detectAbnormalPatterns,
   computeHistoricalAmountStats,
   checkConfirmationStatus,
+  // Consumed by transactionPollingService (import + call) and covered by tests —
+  // must be exported or those callers invoke `undefined`.
+  determineConfirmationState,
   // recordPayment was moved to transactionService.savePayment (db layer split);
   // re-exported under its original name since paymentController, retryService,
   // transactionQueueService, and transactionRetryQueue still import it from here.

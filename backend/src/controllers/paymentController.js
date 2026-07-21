@@ -291,10 +291,13 @@ async function verifyPayment(req, res, next) {
     // dedup guard.  The lock is keyed per (school, txHash) so only identical
     // concurrent verify calls contend — different hashes proceed in parallel.
     const verifyLockKey = `sync:lock:${schoolId}:verify:${normalizedHash}`;
-    const verifyToken = await lock.acquire(verifyLockKey, VERIFY_LOCK_TTL_MS);
-    if (!verifyToken) {
+    // acquire() returns { token, fencingToken } (or null); release() needs the
+    // raw token string, so destructure it — otherwise the lock never releases.
+    const verifyLockInfo = await lock.acquire(verifyLockKey, VERIFY_LOCK_TTL_MS);
+    if (!verifyLockInfo) {
       return res.status(409).json({ error: 'Sync already in progress', code: 'SYNC_IN_PROGRESS' });
     }
+    const verifyToken = verifyLockInfo.token;
 
     try {
       let result;

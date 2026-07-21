@@ -20,6 +20,10 @@ jest.mock('../src/config/index', () => ({
   STELLAR_TIMEOUT_MS: 3000,
   CONFIRMATION_THRESHOLD: 2,
   FINALIZATION_THRESHOLD: 10,
+  // paymentLimits.js (loaded transitively via stellarService) builds Decimals
+  // from these at module load — omitting them throws [DecimalError] undefined.
+  MIN_PAYMENT_AMOUNT: 0.01,
+  MAX_PAYMENT_AMOUNT: 100000,
 }));
 
 const mockLedgerCall = jest.fn();

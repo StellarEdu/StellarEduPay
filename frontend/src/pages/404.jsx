@@ -22,7 +22,7 @@ export default function Custom404() {
           font-weight: 900;
           letter-spacing: -0.06em;
           line-height: 1;
-          background: linear-gradient(135deg, #7ec8e3 0%, #6366f1 100%);
+          background: linear-gradient(135deg, #34d399 0%, #059669 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;

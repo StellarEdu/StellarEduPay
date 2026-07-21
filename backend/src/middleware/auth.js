@@ -59,9 +59,14 @@ async function requireAdminAuth(req, res, next) {
   const token = cookieToken || bearerToken;
 
   if (!token) {
+    // A missing credential is "not logged in yet", not a brute-force attempt —
+    // there is nothing to guess. Counting it would let normal logged-out page
+    // loads (e.g. an /auth/me probe) self-trigger the IP block. Forged/invalid
+    // tokens and bad login credentials still count below.
     return handleAuthFailure(req, res, ip,
       'Authentication required. Provide an admin session cookie or Bearer token.',
-      'MISSING_AUTH_TOKEN'
+      'MISSING_AUTH_TOKEN',
+      { countTowardsBlock: false }
     );
   }
 
@@ -83,6 +88,7 @@ async function requireAdminAuth(req, res, next) {
     }
 
     req.admin = decoded;
+    req.user = decoded; // alias so downstream code works regardless of which middleware ran
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -120,9 +126,11 @@ function requireSchoolAuth(allowedRoles = []) {
     const token = cookieToken || bearerToken;
 
     if (!token) {
+      // See requireAdminAuth: a missing credential is not a brute-force attempt.
       return handleAuthFailure(req, res, ip,
         'Authentication required.',
-        'MISSING_AUTH_TOKEN'
+        'MISSING_AUTH_TOKEN',
+        { countTowardsBlock: false }
       );
     }
 

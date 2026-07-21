@@ -205,7 +205,9 @@ describe('ReportDownload component source – acceptance criteria', () => {
   test('has visible labels for Start Date and End Date', () => {
     expect(src).toMatch(/Start Date/);
     expect(src).toMatch(/End Date/);
-    expect(src).toMatch(/display.*block/);
+    // Post-revamp the labels use the shared design-system class rather than an
+    // inline display:block style.
+    expect(src).toMatch(/className="form-label"/);
   });
 
   test('shows loading state: disabled button and "Generating…" text', () => {
@@ -215,7 +217,9 @@ describe('ReportDownload component source – acceptance criteria', () => {
 
   test('shows error state with red background', () => {
     expect(src).toMatch(/{error}/);
-    expect(src).toMatch(/#fee2e2/);
+    // Post-revamp the red error background comes from the shared alert-danger
+    // class (CSS variables) rather than a hard-coded #fee2e2 hex.
+    expect(src).toMatch(/alert-danger/);
   });
 
   test('renders all 6 summary stat fields', () => {
@@ -223,8 +227,12 @@ describe('ReportDownload component source – acceptance criteria', () => {
       .forEach(field => expect(src).toMatch(field));
   });
 
-  test('has CSV download button calling getReportCsvUrl', () => {
-    expect(src).toMatch(/getReportCsvUrl/);
+  test('has CSV download button that triggers a CSV export', () => {
+    // Post-revamp the CSV export is an inline credentialed fetch (handleCsv)
+    // that requests the reports endpoint with format=csv, rather than the
+    // getReportCsvUrl helper.
+    expect(src).toMatch(/handleCsv/);
+    expect(src).toMatch(/format:\s*["']csv["']/);
     expect(src).toMatch(/Download CSV/);
   });
 
@@ -236,12 +244,12 @@ describe('ReportDownload component source – acceptance criteria', () => {
   });
 
   test('download filename includes date range when both dates set', () => {
-    expect(src).toMatch(/report-\$\{startDate\}-to-\$\{endDate\}\.csv/);
+    expect(src).toMatch(/report-\$\{startDate\}_to_\$\{endDate\}\.csv/);
     expect(src).toMatch(/report-all-time\.csv/);
   });
 
-  test('imports getReport and getReportCsvUrl from api service', () => {
-    expect(src).toMatch(/import.*getReport.*getReportCsvUrl.*from/);
+  test('imports getReport from api service', () => {
+    expect(src).toMatch(/import\s*\{\s*getReport\s*\}\s*from/);
   });
 
   test('reports.jsx page renders ReportDownload with page title', () => {

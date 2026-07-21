@@ -43,9 +43,23 @@ jest.mock('../backend/src/models/paymentModel', () => ({
   aggregate: mockPaymentAggregate,
 }));
 
+// ReminderLog is a real mongoose model — its create()/updateOne() never resolve
+// without a DB and hang the eligible send path. Mock the idempotency store.
+jest.mock('../backend/src/models/reminderLogModel', () => ({
+  create:    jest.fn().mockResolvedValue({}),
+  updateOne: jest.fn().mockResolvedValue({}),
+}));
+
+// The email service's suppression check hits a real mongoose model
+// (EmailSuppression.findOne) that never resolves without a DB. Neutralise it so
+// delivery proceeds to the (mocked) nodemailer smtp provider.
+jest.mock('../backend/src/services/email/suppressionList', () => ({
+  isSuppressed: jest.fn().mockResolvedValue(false),
+}));
+
 jest.mock('../backend/src/utils/logger', () => {
   const noop = () => {};
-  const logger = { info: noop, warn: noop, error: noop, child: () => logger, getLevel: () => 'info' };
+  const logger = { info: noop, warn: noop, error: noop, debug: noop, child: () => logger, getLevel: () => 'info' };
   return logger;
 });
 

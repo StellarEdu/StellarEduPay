@@ -13,6 +13,8 @@ jest.mock('../src/config/index', () => ({
   IS_TESTNET: true,
   HORIZON_URL: 'https://horizon-testnet.stellar.org',
   STELLAR_TIMEOUT_MS: 3000,
+  MIN_PAYMENT_AMOUNT: 0.01,
+  MAX_PAYMENT_AMOUNT: 100000,
 }));
 
 jest.mock('../src/config/stellarConfig', () => ({

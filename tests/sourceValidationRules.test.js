@@ -17,11 +17,15 @@ jest.mock('mongoose', () => ({
   model: jest.fn().mockReturnValue({}),
 }));
 
+jest.mock('../backend/src/services/auditService', () => ({
+  logAudit: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('../backend/src/models/sourceValidationRuleModel', () => ({
-  create:            jest.fn(),
-  find:              jest.fn(),
-  findOne:           jest.fn(),
-  findByIdAndDelete: jest.fn(),
+  create:           jest.fn(),
+  find:             jest.fn(),
+  findOne:          jest.fn(),
+  findOneAndDelete: jest.fn(),
 }));
 
 // Minimal stubs for models loaded transitively by app.js
@@ -100,7 +104,9 @@ const ADMIN_TOKEN = require('jsonwebtoken').sign({ role: 'admin', sub: 'admin-1'
 const USER_TOKEN  = require('jsonwebtoken').sign({ role: 'user',  sub: 'user-1'  }, 'test-secret', { expiresIn: '1h' });
 
 function adminApi(method, path) {
-  return request(app)[method](path).set('Authorization', `Bearer ${ADMIN_TOKEN}`);
+  return request(app)[method](path)
+    .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
+    .set('X-School-ID', 'SCH001');
 }
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -232,14 +238,15 @@ describe('POST /api/source-rules — create a rule', () => {
   });
 
   test('401 — unauthenticated request is rejected', async () => {
-    const res = await request(app).post('/api/source-rules').send({
-      name: 'test', type: 'blacklist', value: 'GXXX',
-    });
+    const res = await request(app).post('/api/source-rules')
+      .set('X-School-ID', 'SCH001')
+      .send({ name: 'test', type: 'blacklist', value: 'GXXX' });
     expect(res.status).toBe(401);
   });
 
   test('403 — non-admin token is rejected', async () => {
     const res = await request(app).post('/api/source-rules')
+      .set('X-School-ID', 'SCH001')
       .set('Authorization', `Bearer ${USER_TOKEN}`)
       .send({ name: 'test', type: 'blacklist', value: 'GXXX' });
     expect(res.status).toBe(403);
@@ -302,7 +309,7 @@ describe('GET /api/source-rules — list rules', () => {
   });
 
   test('401 — unauthenticated request is rejected', async () => {
-    const res = await request(app).get('/api/source-rules');
+    const res = await request(app).get('/api/source-rules').set('X-School-ID', 'SCH001');
     expect(res.status).toBe(401);
   });
 });
@@ -318,7 +325,7 @@ describe('DELETE /api/source-rules/:id — delete a rule', () => {
   });
 
   test('200 — deletes an existing rule', async () => {
-    SourceValidationRule.findByIdAndDelete.mockResolvedValueOnce(MOCK_RULE);
+    SourceValidationRule.findOneAndDelete.mockResolvedValueOnce(MOCK_RULE);
 
     const res = await adminApi('delete', `/api/source-rules/${MOCK_RULE._id}`);
 
@@ -328,7 +335,7 @@ describe('DELETE /api/source-rules/:id — delete a rule', () => {
   });
 
   test('404 — rule not found', async () => {
-    SourceValidationRule.findByIdAndDelete.mockResolvedValueOnce(null);
+    SourceValidationRule.findOneAndDelete.mockResolvedValueOnce(null);
 
     const res = await adminApi('delete', '/api/source-rules/000000000000000000000000');
 
@@ -337,12 +344,14 @@ describe('DELETE /api/source-rules/:id — delete a rule', () => {
   });
 
   test('401 — unauthenticated request is rejected', async () => {
-    const res = await request(app).delete(`/api/source-rules/${MOCK_RULE._id}`);
+    const res = await request(app).delete(`/api/source-rules/${MOCK_RULE._id}`)
+      .set('X-School-ID', 'SCH001');
     expect(res.status).toBe(401);
   });
 
   test('403 — non-admin token is rejected', async () => {
     const res = await request(app).delete(`/api/source-rules/${MOCK_RULE._id}`)
+      .set('X-School-ID', 'SCH001')
       .set('Authorization', `Bearer ${USER_TOKEN}`);
     expect(res.status).toBe(403);
   });

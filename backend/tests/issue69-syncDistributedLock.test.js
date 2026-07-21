@@ -107,7 +107,7 @@ describe('Issue #69 — syncAllPayments distributed lock', () => {
 
   it('acquires and releases the distributed lock when proceeding', async () => {
     const token = 'tok-abc123';
-    mockAcquireImpl.mockResolvedValue(token);
+    mockAcquireImpl.mockResolvedValue({ token, fencingToken: 1 });
     mockReleaseImpl.mockResolvedValue(true);
 
     const req = buildReq('school-2');
@@ -133,7 +133,7 @@ describe('Issue #69 — syncAllPayments distributed lock', () => {
 
   it('releases the lock even when syncPaymentsForSchool throws', async () => {
     const token = 'tok-err';
-    mockAcquireImpl.mockResolvedValue(token);
+    mockAcquireImpl.mockResolvedValue({ token, fencingToken: 1 });
     mockReleaseImpl.mockResolvedValue(true);
 
     const { syncPaymentsForSchool } = require('../src/services/stellarService');

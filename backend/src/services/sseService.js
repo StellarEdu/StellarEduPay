@@ -124,6 +124,14 @@ function addClient(schoolId, res) {
   }, HEARTBEAT_MS);
   if (typeof res._sseHeartbeat.unref === 'function') res._sseHeartbeat.unref();
 
+  // Self-clean when the underlying connection closes so a dropped client is
+  // never broadcast to again. Idempotent with any req.on('close') the caller
+  // (e.g. the SSE controller) may also register — removeClient is a no-op the
+  // second time.
+  if (typeof res.on === 'function') {
+    res.on('close', () => removeClient(schoolId, res));
+  }
+
   return true;
 }
 

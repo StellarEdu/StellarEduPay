@@ -51,8 +51,12 @@ jest.mock('../backend/src/middleware/auth', () => ({
 }));
 
 // ── Speakeasy mock ────────────────────────────────────────────────────────────
+// The controller under test resolves `speakeasy` from backend/node_modules
+// while this test file resolves it from the repo-root node_modules. These are
+// two different module instances, so we must register the mock against BOTH
+// resolved paths (see [[duplicate-mongoose-test-mocking]]).
 
-jest.mock('speakeasy', () => ({
+const mockSpeakeasyFactory = () => ({
   generateSecret: jest.fn().mockReturnValue({
     // Real speakeasy uses `base32`; controller accepts both for compat
     base32: 'JBSWY3DPEBLW64TMMQ======',
@@ -65,7 +69,10 @@ jest.mock('speakeasy', () => ({
              opts.token === '123456';
     }),
   },
-}));
+});
+
+jest.mock('speakeasy', () => mockSpeakeasyFactory());
+jest.mock('../backend/node_modules/speakeasy', () => mockSpeakeasyFactory());
 
 // ── bcryptjs mock ─────────────────────────────────────────────────────────────
 
@@ -120,9 +127,19 @@ jest.mock('../backend/src/models/schoolModel', () => {
 
 // ── Audit log mock ────────────────────────────────────────────────────────────
 
-jest.mock('../backend/src/models/auditLogModel', () => ({
-  create: jest.fn().mockResolvedValue({ _id: 'log-001' }),
-}));
+jest.mock('../backend/src/models/auditLogModel', () => {
+  // _getPrevHash chains findOne().sort().select().lean().bypassTenantScope()
+  const chain = {
+    sort: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockReturnThis(),
+    bypassTenantScope: jest.fn().mockResolvedValue(null),
+  };
+  return {
+    create: jest.fn().mockResolvedValue({ _id: 'log-001' }),
+    findOne: jest.fn(() => chain),
+  };
+});
 
 const app = require('../backend/src/app');
 
@@ -284,7 +301,9 @@ describe('MFA TOTP Support (#673)', () => {
         })
         .expect(200);
 
-      expect(res.body).toHaveProperty('token');
+      // #821 — the JWT is delivered as an httpOnly admin_token cookie, not in the body.
+      const setCookie = res.headers['set-cookie'] || [];
+      expect(setCookie.some((c) => c.startsWith('admin_token='))).toBe(true);
     });
 
     it('should reject invalid TOTP code during login', async () => {
@@ -376,7 +395,9 @@ describe('MFA TOTP Support (#673)', () => {
         })
         .expect(200);
 
-      expect(res.body).toHaveProperty('token');
+      // #821 — the JWT is delivered as an httpOnly admin_token cookie, not in the body.
+      const setCookie = res.headers['set-cookie'] || [];
+      expect(setCookie.some((c) => c.startsWith('admin_token='))).toBe(true);
     });
 
     it('should mark backup code as used after login', async () => {
@@ -576,7 +597,9 @@ describe('MFA TOTP Support (#673)', () => {
         .send({ email: 'admin@test.com', password: 'password123', mfaCode: '123456' })
         .expect(200);
 
-      expect(res.body).toHaveProperty('token');
+      // #821 — the JWT is delivered as an httpOnly admin_token cookie, not in the body.
+      const setCookie = res.headers['set-cookie'] || [];
+      expect(setCookie.some((c) => c.startsWith('admin_token='))).toBe(true);
     });
 
     it('should reject login with an invalid TOTP code', async () => {
@@ -594,7 +617,9 @@ describe('MFA TOTP Support (#673)', () => {
         .send({ email: 'admin@test.com', password: 'password123', mfaCode: BACKUP_CODE })
         .expect(200);
 
-      expect(res.body).toHaveProperty('token');
+      // #821 — the JWT is delivered as an httpOnly admin_token cookie, not in the body.
+      const setCookie = res.headers['set-cookie'] || [];
+      expect(setCookie.some((c) => c.startsWith('admin_token='))).toBe(true);
     });
 
     it('should mark the user backup code as used after login', async () => {

@@ -22,7 +22,7 @@
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.SCHOOL_WALLET_ADDRESS = 'GCICZOP346CKADPWOZ6JAQ7OCGH44UELNS3GSDXFOTSZRW6OYZZ6KSY7B';
+process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 process.env.JWT_SECRET = 'test-secret-key-for-cross-tenant-tests';
 
 const request = require('supertest');
@@ -31,6 +31,7 @@ const request = require('supertest');
 
 jest.mock('../backend/src/middleware/auth', () => ({
   requireAdminAuth: (req, res, next) => next(),
+  requireSchoolAuth: () => (req, res, next) => next(),
 }));
 
 jest.mock('mongoose', () => {
@@ -125,6 +126,18 @@ jest.mock('../backend/src/models/schoolModel', () => ({
   findOne: jest.fn(),
 }));
 
+// getDashboardMetrics() lazily requires the rollup metrics models; mock them so
+// the dashboard query doesn't hit a real (unconnected) mongoose model.
+jest.mock('../backend/src/models/metricsModel', () => ({
+  DailyMetrics: {
+    findOne: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }),
+    aggregate: jest.fn().mockResolvedValue([]),
+  },
+  MonthlyMetrics: {
+    aggregate: jest.fn().mockResolvedValue([]),
+  },
+}));
+
 jest.mock('../backend/src/models/feeAdjustmentRuleModel', () => ({
   find: jest.fn(),
   findOne: jest.fn(),
@@ -139,7 +152,7 @@ jest.mock('../backend/src/models/paymentPlanModel', () => ({
 }));
 
 jest.mock('../backend/src/config/stellarConfig', () => ({
-  SCHOOL_WALLET: 'GCICZOP346CKADPWOZ6JAQ7OCGH44UELNS3GSDXFOTSZRW6OYZZ6KSY7B',
+  SCHOOL_WALLET: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
   ACCEPTED_ASSETS: {
     XLM:  { code: 'XLM',  type: 'native',          issuer: null },
     USDC: { code: 'USDC', type: 'credit_alphanum4', issuer: 'GISSUER' },
@@ -226,7 +239,7 @@ const SCHOOL_B = 'school-beta';
 function makeSchoolDoc(id) {
   return {
     _id: id, schoolId: id, slug: id, isActive: true,
-    stellarAddress: 'GCICZOP346CKADPWOZ6JAQ7OCGH44UELNS3GSDXFOTSZRW6OYZZ6KSY7B',
+    stellarAddress: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
     localCurrency: 'USD', timezone: 'UTC',
   };
 }
@@ -428,6 +441,8 @@ describe('Reports — cross-tenant isolation', () => {
 
       Payment.aggregate.mockResolvedValue([]);
       Payment.distinct.mockResolvedValue([]);
+      // reportService.getDataVersion() reads the latest payment via findOne().sort().lean()
+      Payment.findOne.mockReturnValue(makeChainable(null));
       Student.countDocuments.mockResolvedValue(0);
       Student.aggregate.mockResolvedValue([]);
     });

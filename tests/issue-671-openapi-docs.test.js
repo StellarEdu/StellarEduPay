@@ -1,5 +1,11 @@
 'use strict';
 
+// Set required env vars before app/config is loaded — config/index.js throws
+// without MONGO_URI.
+process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/test';
+process.env.SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+
 /**
  * Tests for Issue #671 — OpenAPI/Swagger documentation
  * Verifies OpenAPI spec is generated and served at /api/docs.json

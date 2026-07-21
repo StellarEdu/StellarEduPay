@@ -19,6 +19,7 @@ jest.mock('mongoose', () => ({
 jest.mock('../backend/src/models/feeAdjustmentRuleModel', () => ({
   create:            jest.fn(),
   find:              jest.fn(),
+  findOne:           jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }),
   findOneAndUpdate:  jest.fn(),
 }));
 
@@ -87,6 +88,11 @@ jest.mock('../backend/src/services/currencyConversionService', () => ({
   convertToLocalCurrency: jest.fn().mockResolvedValue({ available: false }),
   enrichPaymentWithConversion: jest.fn().mockImplementation((p) => Promise.resolve(p)),
   _getRates: jest.fn().mockResolvedValue(null),
+}));
+// The controller (and auth failure path) await logAudit, which writes to the real
+// AuditLog model — with no DB it never resolves and the request hangs to timeout.
+jest.mock('../backend/src/services/auditService', () => ({
+  logAudit: jest.fn().mockResolvedValue(undefined),
 }));
 
 const app = require('../backend/src/app');

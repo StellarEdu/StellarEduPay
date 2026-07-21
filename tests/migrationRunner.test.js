@@ -17,6 +17,16 @@ jest.mock('fs', () => ({
   readdirSync: () => mockFiles,
 }));
 
+// Mock the logger so winston's DailyRotateFile file transport never loads. With
+// fs stubbed above, letting winston initialise sends its log-rotation logic
+// (readdirSync/existsSync/mkdirSync on the log dir) into a CPU-bound infinite
+// loop that hangs the whole suite. The runner only logs progress, so a no-op
+// logger is sufficient here.
+jest.mock('../backend/src/utils/logger', () => {
+  const noop = () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() });
+  return { child: noop, ...noop() };
+});
+
 let mockFiles = [];
 
 const { runMigrations, rollback } = require('../backend/src/services/migrationRunner');

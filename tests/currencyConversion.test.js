@@ -79,7 +79,6 @@ async function test(name, fn) {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 it('currencyConversionService suite', async () => {
-(async () => {
   console.log('\nCurrencyConversionService\n');
   // Fresh require so cache starts empty
   delete require.cache[require.resolve('../backend/src/services/currencyConversionService')];
@@ -459,8 +458,7 @@ it('currencyConversionService suite', async () => {
   // ── Summary ───────────────────────────────────────────────────────────────
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
-  if (failed > 0) process.exit(1);
-})();
+  if (failed > 0) throw new Error(`${failed} currencyConversion assertion(s) failed`);
 }, 30000);
 
 // ── LRU standalone tests (top-level it() blocks) ─────────────────────────────

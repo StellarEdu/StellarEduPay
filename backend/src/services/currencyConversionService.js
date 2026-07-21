@@ -116,6 +116,8 @@ const _DEFAULT_ALLOWED_FIAT = new Set([
   "TWD", "DKK", "PLN", "THB", "IDR", "HUF", "CZK", "ILS", "CLP", "PHP",
   "AED", "COP", "SAR", "MYR", "RON", "PGK", "NGN", "GHS", "KES", "UGX",
   "TZS", "ETB", "RWF", "XOF", "XAF", "MAD", "EGP", "PKR", "BDT", "VND",
+  // 3-decimal (ISO 4217) currencies — kept in sync with CURRENCY_DECIMALS.
+  "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND",
 ]);
 
 /**
@@ -212,6 +214,14 @@ function _recordStaleness(provider, lastSuccessfulFetchMs) {
   _initMetrics();
   if (priceFeedStaleness && lastSuccessfulFetchMs) {
     priceFeedStaleness.set({ provider }, Math.floor((Date.now() - lastSuccessfulFetchMs) / 1000));
+  }
+}
+
+// Record the Unix timestamp (seconds) of a successful fetch for `provider`.
+function _recordLastSuccess(provider) {
+  _initMetrics();
+  if (priceFeedLastSuccessTimestamp) {
+    priceFeedLastSuccessTimestamp.set({ provider }, Math.floor(Date.now() / 1000));
   }
 }
 

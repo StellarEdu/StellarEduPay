@@ -15,6 +15,18 @@ let mockCreate;
 
 jest.mock('../backend/src/models/auditLogModel', () => ({
   create: (...args) => mockCreate(...args),
+  // logAudit computes a hash-chain prev via _getPrevHash:
+  // findOne().sort().select().lean().bypassTenantScope() — stub the chain so it
+  // resolves to null (no previous entry) instead of throwing before create runs.
+  findOne: () => ({
+    sort: () => ({
+      select: () => ({
+        lean: () => ({
+          bypassTenantScope: () => Promise.resolve(null),
+        }),
+      }),
+    }),
+  }),
 }));
 
 const mockLoggerError = jest.fn();

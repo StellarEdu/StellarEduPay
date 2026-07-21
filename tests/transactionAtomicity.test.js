@@ -21,6 +21,15 @@ jest.mock('mongoose', () => ({
   connection: { startSession: mockStartSession },
 }));
 
+// The backend resolves `require('mongoose')` to its own copy
+// (backend/node_modules/mongoose), which the jest.mock('mongoose') above (the
+// root copy) does not intercept. transactionManager calls
+// getConnection().startSession(), i.e. mongoose.connection.startSession(), on
+// that backend instance — patch it so the transaction path uses the fake
+// session instead of hanging on a real, disconnected connection.
+const backendMongoose = require('../backend/node_modules/mongoose');
+backendMongoose.connection.startSession = mockStartSession;
+
 // ─── Model mocks ──────────────────────────────────────────────────────────────
 const mockPaymentCreate = jest.fn().mockResolvedValue([{}]);
 const mockPaymentFindOne = jest.fn().mockResolvedValue(null);

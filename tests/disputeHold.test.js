@@ -73,6 +73,21 @@ describe('reminderService.isEligible — disputeHold suppresses reminders', () =
     jest.mock('../backend/src/models/schoolModel',  () => ({ find: mockSchoolFn }));
     jest.mock('../backend/src/models/paymentModel', () => ({ aggregate: mockAggFn }));
 
+    // ReminderLog is a real mongoose model — without a DB its create()/updateOne()
+    // never resolve and the eligible path hangs to a timeout. Mock the idempotency store.
+    jest.mock('../backend/src/models/reminderLogModel', () => ({
+      create:    jest.fn().mockResolvedValue({}),
+      updateOne: jest.fn().mockResolvedValue({}),
+    }));
+
+    // Email now flows through the pluggable email service, whose suppression
+    // check hits a real mongoose model (EmailSuppression.findOne) — without a DB
+    // it never resolves and the send path hangs. Neutralise the suppression check
+    // so delivery proceeds to the (mocked) nodemailer smtp provider.
+    jest.mock('../backend/src/services/email/suppressionList', () => ({
+      isSuppressed: jest.fn().mockResolvedValue(false),
+    }));
+
     // Mock logger to suppress noise
     jest.mock('../backend/src/utils/logger', () => {
       const noop = () => {};

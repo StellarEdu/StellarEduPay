@@ -65,8 +65,11 @@ if (!connection) {
  */
 async function persistJob(txHash, context = {}) {
   const schoolId = context.schoolId || 'unknown';
+  // Idempotency key is txHash alone (unique index) — scoping the filter by
+  // schoolId too would miss an existing doc whose schoolId differs (e.g. the
+  // 'unknown' fallback) and force an insert that violates the unique txHash index.
   await PendingVerification.findOneAndUpdate(
-    { txHash, schoolId },
+    { txHash },
     {
       $setOnInsert: {
         txHash,

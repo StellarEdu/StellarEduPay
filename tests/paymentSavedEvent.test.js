@@ -19,8 +19,13 @@
 jest.mock('../backend/src/models/paymentModel');
 jest.mock('../backend/src/models/schoolModel', () => ({ findOne: jest.fn() }));
 jest.mock('../backend/src/models/studentModel');
+// savePayment persists a transactional outbox event instead of emitting directly.
+jest.mock('../backend/src/models/outboxModel', () => ({ create: jest.fn().mockResolvedValue({}) }));
 jest.mock('../backend/src/services/webhookService', () => ({
   notifyPaymentConfirmed: jest.fn(),
+  // #865 — the subscriber tries multi-endpoint dispatch first, then falls back
+  // to the legacy single URL. Return [] so the legacy path (asserted below) runs.
+  fireWebhookToEndpoints: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../backend/src/services/receiptService', () => ({
   createReceipt: jest.fn(),
@@ -29,7 +34,7 @@ jest.mock('../backend/src/utils/generateReferenceCode', () => ({
   generateReferenceCode: jest.fn().mockResolvedValue('REF-TEST-001'),
 }));
 jest.mock('../backend/src/utils/logger', () => ({
-  child: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
+  child: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }),
 }));
 
 const Payment = require('../backend/src/models/paymentModel');
@@ -71,17 +76,22 @@ beforeEach(() => {
 // ── 1. savePayment emits 'payment.saved' ──────────────────────────────────────
 
 describe('transactionService.savePayment', () => {
-  test('emits payment.saved with the saved document after a successful save', async () => {
+  test('writes a payment.saved outbox event after a successful save', async () => {
+    const Outbox = require('../backend/src/models/outboxModel');
     Payment.findOne.mockResolvedValue(null);
-    Payment.create.mockResolvedValue(PAYMENT);
-
-    const listener = jest.fn();
-    paymentEvents.on('payment.saved', listener);
+    // savePayment calls payment.toObject() for the outbox payload.
+    Payment.create.mockResolvedValue({ ...PAYMENT, toObject: () => PAYMENT });
 
     await savePayment({ transactionHash: 'abc123', schoolId: 'SCH-001', studentId: 'STU001', amount: 250 });
 
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith(PAYMENT);
+    expect(Outbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'payment.saved',
+        aggregateType: 'payment',
+        payload: expect.objectContaining({ txHash: 'abc123', schoolId: 'SCH-001' }),
+      }),
+      expect.anything()
+    );
   });
 
   test('does not emit payment.saved when Payment.create throws', async () => {
@@ -111,7 +121,7 @@ describe('onPaymentSavedWebhook', () => {
 
     expect(notifyPaymentConfirmed).toHaveBeenCalledWith(
       'https://school.example/webhook',
-      PAYMENT,
+      expect.objectContaining({ txHash: 'abc123', schoolId: 'SCH-001', studentId: 'STU001' }),
       null,
       'secret-abc'
     );
@@ -136,7 +146,7 @@ describe('onPaymentSavedWebhook', () => {
 
     expect(notifyPaymentConfirmed).toHaveBeenCalledWith(
       'https://school.example/webhook',
-      PAYMENT,
+      expect.objectContaining({ txHash: 'abc123', schoolId: 'SCH-001', studentId: 'STU001' }),
       null,
       null
     );

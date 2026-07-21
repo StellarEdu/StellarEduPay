@@ -303,8 +303,9 @@ async function dryRunRule(req, res, next) {
  *   - "best_for_student"  → picks the matching discount that saves most
  */
 async function applyRule(req, res, next) {
-  const session = await mongoose.startSession();
+  let session;
   try {
+    session = await mongoose.startSession();
     const rule = await FeeAdjustmentRule.findOne({
       _id: req.params.id,
       schoolId: req.schoolId,
@@ -420,7 +421,7 @@ async function applyRule(req, res, next) {
   } catch (err) {
     next(err);
   } finally {
-    session.endSession();
+    if (session) session.endSession();
   }
 }
 

@@ -80,7 +80,7 @@ describe('GET /api/consistency — requireAdminAuth middleware behaviour', () =>
   });
 
   it('requireAdminAuth calls next() for valid admin tokens', () => {
-    expect(AUTH_SRC).toContain("decoded.role !== 'admin'");
+    expect(AUTH_SRC).toContain("decoded.role === 'admin'");
     expect(AUTH_SRC).toContain('next()');
   });
 });

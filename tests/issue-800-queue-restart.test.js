@@ -35,7 +35,7 @@ jest.mock('../backend/src/models/pendingVerificationModel', () => ({
 }));
 
 jest.mock('../backend/src/utils/logger', () => ({
-  info: jest.fn(), warn: jest.fn(), error: jest.fn(),
+  info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
   child: jest.fn().mockReturnThis(),
 }));
 

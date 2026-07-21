@@ -4,7 +4,12 @@
 
 const crypto = require('crypto');
 
-jest.mock('axios', () => ({ post: jest.fn() }));
+// The service posts via an axios instance (axios.create().post); make create()
+// share the same post spy so `axios.post` (grabbed below) is what actually runs.
+jest.mock('axios', () => {
+  const post = jest.fn();
+  return { post, create: () => ({ post }) };
+});
 jest.mock('../backend/src/models/webhookRetryModel', () => ({
   create: jest.fn().mockResolvedValue({}),
   find: jest.fn().mockResolvedValue([]),

@@ -9,6 +9,7 @@ const request = require('supertest');
 
 jest.mock('../backend/src/middleware/auth', () => ({
   requireAdminAuth: (req, res, next) => next(),
+  requireSchoolAuth: () => (req, res, next) => next(),
 }));
 
 jest.mock('mongoose', () => ({
@@ -28,6 +29,17 @@ jest.mock('../backend/src/models/paymentModel', () => ({
   find: jest.fn(),
   countDocuments: jest.fn(),
   aggregate: jest.fn(),
+}));
+
+jest.mock('../backend/src/models/schoolModel', () => ({
+  findOne: jest.fn().mockImplementation((filter = {}) => ({
+    lean: () => Promise.resolve({
+      schoolId: filter.schoolId || 'school-a',
+      stellarAddress: filter.schoolId === 'school-b' ? 'GBBBB' : 'GAAAA',
+      localCurrency: 'USD',
+      isActive: true,
+    }),
+  })),
 }));
 
 jest.mock('../backend/src/services/stellarService', () => ({
@@ -109,7 +121,8 @@ describe('Cross-School Data Isolation', () => {
       const chainable = {
         sort: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockResolvedValue([
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([
           { _id: 'pay-1', txHash: 'tx1', amount: 250, studentId: 'STU001', schoolId: 'school-a' },
         ]),
       };
@@ -122,10 +135,11 @@ describe('Cross-School Data Isolation', () => {
         .set('X-School-Id', 'school-a')
         .expect(200);
 
-      // Verify the query included schoolId filter
+      // Verify the query included the schoolId filter (tenant scoping)
       expect(Payment.find).toHaveBeenCalledWith({
         schoolId: 'school-a',
         studentId: 'STU001',
+        deletedAt: null,
       });
       expect(res.body.total).toBe(1);
     });
@@ -141,7 +155,7 @@ describe('Cross-School Data Isolation', () => {
       });
 
       const res = await request(app)
-        .get('/api/payments/STU001/balance')
+        .get('/api/payments/balance/STU001')
         .set('X-School-Id', 'school-a')
         .expect(404);
 
@@ -163,17 +177,18 @@ describe('Cross-School Data Isolation', () => {
         .mockResolvedValueOnce([{ _id: 'tuition', totalPaid: 250, count: 1 }]); // category aggregation
 
       const res = await request(app)
-        .get('/api/payments/STU001/balance')
+        .get('/api/payments/balance/STU001')
         .set('X-School-Id', 'school-a')
         .expect(200);
 
       // Verify both aggregations include schoolId filter
       const calls = Payment.aggregate.mock.calls;
-      expect(calls[0][0][0].$match).toEqual({ schoolId: 'school-a', studentId: 'STU001' });
+      expect(calls[0][0][0].$match).toEqual({ schoolId: 'school-a', studentId: 'STU001', deletedAt: null });
       expect(calls[1][0][0].$match).toEqual({
         schoolId: 'school-a',
         studentId: 'STU001',
         feeCategory: { $ne: null },
+        deletedAt: null,
       });
     });
 
@@ -194,7 +209,7 @@ describe('Cross-School Data Isolation', () => {
         .mockResolvedValueOnce([{ _id: 'tuition', totalPaid: 250, count: 1 }]);
 
       const res = await request(app)
-        .get('/api/payments/STU001/balance')
+        .get('/api/payments/balance/STU001')
         .set('X-School-Id', 'school-a')
         .expect(200);
 
@@ -245,7 +260,8 @@ describe('Cross-School Data Isolation', () => {
       Payment.find.mockReturnValue({
         sort: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockResolvedValue([]),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
       });
 
       Payment.countDocuments.mockResolvedValue(0);
@@ -259,6 +275,7 @@ describe('Cross-School Data Isolation', () => {
       expect(Payment.countDocuments).toHaveBeenCalledWith({
         schoolId: 'school-a',
         studentId: 'STU001',
+        deletedAt: null,
       });
     });
   });

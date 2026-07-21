@@ -281,8 +281,9 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
   });
 
   test('pay-fees.jsx has responsive grid layout', () => {
-    expect(pageSrc).toMatch(/grid-template-columns/);
-    expect(pageSrc).toMatch(/max-width.*700px|700px.*max-width/);
+    // Post-revamp the responsive two-column layout lives in the shared
+    // payfees-grid CSS class rather than inline grid-template-columns/max-width.
+    expect(pageSrc).toMatch(/payfees-grid/);
   });
 
   test('PaymentForm has student ID input with label', () => {
@@ -299,7 +300,9 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
 
   test('PaymentForm shows error state with role=alert', () => {
     expect(formSrc).toMatch(/role="alert"/);
-    expect(formSrc).toMatch(/#fee2e2/);
+    // Post-revamp the red error background comes from the shared alert-danger
+    // class (CSS variables) rather than a hard-coded #fee2e2 hex.
+    expect(formSrc).toMatch(/alert-danger/);
   });
 
   test('PaymentForm displays wallet address and memo with copy buttons', () => {
@@ -375,6 +378,6 @@ describe('pay-fees page source assertions (acceptance criteria)', () => {
 
   test('VerifyPayment has explorer link', () => {
     expect(verifySrc).toMatch(/stellarExplorerUrl/);
-    expect(verifySrc).toMatch(/View on Explorer/);
+    expect(verifySrc).toMatch(/View on Stellar Explorer/);
   });
 });

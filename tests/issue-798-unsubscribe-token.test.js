@@ -12,6 +12,13 @@ jest.mock('../backend/src/utils/logger', () => ({
   child: jest.fn().mockReturnThis(),
 }));
 
+// The email module checks the suppression list before sending; isSuppressed does
+// EmailSuppression.findOne().lean() on a real model that never resolves with no
+// DB, hanging the reminder send to timeout. Mock it to "not suppressed".
+jest.mock('../backend/src/services/email/suppressionList', () => ({
+  isSuppressed: jest.fn().mockResolvedValue(false),
+}));
+
 const mockSendMail = jest.fn().mockResolvedValue({ messageId: 'msg-1' });
 const mockVerify = jest.fn().mockResolvedValue(true);
 const mockTransporter = { sendMail: mockSendMail, verify: mockVerify };

@@ -8,7 +8,7 @@
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.SCHOOL_WALLET_ADDRESS = 'GCICZOP346CKADPWOZ6JAQ7OCGH44UELNS3GSDXFOTSZRW6OYZZ6KSY7B';
+process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 process.env.JWT_SECRET = 'test-secret';
 
 const request = require('supertest');
@@ -24,6 +24,17 @@ jest.mock('mongoose', () => ({
   Schema: class { constructor() { this.index = jest.fn(); } },
   model: jest.fn().mockReturnValue({}),
 }));
+
+// The backend resolves `require('mongoose')` to its own copy
+// (backend/node_modules/mongoose), which the jest.mock('mongoose') above (the
+// root copy) does not intercept. Stub startSession on that instance so the
+// transactional apply path uses a fake session instead of hanging on a real,
+// disconnected one.
+const backendMongoose = require('../backend/node_modules/mongoose');
+backendMongoose.startSession = jest.fn().mockResolvedValue({
+  withTransaction: async (fn) => fn(),
+  endSession: jest.fn(),
+});
 
 jest.mock('../backend/src/models/feeAdjustmentRuleModel', () => ({
   create: jest.fn(),
@@ -73,7 +84,7 @@ jest.mock('../backend/src/models/schoolModel', () => ({
   findOne: jest.fn().mockReturnValue({
     lean: jest.fn().mockResolvedValue({
       schoolId: 'SCH001', name: 'Test School', slug: 'test-school',
-      stellarAddress: 'GCICZOP346CKADPWOZ6JAQ7OCGH44UELNS3GSDXFOTSZRW6OYZZ6KSY7B',
+      stellarAddress: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
       localCurrency: 'USD', isActive: true,
     }),
   }),
@@ -122,6 +133,19 @@ jest.mock('../backend/src/services/currencyConversionService', () => ({
 jest.mock('../backend/src/services/feeAdjustmentService', () => ({
   calculateAdjustedFee: jest.fn(),
   simulateWithExtra: jest.fn(),
+}));
+
+// Mock the audit service so auth-failure / error paths don't await a real
+// (disconnected) Mongo write and hang.
+jest.mock('../backend/src/services/auditService', () => ({
+  logAudit: jest.fn().mockResolvedValue({}),
+  getAuditLogs: jest.fn().mockResolvedValue([]),
+  getRecentAuditLogs: jest.fn().mockResolvedValue([]),
+  getAuditHealth: jest.fn().mockResolvedValue({}),
+  verifyAuditChain: jest.fn().mockResolvedValue({}),
+  archiveAuditLogs: jest.fn().mockResolvedValue({}),
+  _resetAuditFailureCount: jest.fn(),
+  _computeEntryHash: jest.fn(),
 }));
 
 const app = require('../backend/src/app');
@@ -208,7 +232,7 @@ describe('#901 POST /api/fee-adjustments — conflictResolutionPolicy', () => {
     });
 
     expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
   });
 });
 
@@ -329,7 +353,7 @@ describe('#901 POST /api/fee-adjustments/dry-run', () => {
   test('400 — missing rule body returns VALIDATION_ERROR', async () => {
     const res = await adminApi('post', '/api/fee-adjustments/dry-run').send({});
     expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
   });
 
   test('400 — invalid rule type returns VALIDATION_ERROR', async () => {
@@ -337,7 +361,7 @@ describe('#901 POST /api/fee-adjustments/dry-run', () => {
       rule: { type: 'bad_type', value: 10 },
     });
     expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
   });
 
   test('401 — unauthenticated request rejected', async () => {

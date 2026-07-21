@@ -89,6 +89,7 @@ jest.mock('../backend/src/utils/memoEncryption', () => ({
 }));
 
 const app = require('../backend/src/app');
+const cache = require('../backend/src/cache');
 
 describe('Authentication on Protected Endpoints (#562)', () => {
   const validAdminToken = jwt.sign({ role: 'admin', email: 'admin@test.com' }, process.env.JWT_SECRET);
@@ -97,6 +98,11 @@ describe('Authentication on Protected Endpoints (#562)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // The auth middleware blocks an IP after 5 failed attempts (in-memory cache).
+    // Since every test here fires unauthenticated requests from the same IP, clear
+    // the fail-count / block state between tests so blocks don't bleed across cases.
+    cache.delByPrefix('fail_count:');
+    cache.delByPrefix('blocked_ip:');
   });
 
   describe('Student Endpoints', () => {

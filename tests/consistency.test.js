@@ -30,7 +30,10 @@ jest.mock('../backend/src/models/schoolModel', () => ({
   find: () => ({ lean: () => mockSchoolFind() }),
 }));
 
-jest.mock('../backend/src/models/studentModel', () => ({}));
+jest.mock('../backend/src/models/studentModel', () => ({
+  find: () => ({ lean: () => Promise.resolve([]) }),
+  findOneAndUpdate: jest.fn().mockResolvedValue({}),
+}));
 
 // Shared mutable state
 let mockChainTxsByWallet = {};

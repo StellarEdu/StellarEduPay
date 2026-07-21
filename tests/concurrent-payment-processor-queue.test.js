@@ -14,13 +14,21 @@ jest.mock('../backend/src/services/transactionManager', () => ({
   },
 }));
 
-jest.mock('../backend/src/utils/logger', () => ({
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
-  child: jest.fn().mockReturnThis(),
-}));
+jest.mock('../backend/src/utils/logger', () => {
+  // The real module does `module.exports = logger` AND `module.exports.logger =
+  // logger`, so consumers use either `require(...).child()` (idempotencyStore) or
+  // `const { logger } = require(...)` (concurrentPaymentProcessor). Replicate both,
+  // else logger is undefined and logger.warn() throws on the QUEUE_FULL retry path.
+  const mockLogger = {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    child: jest.fn(() => mockLogger),
+  };
+  mockLogger.logger = mockLogger;
+  return mockLogger;
+});
 
 jest.mock('../backend/src/models/paymentModel', () => ({
   findOne: jest.fn(),

@@ -53,9 +53,11 @@ describe('handleLogin', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_CREDENTIALS' }));
   });
 
-  it('returns a token with role:admin for valid credentials', () => {
+  it('returns a token with role:admin for valid credentials', async () => {
     const res = mockRes();
-    handleLogin({ body: { username: 'admin', password: 'correct-password' } }, res);
+    // The success path is async now (#595 awaits issueRefreshToken before
+    // res.json), so the call must be awaited before asserting on res.
+    await handleLogin({ body: { username: 'admin', password: 'correct-password' } }, res);
     expect(res.status).not.toHaveBeenCalled();
     const [body] = res.json.mock.calls[0];
     // Token is now in the HttpOnly cookie, not the response body

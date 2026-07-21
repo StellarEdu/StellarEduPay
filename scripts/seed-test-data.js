@@ -2,31 +2,43 @@
 'use strict';
 
 /**
- * Seed script — populates the database with sample fee structures and students
- * for local development and testing.
+ * Seed script — populates the database with a sample school plus fee structures
+ * and students scoped to it, for local development and testing.
+ *
+ * This app is multi-tenant: Student and FeeStructure are tenant-scoped (every
+ * document and query must carry a schoolId), and the API resolves the active
+ * tenant from the X-School-ID / X-School-Slug header. So the seed first creates
+ * a School whose schoolId matches the frontend's default (SCH001), then seeds
+ * fees and students under that schoolId — otherwise the dashboard's scoped
+ * endpoints return "School not found" / empty results.
  *
  * Usage:
  *   node scripts/seed-test-data.js           # upsert (safe default)
- *   node scripts/seed-test-data.js --clean   # drop collections then re-seed
+ *   node scripts/seed-test-data.js --clean   # drop this school's data then re-seed
  *
  * Requirements:
- *   - backend/.env must exist with MONGO_URI and SCHOOL_WALLET_ADDRESS set
- *   - MongoDB must be running
+ *   - backend/.env must exist with MONGO_URI and a valid SCHOOL_WALLET_ADDRESS
+ *     (a real Stellar public key — the School model validates it).
+ *   - MongoDB must be running.
  *
- * Safe to re-run: all inserts use upsert so repeated runs produce identical records.
+ * Env overrides (optional): SEED_SCHOOL_ID (default SCH001),
+ *   SEED_SCHOOL_SLUG (default demo-school), SEED_SCHOOL_NAME (default Demo School).
+ *
+ * Safe to re-run: all writes use upsert so repeated runs produce identical records.
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../backend/.env') });
 
-// Patch env so config/index.js validation passes when models are loaded
+// Patch env so config/index.js validation passes when models are loaded.
 process.env.SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || 'PLACEHOLDER';
 
 // Root and backend pin different mongoose majors in separate node_modules
 // trees. A plain require('mongoose') here resolves to the root copy, which is
-// a different singleton than the one FeeStructure/Student are bound to —
-// mongoose.connect() below would then never open *their* connection, and every
-// query buffers until it times out ("buffering timeout" — see issue #749).
+// a different singleton than the one the models are bound to — mongoose.connect()
+// below would then never open *their* connection, and every query buffers until
+// it times out ("buffering timeout" — see issue #749).
 const mongoose = require('../backend/node_modules/mongoose');
+const School = require('../backend/src/models/schoolModel');
 const FeeStructure = require('../backend/src/models/feeStructureModel');
 const Student = require('../backend/src/models/studentModel');
 
@@ -40,6 +52,16 @@ const POOL_CONFIG = {
 };
 
 // ── Seed data ─────────────────────────────────────────────────────────────────
+
+// The tenant the seeded data belongs to. schoolId defaults to SCH001 to match
+// the frontend's default X-School-ID (frontend/src/services/api.js).
+const SCHOOL = {
+  schoolId: process.env.SEED_SCHOOL_ID || 'SCH001',
+  slug: (process.env.SEED_SCHOOL_SLUG || 'demo-school').toLowerCase(),
+  name: process.env.SEED_SCHOOL_NAME || 'Demo School',
+  stellarAddress: process.env.SCHOOL_WALLET_ADDRESS,
+  network: process.env.STELLAR_NETWORK || 'testnet',
+};
 
 const FEE_STRUCTURES = [
   { className: 'Grade 9',  feeAmount: 500,  description: 'Junior Secondary' },
@@ -66,17 +88,49 @@ const STUDENTS = [
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Upsert fee structures — update feeAmount/description if the class already
- * exists so re-runs stay consistent.
+ * Upsert the tenant School whose schoolId the seeded fees/students belong to.
+ * School is not tenant-scoped (it is the tenant root), so no schoolId filter
+ * is required here. Returns the resolved schoolId.
  */
-async function seedFeeStructures() {
+async function seedSchool() {
+  console.log('\n🏫  Seeding school…');
+
+  if (!/^G[A-Z2-7]{55}$/.test(SCHOOL.stellarAddress || '')) {
+    throw new Error(
+      `SCHOOL_WALLET_ADDRESS is not a valid Stellar public key ("${SCHOOL.stellarAddress}"). ` +
+      'Set a real G... address in backend/.env before seeding.'
+    );
+  }
+
+  const doc = await School.findOneAndUpdate(
+    { schoolId: SCHOOL.schoolId },
+    {
+      schoolId: SCHOOL.schoolId,
+      name: SCHOOL.name,
+      slug: SCHOOL.slug,
+      stellarAddress: SCHOOL.stellarAddress,
+      network: SCHOOL.network,
+      isActive: true,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+  );
+  console.log(`   ✔  ${doc.schoolId} — ${doc.name} (slug: ${doc.slug}, ${doc.network})`);
+  return doc.schoolId;
+}
+
+/**
+ * Upsert fee structures for the given school — update feeAmount/description if
+ * the class already exists so re-runs stay consistent. schoolId is part of the
+ * filter (tenant-scoped model) and of the document.
+ */
+async function seedFeeStructures(schoolId = SCHOOL.schoolId) {
   console.log('\n📋  Seeding fee structures…');
   const feeMap = {};
 
   for (const fee of FEE_STRUCTURES) {
     const doc = await FeeStructure.findOneAndUpdate(
-      { className: fee.className },
-      { ...fee, isActive: true },
+      { schoolId, className: fee.className },
+      { schoolId, ...fee, isActive: true },
       { upsert: true, new: true, runValidators: true }
     );
     feeMap[doc.className] = doc.feeAmount;
@@ -87,10 +141,10 @@ async function seedFeeStructures() {
 }
 
 /**
- * Upsert students by studentId — consistent with the fee structure approach.
- * Resolves feeAmount from the fee map so the seed is self-contained.
+ * Upsert students by (schoolId, studentId) — consistent with the fee structure
+ * approach. Resolves feeAmount from the fee map so the seed is self-contained.
  */
-async function seedStudents(feeMap) {
+async function seedStudents(feeMap, schoolId = SCHOOL.schoolId) {
   console.log('\n🎓  Seeding students…');
 
   for (const s of STUDENTS) {
@@ -101,8 +155,8 @@ async function seedStudents(feeMap) {
     }
 
     await Student.findOneAndUpdate(
-      { studentId: s.studentId },
-      { feeAmount, ...s },
+      { schoolId, studentId: s.studentId },
+      { schoolId, feeAmount, ...s },
       { upsert: true, new: true, runValidators: true }
     );
     console.log(`   ✔  ${s.studentId} — ${s.name} (${s.class}, $${feeAmount} USDC)`);
@@ -117,7 +171,8 @@ async function main() {
 
   console.log('🌱  StellarEduPay — test data seed');
   console.log(`    MongoDB: ${MONGO_URI}`);
-  if (clean) console.log('    Mode: --clean (dropping collections before re-seeding)');
+  console.log(`    School:  ${SCHOOL.schoolId} (${SCHOOL.slug})`);
+  if (clean) console.log("    Mode: --clean (dropping this school's data before re-seeding)");
 
   await mongoose.connect(MONGO_URI, {
     maxPoolSize: POOL_CONFIG.maxPoolSize,
@@ -134,19 +189,22 @@ async function main() {
   console.log('    Connected to MongoDB');
 
   if (clean) {
-    await FeeStructure.deleteMany({});
-    await Student.deleteMany({});
-    console.log('    Collections dropped.');
+    // Scoped deletes — Student/FeeStructure are tenant-scoped, so a filter
+    // without schoolId is rejected by the tenantScope plugin.
+    await FeeStructure.deleteMany({ schoolId: SCHOOL.schoolId });
+    await Student.deleteMany({ schoolId: SCHOOL.schoolId });
+    console.log(`    Cleared existing fees/students for ${SCHOOL.schoolId}.`);
   }
 
-  const feeMap = await seedFeeStructures();
-  await seedStudents(feeMap);
+  const schoolId = await seedSchool();
+  const feeMap = await seedFeeStructures(schoolId);
+  await seedStudents(feeMap, schoolId);
 
   console.log('\n✅  Done.');
-  console.log('\n    Quick test commands:');
-  console.log('      GET  http://localhost:5000/api/students');
-  console.log('      GET  http://localhost:5000/api/fees');
-  console.log('      GET  http://localhost:5000/api/students/STU001\n');
+  console.log('\n    Quick test commands (note the required X-School-ID header):');
+  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/students`);
+  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/fees`);
+  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/students/STU001\n`);
 }
 
 // Only validate env and run when executed directly (not when require()'d by tests)
@@ -165,4 +223,4 @@ if (require.main === module) {
     .finally(() => mongoose.disconnect());
 }
 
-module.exports = { seedFeeStructures, seedStudents, FEE_STRUCTURES, STUDENTS };
+module.exports = { seedSchool, seedFeeStructures, seedStudents, SCHOOL, FEE_STRUCTURES, STUDENTS };

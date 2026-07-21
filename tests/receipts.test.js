@@ -57,7 +57,7 @@ describe('receiptService.createReceipt()', () => {
     Receipt.findOne.mockResolvedValue(null);
     Student.findOne.mockReturnValue({ lean: () => Promise.resolve({ name: 'Alice Johnson' }) });
     School.findOne.mockReturnValue({ lean: () => Promise.resolve({ name: 'Lincoln High' }) });
-    Receipt.create.mockResolvedValue({ ...PAYMENT, studentName: 'Alice Johnson', schoolName: 'Lincoln High' });
+    Receipt.create.mockResolvedValue({ ...PAYMENT, studentName: 'Alice Johnson', schoolName: 'Lincoln High', save() { return Promise.resolve(this); } });
 
     const receipt = await createReceipt(PAYMENT);
 
@@ -91,7 +91,7 @@ describe('receiptService.createReceipt()', () => {
     Receipt.findOne.mockResolvedValue(null);
     Student.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
     School.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-    Receipt.create.mockResolvedValue({ ...PAYMENT, studentName: null, schoolName: null });
+    Receipt.create.mockResolvedValue({ ...PAYMENT, studentName: null, schoolName: null, save() { return Promise.resolve(this); } });
 
     await createReceipt(PAYMENT);
 
@@ -104,7 +104,7 @@ describe('receiptService.createReceipt()', () => {
     Receipt.findOne.mockResolvedValue(null);
     Student.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
     School.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-    Receipt.create.mockResolvedValue({});
+    Receipt.create.mockResolvedValue({ confirmedAt: new Date(), save() { return Promise.resolve(this); } });
 
     await createReceipt({ ...PAYMENT, assetCode: undefined });
 

@@ -394,7 +394,9 @@ const ACCOUNTING_HEADERS_V1 = [
  * @param {{ schoolId: string, startDate?: string, endDate?: string }} options
  * @returns {{ csv: string, schemaVersion: number }}
  */
-async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
+// Build the $match / $lookup / $sort pipeline shared by the buffered and
+// streaming accounting exports.
+function buildAccountingPipeline({ schoolId, startDate, endDate }) {
   const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
   if (startDate || endDate) {
     match.confirmedAt = {};
@@ -402,8 +404,7 @@ async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
     if (endDate)   match.confirmedAt.$lte = new Date(endDate   + 'T23:59:59.999Z');
   }
 
-  // Enrich with student class via a $lookup
-  const rows = await Payment.aggregate([
+  return [
     { $match: match },
     {
       $lookup: {
@@ -417,41 +418,75 @@ async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
       },
     },
     { $sort: { confirmedAt: 1 } },
-  ]);
+  ];
+}
+
+// Format a single aggregation row as one CSV line (no trailing newline).
+function formatAccountingRow(r, exportedAt) {
+  const studentClass = r._student?.[0]?.class ?? '';
+  // #883 — use stored fiat snapshot when available, else leave blank
+  const fiatAmount   = r.fiatSnapshot?.fiatAmount   ?? '';
+  const fiatCurrency = r.fiatSnapshot?.fiatCurrency ?? '';
+  const fiatRate     = r.fiatSnapshot?.fiatRate     ?? '';
+
+  return [
+    ACCOUNTING_SCHEMA_VERSION,
+    exportedAt,
+    csvEscape(r.schoolId),
+    csvEscape(r.txHash),
+    csvEscape(r.studentId),
+    csvEscape(studentClass),
+    r.confirmedAt ? new Date(r.confirmedAt).toISOString() : '',
+    csvEscape(r.assetCode ?? 'XLM'),
+    csvEscape(r.assetType ?? 'crypto'),
+    r.amount,
+    r.feeAmount ?? '',
+    csvEscape(r.feeValidationStatus ?? ''),
+    r.excessAmount ?? 0,
+    fiatAmount,
+    csvEscape(fiatCurrency),
+    fiatRate,
+    csvEscape(r.referenceCode ?? ''),
+    csvEscape(r.status),
+  ].map(v => csvEscape(v)).join(',');
+}
+
+async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
+  // Enrich with student class via a $lookup
+  const rows = await Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate }));
 
   const exportedAt = new Date().toISOString();
   const lines = [ACCOUNTING_HEADERS_V1.map(csvEscape).join(',')];
 
   for (const r of rows) {
-    const studentClass = r._student?.[0]?.class ?? '';
-    // #883 — use stored fiat snapshot when available, else leave blank
-    const fiatAmount   = r.fiatSnapshot?.fiatAmount   ?? '';
-    const fiatCurrency = r.fiatSnapshot?.fiatCurrency ?? '';
-    const fiatRate     = r.fiatSnapshot?.fiatRate     ?? '';
-
-    lines.push([
-      ACCOUNTING_SCHEMA_VERSION,
-      exportedAt,
-      csvEscape(r.schoolId),
-      csvEscape(r.txHash),
-      csvEscape(r.studentId),
-      csvEscape(studentClass),
-      r.confirmedAt ? new Date(r.confirmedAt).toISOString() : '',
-      csvEscape(r.assetCode ?? 'XLM'),
-      csvEscape(r.assetType ?? 'crypto'),
-      r.amount,
-      r.feeAmount ?? '',
-      csvEscape(r.feeValidationStatus ?? ''),
-      r.excessAmount ?? 0,
-      fiatAmount,
-      csvEscape(fiatCurrency),
-      fiatRate,
-      csvEscape(r.referenceCode ?? ''),
-      csvEscape(r.status),
-    ].map(v => csvEscape(v)).join(','));
+    lines.push(formatAccountingRow(r, exportedAt));
   }
 
   return { csv: lines.join('\n'), schemaVersion: ACCOUNTING_SCHEMA_VERSION };
+}
+
+/**
+ * Streaming variant of {@link generateAccountingCsv} (Issue #70).
+ *
+ * Reads the payments collection with an aggregation cursor and writes each
+ * row to `res` as it arrives, so the full result set is never buffered in
+ * memory. Writes the header row first, then one line per payment, then ends
+ * the response.
+ *
+ * @param {{ schoolId: string, startDate?: string, endDate?: string, res: object }} options
+ */
+async function generateAccountingCsvStream({ schoolId, startDate, endDate, res } = {}) {
+  const cursor = Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate })).cursor();
+  const exportedAt = new Date().toISOString();
+
+  res.write(ACCOUNTING_HEADERS_V1.map(csvEscape).join(',') + '\n');
+
+  for await (const r of cursor) {
+    res.write(formatAccountingRow(r, exportedAt) + '\n');
+  }
+
+  res.end();
+  return { schemaVersion: ACCOUNTING_SCHEMA_VERSION };
 }
 
 module.exports = {
@@ -459,6 +494,7 @@ module.exports = {
   aggregateByDate,
   reportToCsv,
   generateAccountingCsv,
+  generateAccountingCsvStream,
   ACCOUNTING_SCHEMA_VERSION,
   getDashboardMetrics,
   getDataVersion,

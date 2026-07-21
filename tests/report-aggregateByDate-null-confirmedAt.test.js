@@ -66,7 +66,8 @@ describe('Report Service aggregateByDate (#674)', () => {
               status: 'SUCCESS',
             }),
           }),
-        ])
+        ]),
+        expect.anything()
       );
     });
 

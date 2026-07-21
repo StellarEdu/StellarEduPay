@@ -38,10 +38,14 @@ async function syncAllPayments(req, res, next) {
   // Any replica that cannot acquire the lock immediately returns 409 so the
   // caller knows a sync is already in flight somewhere in the cluster.
   const lockKey = `sync:lock:${schoolId}`;
-  const token = await lock.acquire(lockKey, SYNC_LOCK_TTL_MS);
-  if (!token) {
+  // acquire() returns { token, fencingToken } (or null). release() expects the
+  // raw token string, so destructure — passing the whole object never matches
+  // and the lock would never be released.
+  const acquired = await lock.acquire(lockKey, SYNC_LOCK_TTL_MS);
+  if (!acquired) {
     return res.status(409).json({ error: 'Sync already in progress', code: 'SYNC_IN_PROGRESS' });
   }
+  const { token } = acquired;
 
   const stopSyncTimer = syncDurationSeconds.startTimer();
   try {

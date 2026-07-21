@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useAdminAuth } from "../hooks/useAdminAuth";
@@ -23,8 +24,32 @@ const ADMIN_NAV = [
 ];
 
 export default function AppLayout({ children }) {
-  const { pathname } = useRouter();
-  const { isAdmin } = useAdminAuth();
+  const router = useRouter();
+  const { pathname } = router;
+  const { isAdmin, checked } = useAdminAuth();
+
+  // Route guard: these routes require an admin session. If the auth check has
+  // resolved and the user is not authenticated, send them to /login (preserving
+  // where they were via returnTo). We do NOT render the protected page until
+  // authenticated — otherwise it would mount and fire admin-only API calls
+  // (e.g. the dashboard's /students) while logged out.
+  useEffect(() => {
+    if (checked && !isAdmin) {
+      router.replace(`/login?returnTo=${encodeURIComponent(router.asPath)}`);
+    }
+  }, [checked, isAdmin, router]);
+
+  if (!isAdmin) {
+    return (
+      <div className="app-layout">
+        <main className="app-main" id="main-content">
+          <div className="app-auth-gate" role="status" aria-live="polite">
+            {checked ? "Redirecting to sign in…" : "Checking access…"}
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-layout">

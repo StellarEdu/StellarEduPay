@@ -24,9 +24,14 @@ jest.mock('../backend/src/models/studentModel', () => ({
   deleteMany: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock('../backend/src/models/schoolModel', () => ({
+  findOneAndUpdate: jest.fn(),
+}));
+
 // ── Load module under test ────────────────────────────────────────────────────
 
-const { seedFeeStructures, seedStudents, FEE_STRUCTURES, STUDENTS } = require('../scripts/seed-test-data');
+const { seedSchool, seedFeeStructures, seedStudents, SCHOOL, FEE_STRUCTURES, STUDENTS } = require('../scripts/seed-test-data');
+const School = require('../backend/src/models/schoolModel');
 const FeeStructure = require('../backend/src/models/feeStructureModel');
 const Student = require('../backend/src/models/studentModel');
 
@@ -40,6 +45,32 @@ beforeEach(() => {
     Promise.resolve({ className: filter.className, feeAmount: update.feeAmount })
   );
   Student.findOneAndUpdate.mockResolvedValue({});
+  School.findOneAndUpdate.mockImplementation((filter, update) =>
+    Promise.resolve({ schoolId: filter.schoolId, name: update.name, slug: update.slug, network: update.network })
+  );
+});
+
+describe('seedSchool', () => {
+  it('upserts the tenant school keyed by schoolId', async () => {
+    await seedSchool();
+    expect(School.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const [filter, update, opts] = School.findOneAndUpdate.mock.calls[0];
+    expect(filter).toEqual({ schoolId: SCHOOL.schoolId });
+    expect(update).toMatchObject({ schoolId: SCHOOL.schoolId, slug: SCHOOL.slug, isActive: true });
+    expect(opts).toMatchObject({ upsert: true });
+  });
+
+  it('returns the resolved schoolId', async () => {
+    await expect(seedSchool()).resolves.toBe(SCHOOL.schoolId);
+  });
+
+  it('rejects an invalid stellarAddress instead of writing a broken school', async () => {
+    const saved = SCHOOL.stellarAddress;
+    SCHOOL.stellarAddress = 'not-a-stellar-key';
+    await expect(seedSchool()).rejects.toThrow(/valid Stellar public key/);
+    expect(School.findOneAndUpdate).not.toHaveBeenCalled();
+    SCHOOL.stellarAddress = saved;
+  });
 });
 
 describe('seedFeeStructures', () => {
@@ -59,6 +90,14 @@ describe('seedFeeStructures', () => {
     const feeMap = await seedFeeStructures();
     for (const fee of FEE_STRUCTURES) {
       expect(feeMap[fee.className]).toBe(fee.feeAmount);
+    }
+  });
+
+  it('scopes both the filter and the document by schoolId (tenant-scoped model)', async () => {
+    await seedFeeStructures('SCH999');
+    for (const call of FeeStructure.findOneAndUpdate.mock.calls) {
+      expect(call[0]).toMatchObject({ schoolId: 'SCH999' });
+      expect(call[1]).toMatchObject({ schoolId: 'SCH999' });
     }
   });
 
@@ -98,6 +137,14 @@ describe('seedStudents', () => {
     await seedStudents(feeMap);
     for (const call of Student.findOneAndUpdate.mock.calls) {
       expect(call[0]).toHaveProperty('studentId');
+    }
+  });
+
+  it('scopes both the filter and the document by schoolId (tenant-scoped model)', async () => {
+    await seedStudents(feeMap, 'SCH999');
+    for (const call of Student.findOneAndUpdate.mock.calls) {
+      expect(call[0]).toMatchObject({ schoolId: 'SCH999' });
+      expect(call[1]).toMatchObject({ schoolId: 'SCH999' });
     }
   });
 
