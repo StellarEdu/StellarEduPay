@@ -13,6 +13,11 @@ const Student = require("../models/studentModel");
 const PaymentIntent = require("../models/paymentIntentModel");
 const { validatePaymentAmount } = require("../utils/paymentLimits");
 const { toStroops, stroopsToNumber, compareAmounts } = require("../utils/stellarAmount");
+const {
+  SUPPORTED_MEMO_TYPES,
+  normalizeMemoType,
+  decodeMemoToCanonical,
+} = require("../utils/stellarMemo");
 const { withStellarRetry } = require("../utils/withStellarRetry");
 const { savePayment } = require("./transactionService");
 const { deriveCorrelationId } = require("../utils/correlationId");
@@ -84,8 +89,8 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
   
-  if (memoType !== 'text') {
-    // MEMO_ID, MEMO_HASH, or MEMO_RETURN — unsupported for student ID matching
+  if (!normalizeMemoType(memoType)) {
+    // MEMO_RETURN — no canonical encoding, so it cannot identify a payment.
     logger.warn('Transaction has unsupported memo type', {
       txHash: tx.hash,
       memoType,
@@ -94,8 +99,15 @@ async function extractValidPayment(tx, walletAddress) {
     return null;
   }
 
-  const memo = innerTx.memo ? innerTx.memo.trim() : null;
-  if (!memo) return null;
+  // MEMO_ID / MEMO_HASH decode back to the canonical intent memo (#1118).
+  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
+  if (!memo) {
+    logger.warn('Transaction memo could not be decoded to a payment reference', {
+      txHash: tx.hash,
+      memoType,
+    });
+    return null;
+  }
 
   const ops = await withStellarRetry(() => innerTx.operations(), {
     label: "extractValidPayment.operations",
@@ -480,17 +492,30 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
     throw err;
   }
 
-  if (memoType !== 'text') {
+  // MEMO_ID and MEMO_HASH are decoded back to the canonical intent memo (#1118)
+  // so wallets that cannot send free-text memos still match. MEMO_RETURN has no
+  // encoding and stays unsupported.
+  if (!normalizeMemoType(memoType)) {
     const err = new Error(
-      `Transaction memo type '${memoType}' is not supported. Only MEMO_TEXT is accepted for student ID matching.`,
+      `Transaction memo type '${memoType}' is not supported. Accepted types: ${SUPPORTED_MEMO_TYPES.join(', ')}.`,
     );
     err.code = "UNSUPPORTED_MEMO_TYPE";
     err.memoType = memoType;
     throw err;
   }
 
-  const memo = innerTx.memo ? innerTx.memo.trim() : null;
+  const memo = decodeMemoToCanonical(innerTx.memo, memoType);
   if (!memo) {
+    // A non-text memo that fails to decode carries no student identity — it is
+    // an unrecognised value rather than a missing one, so report it as such.
+    if (normalizeMemoType(memoType) !== 'MEMO_TEXT') {
+      const err = new Error(
+        `Transaction memo of type '${memoType}' could not be decoded to a payment reference.`,
+      );
+      err.code = "UNSUPPORTED_MEMO_TYPE";
+      err.memoType = memoType;
+      throw err;
+    }
     const err = new Error(
       "Transaction memo is missing or empty — cannot identify student",
     );

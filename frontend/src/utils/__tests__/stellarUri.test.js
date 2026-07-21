@@ -3,48 +3,20 @@
 /**
  * Tests for stellarUri.js — generateStellarPaymentUri
  *
- * stellarUri.js uses ES module syntax (export) which the root Jest config
- * does not transform. We inline the function here so the tests run without
- * requiring a Babel transform, while still testing the exact same logic.
- *
- * The canonical implementation lives in frontend/src/utils/stellarUri.js.
- * Any change to that file must be reflected here.
+ * This file previously inlined a copy of the function because the root Jest
+ * config was assumed not to transform ES modules. It does (babel-jest with
+ * preset-env), and the inlined copy had already drifted from the real
+ * implementation — it never picked up the stroop-space amount validation from
+ * #1123, so the suite was green against logic that no longer shipped.
+ * Importing the real module removes that whole failure mode.
  */
 
-// ── Inline the function under test (mirrors stellarUri.js exactly) ────────────
-
-function generateStellarPaymentUri({
-  destination,
-  amount,
-  memo,
-  memoType = 'text',
-  assetCode = 'XLM',
-  assetIssuer = null,
-}) {
-  if (!destination) throw new Error('Destination wallet address is required');
-  if (!amount || parseFloat(amount) <= 0) throw new Error('Valid payment amount is required');
-
-  const params = new URLSearchParams();
-  params.append('destination', destination);
-  params.append('amount', String(amount));
-
-  if (memo) {
-    params.append('memo', memo);
-    params.append('memo_type', memoType.toUpperCase());
-  }
-
-  if (assetCode !== 'XLM' && assetCode !== 'native') {
-    params.append('asset_code', assetCode);
-    if (assetIssuer) params.append('asset_issuer', assetIssuer);
-  }
-
-  return `web+stellar:pay?${params.toString()}`;
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
+import { generateStellarPaymentUri, availableMemoTypes } from '../stellarUri';
+import { encodeMemo } from '../stellarMemo';
 
 const DEST = 'GAXYZ123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+const INTENT_MEMO = 'A3F91B2C';
 
 describe('generateStellarPaymentUri', () => {
   // ── XLM (native) ────────────────────────────────────────────────────────────
@@ -53,9 +25,9 @@ describe('generateStellarPaymentUri', () => {
     const uri = generateStellarPaymentUri({ destination: DEST, amount: 10.5, memo: 'STU1023' });
     expect(uri).toContain('web+stellar:pay?');
     expect(uri).toContain(`destination=${DEST}`);
-    expect(uri).toContain('amount=10.5');
+    expect(uri).toContain('amount=10.5000000');
     expect(uri).toContain('memo=STU1023');
-    expect(uri).toContain('memo_type=TEXT');
+    expect(uri).toContain('memo_type=MEMO_TEXT');
   });
 
   test('XLM URI omits asset_code and asset_issuer (native is default)', () => {
@@ -74,6 +46,58 @@ describe('generateStellarPaymentUri', () => {
     const uri = generateStellarPaymentUri({ destination: DEST, amount: 5 });
     expect(uri).toContain('web+stellar:pay?');
     expect(uri).not.toContain('memo=');
+  });
+
+  // ── Memo types (#1118) ──────────────────────────────────────────────────────
+
+  test('emits the SEP-0007 memo_type spelling, not the bare short form', () => {
+    // Pre-#1118 this emitted `memo_type=TEXT`, which is not a value SEP-0007
+    // defines; strict wallets reject it.
+    const uri = generateStellarPaymentUri({ destination: DEST, amount: 1, memo: INTENT_MEMO });
+    expect(uri).toContain('memo_type=MEMO_TEXT');
+    expect(uri).not.toContain('memo_type=TEXT');
+  });
+
+  test('MEMO_ID encodes the intent memo as its numeric equivalent', () => {
+    const uri = generateStellarPaymentUri({
+      destination: DEST, amount: 1, memo: INTENT_MEMO, memoType: 'MEMO_ID',
+    });
+    expect(uri).toContain('memo_type=MEMO_ID');
+    expect(uri).toContain(`memo=${encodeMemo(INTENT_MEMO, 'MEMO_ID')}`);
+  });
+
+  test('MEMO_HASH encodes the intent memo as URL-escaped base64', () => {
+    const uri = generateStellarPaymentUri({
+      destination: DEST, amount: 1, memo: INTENT_MEMO, memoType: 'MEMO_HASH',
+    });
+    expect(uri).toContain('memo_type=MEMO_HASH');
+    // URLSearchParams percent-encodes the base64 padding and '+'.
+    const parsed = new URLSearchParams(uri.split('?')[1]);
+    expect(parsed.get('memo')).toBe(encodeMemo(INTENT_MEMO, 'MEMO_HASH'));
+  });
+
+  test('accepts the legacy short memo type spellings', () => {
+    const uri = generateStellarPaymentUri({
+      destination: DEST, amount: 1, memo: INTENT_MEMO, memoType: 'id',
+    });
+    expect(uri).toContain('memo_type=MEMO_ID');
+  });
+
+  test('throws rather than emitting a URI the backend could not match', () => {
+    expect(() => generateStellarPaymentUri({
+      destination: DEST, amount: 1, memo: 'STU1023', memoType: 'MEMO_ID',
+    })).toThrow('cannot be encoded');
+  });
+
+  test('throws for MEMO_RETURN, which carries no payment reference', () => {
+    expect(() => generateStellarPaymentUri({
+      destination: DEST, amount: 1, memo: INTENT_MEMO, memoType: 'MEMO_RETURN',
+    })).toThrow('Unsupported memo type');
+  });
+
+  test('availableMemoTypes reflects what the memo can represent', () => {
+    expect(availableMemoTypes(INTENT_MEMO)).toEqual(['MEMO_TEXT', 'MEMO_ID', 'MEMO_HASH']);
+    expect(availableMemoTypes('STU1023')).toEqual(['MEMO_TEXT']);
   });
 
   // ── USDC (non-native) ────────────────────────────────────────────────────────
@@ -112,5 +136,9 @@ describe('generateStellarPaymentUri', () => {
 
   test('throws when amount is negative', () => {
     expect(() => generateStellarPaymentUri({ destination: DEST, amount: -5 })).toThrow('Valid payment amount is required');
+  });
+
+  test('throws for sub-stroop amounts (#1123)', () => {
+    expect(() => generateStellarPaymentUri({ destination: DEST, amount: 0.00000001 })).toThrow('Valid payment amount is required');
   });
 });

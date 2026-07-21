@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { generateStellarPaymentUri } from "../utils/stellarUri";
+import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
+import { encodeMemo } from "../utils/stellarMemo";
 import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
@@ -57,6 +58,9 @@ export default function PaymentForm() {
   const [hasDeletedPayments, setHasDeletedPayments] = useState(false);
   const [disputingTx, setDisputingTx]         = useState(null);
   const [disputedTxs, setDisputedTxs]         = useState(new Set());
+  // #1118 — wallets that cannot send free-text memos can switch the QR code to
+  // MEMO_ID or MEMO_HASH; all three decode back to the same payment reference.
+  const [memoType, setMemoType]               = useState("MEMO_TEXT");
   const errorRef  = useRef(null);
   const debounceRef = useRef(null);
   const qrWrapperRef = useRef(null);
@@ -240,13 +244,19 @@ export default function PaymentForm() {
                 const nonNative = instructions.acceptedAssets?.find(
                   a => a.code !== "XLM" && a.type !== "native"
                 );
+                const memoTypes = availableMemoTypes(instructions.memo);
+                // Guard against a stale selection if the memo changes to one
+                // that has no numeric equivalent.
+                const activeMemoType = memoTypes.includes(memoType) ? memoType : "MEMO_TEXT";
                 const paymentUri = generateStellarPaymentUri({
                   destination: instructions.walletAddress,
                   amount: instructions.feeAmount ?? student.feeAmount ?? 0,
                   memo: instructions.memo,
+                  memoType: activeMemoType,
                   assetCode: nonNative?.code,
                   assetIssuer: nonNative?.issuer,
                 });
+                const encodedMemo = encodeMemo(instructions.memo, activeMemoType);
                 const downloadFilename = `stellar-payment-${instructions.memo}.png`;
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
@@ -267,6 +277,45 @@ export default function PaymentForm() {
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       Compatible with Lobstr, Solar, XBULL and any SEP-0007 wallet.
                     </p>
+
+                    {/* Memo type — for wallets that require a numeric or hash memo (#1118) */}
+                    {memoTypes.length > 1 && (
+                      <div style={{ marginTop: "0.875rem" }}>
+                        <label
+                          htmlFor="memo-type-select"
+                          className="pf-section-label"
+                          style={{ display: "block", marginBottom: "0.375rem" }}
+                        >
+                          Memo type
+                        </label>
+                        <select
+                          id="memo-type-select"
+                          value={activeMemoType}
+                          onChange={(e) => setMemoType(e.target.value)}
+                          className="input input-sm"
+                          style={{ maxWidth: "16rem", margin: "0 auto" }}
+                        >
+                          <option value="MEMO_TEXT">Text (default)</option>
+                          <option value="MEMO_ID">ID — numeric</option>
+                          <option value="MEMO_HASH">Hash — 32 bytes</option>
+                        </select>
+                        {activeMemoType !== "MEMO_TEXT" && (
+                          <div style={{ marginTop: "0.625rem" }}>
+                            <span className="pf-section-label" style={{ display: "block", marginBottom: "0.375rem" }}>
+                              Memo value for this type
+                            </span>
+                            <div className="pf-code-row" style={{ justifyContent: "center" }}>
+                              <span className="pf-code" style={{ wordBreak: "break-all" }}>{encodedMemo}</span>
+                              <CopyButton text={encodedMemo} copyKey="encoded-memo" copied={copied} onCopy={copy} />
+                            </div>
+                          </div>
+                        )}
+                        <p style={{ marginTop: "0.5rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          Only change this if your wallet cannot send a text memo. All three
+                          types identify the same payment.
+                        </p>
+                      </div>
+                    )}
 
                     {/* QR actions */}
                     <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", marginTop: "0.875rem", flexWrap: "wrap" }}>

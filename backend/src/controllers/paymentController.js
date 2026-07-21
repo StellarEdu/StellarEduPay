@@ -21,6 +21,7 @@ const { server } = require('../config/stellarConfig');
 const { ACCEPTED_ASSETS } = require('../config/stellarConfig');
 const { validateTransactionHash } = require('../utils/hashValidator');
 const { getPaymentLimits, validatePaymentAmount } = require('../utils/paymentLimits');
+const { SUPPORTED_MEMO_TYPES } = require('../utils/stellarMemo');
 const { convertToLocalCurrency } = require('../services/currencyConversionService');
 const { withStellarRetry } = require('../utils/withStellarRetry');
 const { makePaymentAuditLogger } = require('../utils/paymentAuditLogger');
@@ -105,8 +106,12 @@ async function getPaymentInstructions(req, res, next) {
       feeLocalEquivalent: feeConversion?.available
         ? { amount: feeConversion.localAmount, currency: feeConversion.currency, rate: feeConversion.rate, rateTimestamp: feeConversion.rateTimestamp }
         : null,
-      note: 'Include the payment intent memo exactly when sending payment. The memo must be sent as a text memo (MEMO_TEXT). Other memo types (MEMO_ID, MEMO_HASH, MEMO_RETURN) will not be recognised and your payment will not be matched.',
+      note: 'Include the payment intent memo exactly when sending payment. MEMO_TEXT is recommended; wallets that cannot send text memos may use MEMO_ID or MEMO_HASH with the encoded form of the same reference. MEMO_RETURN is not recognised and such payments will not be matched.',
+      // `memoType` keeps its original 'text' spelling — it is part of the
+      // published API response and existing clients compare against it
+      // directly. New clients should read `supportedMemoTypes` (#1118).
       memoType: 'text',
+      supportedMemoTypes: SUPPORTED_MEMO_TYPES,
     });
   } catch (err) {
     next(err);
