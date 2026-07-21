@@ -2,9 +2,10 @@
 
 ## Overview
 
-CI runs `npm audit --audit-level=high` for all three packages (root, backend, frontend).
-Any **high** or **critical** advisory will fail the build. Dependabot opens weekly PRs for
-outdated dependencies.
+CI runs `node scripts/check-dependency-audit.js` for all three packages (root, backend,
+frontend). It runs `npm audit --json` and fails the build on any **high** or **critical**
+advisory that has no current, non-expired entry in [`security-exceptions.json`](../security-exceptions.json).
+Dependabot opens weekly PRs for outdated dependencies.
 
 ## When CI Fails with a Vulnerability
 
@@ -18,8 +19,26 @@ outdated dependencies.
 4. **If no fix is available** (zero-day / no upstream patch):
    - Open a GitHub issue tagged `security` with the advisory CVE/ID and affected paths.
    - Assess exploitability in context (e.g. a server-side-only dep used only in tests).
-   - If safe to defer, document the exception in `docs/security.md` with the issue link.
-   - Do **not** silence the audit without a written justification.
+   - If safe to defer, add an entry to `security-exceptions.json` (repo root):
+     ```json
+     {
+       "id": "GHSA-xxxx-xxxx-xxxx",
+       "package": "package-name",
+       "path": "backend",
+       "severity": "high",
+       "reason": "Why this is safe to defer, in context.",
+       "issue": "https://github.com/<org>/<repo>/issues/<n>",
+       "added": "2026-07-20",
+       "expires": "2026-10-20"
+     }
+     ```
+     `path` must match the package the CI audit step runs against (`.`, `backend`, or
+     `frontend`). `id` is the advisory's GHSA slug (the last path segment of its
+     `github.com/advisories/...` URL). `scripts/check-dependency-audit.js` treats an
+     exception whose `expires` date has passed as if it didn't exist, so the build
+     fails again until the entry is renewed (with a fresh look at whether a fix has
+     since landed) or the vulnerability is fixed.
+   - Do **not** silence the audit without a corresponding exception entry.
 
 ## Dependabot PRs
 

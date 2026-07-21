@@ -37,17 +37,16 @@ jobs:
       - run: cd backend && npm ci && cd ..
       - run: cd frontend && npm ci && cd ..
 
-      # Fail the build on high or critical advisories.
-      # Triage process: file a GitHub issue, apply `npm audit fix`, or add an
-      # explicit `npm audit --omit` entry with a justification comment.
+      # Fails on any high/critical advisory that has no current, non-expired
+      # entry in security-exceptions.json. See docs/dependency-triage.md.
       - name: Audit root
-        run: npm audit --audit-level=high
+        run: node scripts/check-dependency-audit.js .
 
       - name: Audit backend
-        run: cd backend && npm audit --audit-level=high
+        run: node scripts/check-dependency-audit.js backend
 
       - name: Audit frontend
-        run: cd frontend && npm audit --audit-level=high
+        run: node scripts/check-dependency-audit.js frontend
 
   test:
     runs-on: ubuntu-latest
