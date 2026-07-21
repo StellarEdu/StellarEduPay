@@ -2,6 +2,7 @@
 
 const { deriveIdempotencyKey, fingerprintRequest } = require('../utils/idempotencyKey');
 const idempotencyStore = require('../services/idempotencyStore');
+const currencyConversionService = require('../services/currencyConversionService');
 
 /**
  * Idempotency middleware.
@@ -10,7 +11,9 @@ const idempotencyStore = require('../services/idempotencyStore');
  * exactly-once semantics over a TTL window:
  *
  *  - Replay (same key, same body, request already completed) → the cached
- *    response is returned verbatim (same status, same body).
+ *    response is returned verbatim (same status, same body) EXCEPT for
+ *    volatile fields (see `refreshVolatileFields` below), which are
+ *    recomputed on every replay.
  *  - Key reuse with a DIFFERENT body → 422. Reusing a key for a different
  *    payload is a client bug; replaying the first response would be wrong and
  *    re-executing would violate idempotency, so we refuse it.
@@ -33,6 +36,54 @@ const idempotencyStore = require('../services/idempotencyStore');
  *
  * Usage: apply to individual POST routes that must be idempotent.
  */
+
+/**
+ * A 24h idempotency TTL is appropriate for replay/reuse protection but far too
+ * long to freeze a currency-conversion rate: a cached body embedding
+ * `localCurrency` (e.g. the payment verify response) would otherwise replay
+ * whatever FX rate happened to be current at the moment of the FIRST call,
+ * potentially showing a parent a stale converted amount hours or days later.
+ *
+ * Rather than giving currency-bearing records their own (still-arbitrary) short
+ * TTL, we exclude `localCurrency` from the "frozen" part of the cache entirely:
+ * every replay recomputes it fresh from the stored `amount`/`assetCode`, using
+ * the currency-conversion service's own (much shorter) rate cache. A refresh
+ * failure falls back to the originally cached value rather than breaking the
+ * replay.
+ */
+async function refreshVolatileFields(body) {
+  if (!body || typeof body !== 'object') return body;
+  const localCurrency = body.localCurrency;
+  if (!localCurrency || typeof localCurrency !== 'object' || !localCurrency.currency) {
+    return body;
+  }
+  if (typeof body.amount !== 'number') return body;
+
+  try {
+    const fresh = await currencyConversionService.convertToLocalCurrency(
+      body.amount,
+      body.assetCode || 'XLM',
+      localCurrency.currency
+    );
+    return {
+      ...body,
+      localCurrency: {
+        amount: fresh.available ? fresh.localAmount : null,
+        currency: fresh.currency,
+        rate: fresh.rate,
+        rateTimestamp: fresh.rateTimestamp,
+        available: fresh.available,
+      },
+    };
+  } catch (err) {
+    const logger = require('../utils/logger').child('Idempotency');
+    logger.warn('Failed to refresh currency rate on idempotent replay, serving cached value', {
+      error: err.message,
+    });
+    return body;
+  }
+}
+
 function idempotency(req, res, next) {
   const rawKey = req.headers['idempotency-key'];
 
@@ -48,7 +99,7 @@ function idempotency(req, res, next) {
   const fingerprint = fingerprintRequest(req.body);
 
   // Decide what to do with an existing record for this key.
-  function resolveExisting(record) {
+  async function resolveExisting(record) {
     if (!record) return null;
     if (record.state === 'completed') {
       if (record.requestFingerprint && record.requestFingerprint !== fingerprint) {
@@ -59,7 +110,8 @@ function idempotency(req, res, next) {
         });
         return 'handled';
       }
-      res.status(record.responseStatus).json(record.responseBody);
+      const body = await refreshVolatileFields(record.responseBody);
+      res.status(record.responseStatus).json(body);
       return 'handled';
     }
     // in_progress
