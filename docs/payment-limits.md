@@ -11,27 +11,109 @@ The Payment Limits feature provides configurable minimum and maximum thresholds 
 
 ## Configuration
 
-Payment limits are configured via environment variables in the `.env` file:
+Limits resolve at request time from the database, with the environment
+variables as the final fallback. A deployment that never calls the admin API
+behaves exactly as it did before this was introduced.
+
+Resolution order, most specific first:
+
+| # | Source | Scope |
+| - | ------ | ----- |
+| 1 | `School.settings.paymentLimits.assets[CODE]` | One school, one asset |
+| 2 | `School.settings.paymentLimits.default` | One school |
+| 3 | `SystemConfig` key `paymentLimits` → `assets[CODE]` | Global, one asset |
+| 4 | `SystemConfig` key `paymentLimits` → `default` | Global |
+| 5 | `MIN_PAYMENT_AMOUNT` / `MAX_PAYMENT_AMOUNT` | Env fallback |
+
+Per-asset matters because XLM and USDC occupy very different value ranges — a
+ceiling that is sensible for one is meaningless for the other. A deployment
+accepts a single asset at a time today, so the asset key is largely
+future-proofing, but storing limits without it would rebuild the same
+conflation in the config model.
+
+### Environment fallback
 
 ```bash
-# Minimum payment amount in XLM/USDC (default: 0.01)
+# Minimum payment amount (default: 0.01)
 MIN_PAYMENT_AMOUNT=0.01
 
-# Maximum payment amount in XLM/USDC (default: 100000)
+# Maximum payment amount (default: 100000)
 MAX_PAYMENT_AMOUNT=100000
+
+# How long resolved limits are cached in process (default: 30000)
+PAYMENT_LIMITS_CACHE_TTL_MS=30000
 ```
-
-### Default Values
-
-- **Minimum**: 0.01 XLM/USDC
-- **Maximum**: 100,000 XLM/USDC
 
 ### Validation Rules
 
-The system validates that:
-1. `MIN_PAYMENT_AMOUNT` must be a positive number (> 0)
-2. `MAX_PAYMENT_AMOUNT` must be greater than `MIN_PAYMENT_AMOUNT`
-3. If validation fails, the application will not start and will throw a configuration error
+Both the env values at boot and every admin write are checked against the same
+rules:
+
+1. `min` must be a finite, non-negative number
+2. `max` must be a finite number greater than `min`
+3. A bad env value prevents startup; a bad admin write is rejected with `400`
+   and `INVALID_PAYMENT_LIMITS`
+
+A stored value that somehow fails validation is ignored at resolution time and
+the next layer down applies — a corrupt record degrades to a safe limit rather
+than to no limit.
+
+## Managing limits at runtime
+
+Limits are a fraud-prevention control, so they need to be adjustable while an
+incident is happening rather than on the next deploy.
+
+```bash
+# Read effective limits (add ?schoolId= to scope to a school)
+GET /api/admin/payment-limits
+
+# Set global limits
+PUT /api/admin/payment-limits
+{ "default": { "min": 1, "max": 5000 },
+  "assets": { "USDC": { "min": 1, "max": 2000 } } }
+
+# Set one school's limits
+PUT /api/admin/payment-limits
+{ "schoolId": "SCH001", "default": { "min": 2, "max": 800 } }
+
+# Remove a school override, falling back to global
+DELETE /api/admin/payment-limits/SCH001
+```
+
+All three require admin authentication. The `GET` response includes a `source`
+field naming the layer that supplied the effective value — without it, a school
+override silently masking a global change looks identical to the change not
+having applied.
+
+Every mutation is audit-logged at `high` severity with the before and after
+values (`PAYMENT_LIMITS_UPDATED`, `PAYMENT_LIMITS_CLEARED`). Rejected writes are
+logged too, as `PAYMENT_LIMITS_UPDATE_REJECTED` — a run of malformed writes
+against a security control is itself worth seeing.
+
+### Propagation
+
+Resolved limits are cached in process for `PAYMENT_LIMITS_CACHE_TTL_MS`
+(default 30s) because resolution sits in the payment hot path. A write
+invalidates the cache immediately on the instance that served it; other
+instances converge within the TTL. That bounded staleness is the trade for not
+doing a database read per payment, and is still a different order of magnitude
+from requiring a redeployment.
+
+## Monitoring
+
+`payment_limit_triggered_total{school_id,asset,code}` counts payments rejected
+by the limits. Before it existed, the limits were a control with no feedback
+loop — nothing told an operator the configured values had stopped matching real
+payment behaviour.
+
+Two alerts ship in `monitoring/alerts/payment_limits.yml`:
+
+- **PaymentLimitTriggeredFrequently** (warning) — a sustained rejection rate for
+  a school/asset/code. A sustained `AMOUNT_TOO_HIGH` is either a fee structure
+  the ceiling no longer fits, or someone probing with large amounts.
+- **PaymentLimitBlockingMostPayments** (critical) — more than half of received
+  payments rejected, which in practice means a misconfiguration (a limit set in
+  the wrong asset's value range does exactly this) and parents cannot pay.
 
 ## How It Works
 
@@ -222,8 +304,6 @@ If you're adding payment limits to an existing deployment:
 
 Potential improvements to the payment limits feature:
 
-1. **Per-Asset Limits**: Different limits for XLM vs USDC
-2. **Dynamic Limits**: Adjust limits based on student grade level or program
-3. **Rate Limiting**: Limit number of payments per time period
-4. **Admin Interface**: UI for managing limits without redeployment
-5. **Alerts**: Notify admins when limits are frequently triggered
+1. **Dynamic Limits**: Adjust limits based on student grade level or program
+2. **Rate Limiting**: Limit number of payments per time period
+3. **Admin UI**: A front-end for the limits API, which is currently HTTP-only

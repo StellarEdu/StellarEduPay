@@ -5,6 +5,7 @@ global:
 rule_files:
   - "alerts/price_feed.yml"
   - "alerts/horizon_poll.yml"
+  - "alerts/payment_limits.yml"
 
 scrape_configs:
   - job_name: stellaredupay

@@ -60,7 +60,6 @@ function wrapStellarError(err) {
 // ====================== PAYMENT INSTRUCTIONS ======================
 async function getPaymentInstructions(req, res, next) {
   try {
-    const limits = getPaymentLimits();
     const targetCurrency = req.school.localCurrency || 'USD';
     const { feeCategory, asset } = req.query;
 
@@ -71,6 +70,12 @@ async function getPaymentInstructions(req, res, next) {
         return res.status(400).json({ error: `Asset ${assetCode} is not accepted by this school`, code: 'ASSET_NOT_ACCEPTED', supportedAssets });
       }
     }
+
+    // Resolved after the asset is known so per-asset limits apply (#1117).
+    const limits = await getPaymentLimits({
+      schoolId: req.schoolId,
+      asset: asset ? asset.split(':')[0] : undefined,
+    });
 
     const student = await Student.findOne({ schoolId: req.schoolId, studentId: req.params.studentId });
 
@@ -137,7 +142,7 @@ async function createPaymentIntent(req, res, next) {
       categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: fee.remainingBalance || fee.amount };
     }
 
-    const limitValidation = validatePaymentAmount(feeAmount);
+    const limitValidation = await validatePaymentAmount(feeAmount, { schoolId });
     if (!limitValidation.valid) return res.status(400).json({ error: limitValidation.error, code: limitValidation.code });
 
     const memo = crypto.randomBytes(4).toString('hex').toUpperCase();

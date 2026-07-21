@@ -95,7 +95,10 @@ async function processTransaction(tx, school, fencingToken) {
   const paymentAmount = normalizeToNumber(payOp.amount);
 
   // Validate payment amount is within configured limits
-  const limitValidation = validatePaymentAmount(paymentAmount);
+  const limitValidation = await validatePaymentAmount(paymentAmount, {
+    schoolId,
+    asset: asset?.code,
+  });
   if (!limitValidation.valid) {
     logger.warn('Payment outside limits', {
       txHash: tx.hash,

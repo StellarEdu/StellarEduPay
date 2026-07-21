@@ -44,7 +44,7 @@ async function getAcceptedAssets(req, res, next) {
 
 async function getPaymentLimitsEndpoint(req, res, next) {
   try {
-    const limits = getPaymentLimits();
+    const limits = await getPaymentLimits({ schoolId: req.schoolId });
     res.json({
       min: limits.min,
       max: limits.max,

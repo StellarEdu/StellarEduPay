@@ -189,6 +189,18 @@ const suspiciousPaymentFlagged = new client.Counter({
   registers: [registry],
 });
 
+// Payment limit rejections (#1117). Without this there is no signal telling
+// operators that the configured limits are being hit often enough to warrant
+// adjusting — the limits were previously a control nobody could observe.
+// `code` distinguishes AMOUNT_TOO_LOW from AMOUNT_TOO_HIGH: a spike in the
+// latter is the fraud/misconfiguration signal worth alerting on.
+const paymentLimitTriggeredTotal = new client.Counter({
+  name: 'payment_limit_triggered_total',
+  help: 'Number of payments rejected by the configured payment limits',
+  labelNames: ['school_id', 'asset', 'code'],
+  registers: [registry],
+});
+
 // Concurrent payment batch metrics — recorded by the concurrentPaymentProcessor
 // after each processBatch() call so batch throughput and per-item outcomes are
 // observable and alertable.
@@ -315,6 +327,7 @@ module.exports = {
   syncDurationSeconds,
   httpRequestDurationSeconds,
   suspiciousPaymentFlagged,
+  paymentLimitTriggeredTotal,
   paymentBatchTotal,
   paymentBatchItemsTotal,
   paymentBatchDurationSeconds,

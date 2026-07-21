@@ -10,23 +10,55 @@
  *
  * Rule: never use raw JS Number arithmetic on monetary values. Use Decimal for
  * all comparisons and arithmetic; convert to Number only at output boundaries.
+ *
+ * LIMIT SOURCE (Issue #1117)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Limits used to be read once from MIN_PAYMENT_AMOUNT / MAX_PAYMENT_AMOUNT at
+ * module load, so changing them meant a redeploy. They now resolve per call via
+ * paymentLimitsService, which reads database-backed values and falls back to
+ * those same env vars — a deployment that never uses the admin API keeps its
+ * existing behaviour exactly.
+ *
+ * This made validatePaymentAmount async. Every caller was already inside an
+ * async function, so the change is an added `await` at each site.
  */
 
 const Decimal = require('decimal.js');
-const { MIN_PAYMENT_AMOUNT, MAX_PAYMENT_AMOUNT } = require('../config');
+const {
+  resolveLimits,
+  compareAgainstLimits,
+} = require('../services/paymentLimitsService');
+const { paymentLimitTriggeredTotal } = require('../metrics');
+const logger = require('./logger').child('PaymentLimits');
 
-const D_MIN = new Decimal(MIN_PAYMENT_AMOUNT);
-const D_MAX = new Decimal(MAX_PAYMENT_AMOUNT);
+/**
+ * Validate an amount against the effective limits for a school and asset.
+ *
+ * @param {number} amount
+ * @param {object} [context]
+ * @param {string} [context.schoolId] - Scopes to a school's override
+ * @param {string} [context.asset]    - Asset code, e.g. 'XLM'
+ * @returns {Promise<{valid: boolean, error?: string, code?: string}>}
+ */
+async function validatePaymentAmount(amount, { schoolId, asset } = {}) {
+  const limits = await resolveLimits({ schoolId, asset });
+  const result = compareAgainstLimits(amount, limits);
 
-function validatePaymentAmount(amount) {
-  const d = new Decimal(typeof amount === 'number' && isFinite(amount) ? amount : NaN);
-  if (!d.isFinite() || d.lte(0))
-    return { valid: false, error: 'Payment amount must be a valid positive number', code: 'INVALID_AMOUNT' };
-  if (d.lt(D_MIN))
-    return { valid: false, error: `Payment amount ${amount} is below the minimum of ${MIN_PAYMENT_AMOUNT}`, code: 'AMOUNT_TOO_LOW' };
-  if (d.gt(D_MAX))
-    return { valid: false, error: `Payment amount ${amount} exceeds the maximum of ${MAX_PAYMENT_AMOUNT}`, code: 'AMOUNT_TOO_HIGH' };
-  return { valid: true };
+  if (!result.valid) {
+    try {
+      paymentLimitTriggeredTotal.inc({
+        school_id: schoolId || 'unknown',
+        asset: (asset || 'XLM').toUpperCase(),
+        code: result.code,
+      });
+    } catch (err) {
+      // Never let a metrics failure reject a payment that the limits allow, or
+      // vice versa — observability is not in the correctness path.
+      logger.warn('Failed to record payment limit metric', { err: err.message });
+    }
+  }
+
+  return result;
 }
 
 function validatePaymentAmountAgainstFee(paymentAmount, feeAmount, maxPaymentMultiplier = 3.0) {
@@ -44,8 +76,17 @@ function validatePaymentAmountAgainstFee(paymentAmount, feeAmount, maxPaymentMul
   return { valid: true };
 }
 
-function getPaymentLimits() {
-  return { min: MIN_PAYMENT_AMOUNT, max: MAX_PAYMENT_AMOUNT };
+/**
+ * The effective limits, for display in payment instructions.
+ *
+ * @param {object} [context]
+ * @param {string} [context.schoolId]
+ * @param {string} [context.asset]
+ * @returns {Promise<{min: number, max: number}>}
+ */
+async function getPaymentLimits({ schoolId, asset } = {}) {
+  const { min, max } = await resolveLimits({ schoolId, asset });
+  return { min, max };
 }
 
 module.exports = { validatePaymentAmount, validatePaymentAmountAgainstFee, getPaymentLimits };
