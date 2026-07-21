@@ -58,7 +58,7 @@
     ]
   },
   "dependencies": {
-    "bullmq": "^5.71.1",
+    "bullmq": "^5.80.9",
     "decimal.js": "^10.6.0",
     "ioredis": "^5.10.1",
     "node-cache": "^5.1.2"
