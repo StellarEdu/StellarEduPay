@@ -33,6 +33,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # The process-level error handlers (src/errorHandling.js) deliberately
+    # process.exit(1) on an unhandled rejection or uncaught exception (see
+    # docs/error-handling.md). Without a restart policy, a crash here was a
+    # permanent, all-tenants outage requiring manual intervention — this was
+    # previously unset. See docs/error-handling.md "Recovery Time & Blast
+    # Radius" for the measured/expected recovery time this now provides.
+    restart: unless-stopped
 
   frontend:
     build:
@@ -50,6 +57,7 @@ services:
       - frontend-backend
     mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
     cpus: ${FRONTEND_CPUS:-0.5}
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -83,6 +91,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
 
   # Runs a mongodump every 24 hours and retains 7 days of backups.
   # Backups are written to the host path defined by BACKUP_DIR (default: ./backups).
