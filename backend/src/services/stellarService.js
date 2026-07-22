@@ -21,6 +21,7 @@ const {
 const { withStellarRetry } = require("../utils/withStellarRetry");
 const { savePayment } = require("./transactionService");
 const { deriveCorrelationId } = require("../utils/correlationId");
+const lock = require("./distributedLock");
 const {
   CONFIRMATION_STATES,
   computeTargetState,
@@ -29,6 +30,13 @@ const {
   isConfirmedOrAbove,
 } = require("./paymentConfirmationStateMachine");
 const logger = require("../utils/logger").child("StellarService");
+
+// TTL for the per-student balance lock (#1026), shared with paymentController's
+// verifyPayment. Guards the read-aggregate-then-write sequence that computes
+// cumulativeTotal and writes it as an absolute Student.$set — unsafe to run
+// concurrently for the same student, whether the other writer is verifyPayment
+// or another syncPaymentsForSchool run.
+const STUDENT_BALANCE_LOCK_TTL_MS = parseInt(process.env.STUDENT_BALANCE_LOCK_TTL_MS || "15000", 10);
 
 function detectAsset(payOp) {
   const assetType = payOp.asset_type;
@@ -741,6 +749,22 @@ async function syncPaymentsForSchool(school) {
       const feeAmountForRecord = intent ? intent.amount : student.feeAmount;
       const feeCategory = intent ? (intent.feeCategory || null) : null;
 
+      // Issue #1026 — the balance write below is a non-atomic read-aggregate-then-
+      // absolute-write. It races against another sync pass touching the same
+      // student, and against verifyPayment's equivalent section, unless both hold
+      // this shared per-student lock around it.
+      const studentLockKey = lock.studentBalanceLockKey(schoolId, studentId);
+      const studentLockInfo = await lock.acquire(studentLockKey, STUDENT_BALANCE_LOCK_TTL_MS);
+      if (!studentLockInfo) {
+        // A concurrent verify/sync is updating this student's balance right now.
+        // Skip this transaction for this pass — it will be picked up on the next
+        // sync run once the in-flight update releases the lock.
+        summary.failed++;
+        summary.failedDetails.push({ txHash: tx.hash, reason: 'STUDENT_BALANCE_LOCK_CONTENDED' });
+        continue;
+      }
+      const studentLockToken = studentLockInfo.token;
+
       const previousPayments = await Payment.aggregate([
         { $match: { schoolId, studentId, deletedAt: null } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
@@ -860,6 +884,7 @@ async function syncPaymentsForSchool(school) {
         throw saveErr;
       } finally {
         if (session) await session.endSession();
+        await lock.release(studentLockKey, studentLockToken);
       }
       newPayments++;
 
