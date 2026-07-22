@@ -62,13 +62,15 @@ const PAYMENT_STATUS_TRANSITIONS = Object.freeze({
  * These paths must be explicitly audited by the caller.
  *
  *   SUCCESS  → REFUNDED  : admin refunds a confirmed payment
- *   DISPUTED → REFUNDED  : admin resolves a dispute via refund
+ *   DISPUTED → REFUNDED  : admin (or dispute resolution) refunds a disputed payment
+ *   DISPUTED → SUCCESS   : admin (or dispute resolution) rejects a dispute, restoring
+ *                          the original confirmed status
  */
 const ADMIN_PAYMENT_STATUS_TRANSITIONS = Object.freeze({
   [PAYMENT_STATUS.SUCCESS]:   [PAYMENT_STATUS.DISPUTED, PAYMENT_STATUS.REFUNDED],
   [PAYMENT_STATUS.PENDING]:   [PAYMENT_STATUS.FAILED],
   [PAYMENT_STATUS.SUBMITTED]: [PAYMENT_STATUS.FAILED],
-  [PAYMENT_STATUS.DISPUTED]:  [PAYMENT_STATUS.REFUNDED],
+  [PAYMENT_STATUS.DISPUTED]:  [PAYMENT_STATUS.REFUNDED, PAYMENT_STATUS.SUCCESS],
 });
 
 /**
