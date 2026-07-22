@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  # backend-deployment.yaml runs replicas: 2 — require at least one pod to stay
+  # available during any voluntary disruption (node drain, cluster autoscaler
+  # scale-down, managed-cluster upgrade) so routine maintenance can never take
+  # the payment backend fully offline.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend
