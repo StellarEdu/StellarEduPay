@@ -98,6 +98,19 @@ function newToken() {
 }
 
 /**
+ * Canonical lock key for the read-aggregate-then-write balance section that
+ * both verifyPayment (paymentController) and syncPaymentsForSchool
+ * (stellarService) run for a given student. Shared here so the two call
+ * sites can never drift into different key formats and silently stop
+ * contending with each other (#1026).
+ * @param {string} schoolId
+ * @param {string} studentId
+ */
+function studentBalanceLockKey(schoolId, studentId) {
+  return `sync:lock:${schoolId}:student:${studentId}`;
+}
+
+/**
  * Get fencing token counter key for a lock key.
  */
 function getFenceKey(key) {
@@ -294,6 +307,7 @@ module.exports = {
   withLock,
   getCurrentFence,
   startWatchdog,
+  studentBalanceLockKey,
   close,
   _isRedisEnabled: () => Boolean(client),
   _getFenceKey: getFenceKey,
