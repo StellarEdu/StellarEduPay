@@ -62,15 +62,22 @@ const PAYMENT_STATUS_TRANSITIONS = Object.freeze({
  * These paths must be explicitly audited by the caller.
  *
  *   SUCCESS  → REFUNDED  : admin refunds a confirmed payment
- *   DISPUTED → REFUNDED  : admin (or dispute resolution) refunds a disputed payment
- *   DISPUTED → SUCCESS   : admin (or dispute resolution) rejects a dispute, restoring
- *                          the original confirmed status
+ *   DISPUTED → REFUNDED  : admin resolves a dispute via refund
+ *   FAILED   → SUCCESS   : admin corrects a payment wrongly marked failed
+ *                          (e.g. a submission that actually succeeded, a sync
+ *                          race, a misclassified permanent-failure code) once
+ *                          manual reconciliation confirms funds arrived —
+ *                          Issue #1029
+ *   FAILED   → DISPUTED  : admin escalates a wrongly-failed payment for
+ *                          investigation rather than confirming it outright —
+ *                          Issue #1029
  */
 const ADMIN_PAYMENT_STATUS_TRANSITIONS = Object.freeze({
   [PAYMENT_STATUS.SUCCESS]:   [PAYMENT_STATUS.DISPUTED, PAYMENT_STATUS.REFUNDED],
   [PAYMENT_STATUS.PENDING]:   [PAYMENT_STATUS.FAILED],
   [PAYMENT_STATUS.SUBMITTED]: [PAYMENT_STATUS.FAILED],
-  [PAYMENT_STATUS.DISPUTED]:  [PAYMENT_STATUS.REFUNDED, PAYMENT_STATUS.SUCCESS],
+  [PAYMENT_STATUS.DISPUTED]:  [PAYMENT_STATUS.REFUNDED],
+  [PAYMENT_STATUS.FAILED]:    [PAYMENT_STATUS.SUCCESS, PAYMENT_STATUS.DISPUTED],
 });
 
 /**
