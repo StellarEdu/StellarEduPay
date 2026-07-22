@@ -12,7 +12,10 @@ async function up() {
 }
 
 async function down() {
-  await School.updateMany({}, { $unset: { timezone: '' } });
+  // up() only added timezone:'UTC' where the field was missing. Scope the
+  // reversal to that same value so a school whose timezone was legitimately
+  // changed to something else keeps it instead of being stripped.
+  await School.updateMany({ timezone: 'UTC' }, { $unset: { timezone: '' } });
 }
 
 module.exports = { up, down };
