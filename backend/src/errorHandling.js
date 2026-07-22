@@ -16,6 +16,12 @@ function setupEnforceConsoleErrorLogging() {
       reason: reason instanceof Error ? { message: reason.message, stack: reason.stack } : String(reason),
       promise: String(promise),
     });
+    // Registering this listener suppresses Node's own fatal default for
+    // unhandledRejection, which would otherwise make this a no-op deviation
+    // from the documented policy (docs/error-handling.md: "Log + exit(1)").
+    // Exit explicitly so the two process-level handlers agree with each other
+    // and with what's documented.
+    process.exit(1);
   });
 
   process.on('uncaughtException', (err) => {

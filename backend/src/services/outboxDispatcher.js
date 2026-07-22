@@ -52,7 +52,19 @@ async function dispatchOutboxEvents() {
 
 function startOutboxDispatcher() {
   if (_dispatchTimer) return;
-  _dispatchTimer = setInterval(dispatchOutboxEvents, DISPATCH_INTERVAL_MS);
+  // dispatchOutboxEvents already catches everything it awaits internally, but
+  // passing an async function straight to setInterval is a structural trap:
+  // Node never observes the returned promise, so any *future* change that adds
+  // an await outside its try/catch would silently become an unhandled
+  // rejection — and, per docs/error-handling.md, that crashes the whole
+  // multi-tenant process over a background job affecting a single school's
+  // event. This terminal .catch() is the boundary that makes that impossible
+  // regardless of what dispatchOutboxEvents does internally.
+  _dispatchTimer = setInterval(() => {
+    dispatchOutboxEvents().catch((err) => {
+      logger.error('Outbox dispatch tick failed unexpectedly', { error: err.message, stack: err.stack });
+    });
+  }, DISPATCH_INTERVAL_MS);
   if (_dispatchTimer.unref) _dispatchTimer.unref();
   logger.info('Outbox dispatcher started');
 }

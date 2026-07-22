@@ -22,10 +22,12 @@ async function up() {
 }
 
 async function down() {
-  // Removing the field restores the pre-migration state.
+  // up() only set isActive:true on documents that lacked the field. Scope the
+  // reversal to that same value so a fee structure that was legitimately set to
+  // isActive:false after the migration keeps its value instead of being wiped.
   const result = await mongoose.connection
     .collection('feestructures')
-    .updateMany({}, { $unset: { isActive: '' } });
+    .updateMany({ isActive: true }, { $unset: { isActive: '' } });
 
   console.log(`[005] Removed isActive from ${result.modifiedCount} fee structure(s)`);
 }

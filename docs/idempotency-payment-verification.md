@@ -350,6 +350,40 @@ The endpoint still requires school context (`req.schoolId`), ensuring users can 
 
 Cached responses include original verification timestamps, allowing clients to determine data age.
 
+## Cache Expiration & Currency Rate Freshness
+
+`POST /api/payments/verify` is layered under two independent caches, each with its own freshness guarantee:
+
+1. **Payment-record cache** (`Payment.findOne({ schoolId, txHash })`, `cached: true` in the
+   response above). This is a permanent, business-level dedup: once a transaction has been
+   verified on-chain it must never be re-verified, so this lookup intentionally has no TTL.
+   However, the `localCurrency` block returned on this path is **never read from storage** — it
+   is computed fresh on every call via `convertToLocalCurrency()`, so it always reflects a
+   current (or very recently cached, see `PRICE_CACHE_TTL_MS`) exchange rate regardless of how
+   old the underlying `Payment` record is.
+
+2. **HTTP idempotency-key cache** (`backend/src/middleware/idempotency.js`, applied to this route
+   via the `Idempotency-Key` header). This caches the *entire rendered response body* so that a
+   client retry with the same key gets back byte-identical output. Records expire after
+   `IDEMPOTENCY_KEY_TTL_SECONDS` (default `86400` = 24h; enforced by a MongoDB TTL index — see
+   `backend/migrations/003_add_idempotency_key_ttl_index.js`), which is an appropriate window for
+   replay/reuse protection but far too long to freeze a currency-conversion rate — a client
+   replaying the same `Idempotency-Key` hours later should not see the exchange rate from the
+   moment of the original call.
+
+   To close that gap, the idempotency middleware **excludes `localCurrency` from the frozen
+   snapshot**: whenever a cached response body contains a `localCurrency` object, the middleware
+   recomputes it fresh (via `currencyConversionService.convertToLocalCurrency`, using the
+   response's own `amount`/`assetCode`) on every replay, before the cached body is sent back. All
+   other fields (hash, status, fee validation, etc.) are still served verbatim from cache. If the
+   refresh call fails, the middleware falls back to the originally cached value rather than
+   breaking the replay.
+
+This means a cached idempotent response containing `localCurrency.rate` is never served with a
+rate older than the currency-conversion service's own cache window
+(`PRICE_CACHE_TTL_MS`, default 60s), independent of the 24h idempotency-record TTL.
+See `backend/tests/idempotencyMiddlewareCurrencyFreshness.test.js` for coverage.
+
 ## Migration Notes
 
 ### Breaking Changes
@@ -366,21 +400,20 @@ None. The response structure is extended, not changed:
 
 ## Future Enhancements
 
-1. **Cache Expiration**
-   - Add TTL for cached responses
-   - Refresh stale data automatically
-
-2. **Cache Warming**
+1. **Cache Warming**
    - Pre-load recent transactions
    - Reduce first-request latency
 
-3. **Analytics**
+2. **Analytics**
    - Track cache hit rates
    - Identify optimization opportunities
 
-4. **Partial Updates**
+3. **Partial Updates**
    - Update confirmation status without full re-verification
-   - Refresh currency conversion rates
+
+> Cache expiration (TTL) and automatic currency-rate refresh, formerly listed
+> here, are implemented — see "Cache Expiration & Currency Rate Freshness"
+> above.
 
 ## Related Documentation
 

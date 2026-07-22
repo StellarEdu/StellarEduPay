@@ -644,49 +644,70 @@ describe('PATCH /api/disputes/:id/resolve — state machine, auth, audit, SSE, p
 
   // ── Payment status sync (#894) ─────────────────────────────────────────────
 
+  // _syncPaymentStatus now loads the payment and goes through `.save()` (with
+  // the admin-override flag) instead of `findOneAndUpdate`, so these mocks
+  // need a document-like object that records the mutation.
+  function mockLoadedPayment(initialStatus) {
+    const doc = { ...MOCK_PAYMENT, status: initialStatus, $locals: {} };
+    doc.save = jest.fn().mockImplementation(async () => doc);
+    return doc;
+  }
+
   test('payment synced to REFUNDED when dispute resolved', async () => {
     const resolved = { ...MOCK_DISPUTE, status: 'resolved', resolvedBy: 'admin@school.test', resolutionNote: 'Done', txHash: MOCK_DISPUTE.txHash };
     Dispute.findOne.mockResolvedValueOnce({ ...MOCK_DISPUTE, status: 'open' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(resolved);
+    const payment = mockLoadedPayment('SUCCESS');
+    Payment.findOne.mockResolvedValueOnce(payment);
 
     await api('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
       .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
       .send({ resolutionNote: 'Done', status: 'resolved' });
 
-    expect(Payment.findOneAndUpdate).toHaveBeenCalledWith(
+    expect(Payment.findOne).toHaveBeenCalledWith(
       expect.objectContaining({ txHash: MOCK_DISPUTE.txHash }),
-      expect.objectContaining({ $set: { status: 'REFUNDED' } }),
     );
+    expect(payment.$locals.adminOverride).toBe(true);
+    expect(payment.status).toBe('REFUNDED');
+    expect(payment.save).toHaveBeenCalled();
   });
 
   test('payment synced to SUCCESS when dispute rejected', async () => {
     const rejected = { ...MOCK_DISPUTE, status: 'rejected', resolvedBy: 'admin@school.test', resolutionNote: 'Denied', txHash: MOCK_DISPUTE.txHash };
     Dispute.findOne.mockResolvedValueOnce({ ...MOCK_DISPUTE, status: 'under_review' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(rejected);
+    const payment = mockLoadedPayment('DISPUTED');
+    Payment.findOne.mockResolvedValueOnce(payment);
 
     await api('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
       .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
       .send({ resolutionNote: 'Denied', status: 'rejected' });
 
-    expect(Payment.findOneAndUpdate).toHaveBeenCalledWith(
+    expect(Payment.findOne).toHaveBeenCalledWith(
       expect.objectContaining({ txHash: MOCK_DISPUTE.txHash }),
-      expect.objectContaining({ $set: { status: 'SUCCESS' } }),
     );
+    expect(payment.$locals.adminOverride).toBe(true);
+    expect(payment.status).toBe('SUCCESS');
+    expect(payment.save).toHaveBeenCalled();
   });
 
   test('payment synced to DISPUTED when dispute re-opened', async () => {
     const reopened = { ...MOCK_DISPUTE, status: 'open', resolvedBy: 'admin@school.test', resolutionNote: 'New evidence', txHash: MOCK_DISPUTE.txHash };
     Dispute.findOne.mockResolvedValueOnce({ ...MOCK_DISPUTE, status: 'resolved' });
     Dispute.findOneAndUpdate.mockResolvedValueOnce(reopened);
+    const payment = mockLoadedPayment('REFUNDED');
+    Payment.findOne.mockResolvedValueOnce(payment);
 
     await api('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
       .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
       .send({ resolutionNote: 'New evidence', status: 'open' });
 
-    expect(Payment.findOneAndUpdate).toHaveBeenCalledWith(
+    expect(Payment.findOne).toHaveBeenCalledWith(
       expect.objectContaining({ txHash: MOCK_DISPUTE.txHash }),
-      expect.objectContaining({ $set: { status: 'DISPUTED' } }),
     );
+    expect(payment.$locals.adminOverride).toBe(true);
+    expect(payment.status).toBe('DISPUTED');
+    expect(payment.save).toHaveBeenCalled();
   });
 });
 

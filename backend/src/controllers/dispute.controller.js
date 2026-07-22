@@ -119,26 +119,41 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
 
 /**
  * Synchronise the linked payment's status when a dispute moves to a terminal
- * (or re-open) state.  Only transitions when the payment is in a compatible
- * state to avoid overwriting unrelated finality values.
+ * (or re-open) state.  Loads the document and goes through `.save()` (with
+ * the admin-override flag) so the same transition-safety guard that
+ * `paymentAdminController.updatePaymentStatus` respects also applies here —
+ * an illegal or no-op transition throws an INVALID_TRANSITION error instead
+ * of silently succeeding.
  */
 async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
   const targetPaymentStatus = DISPUTE_TO_PAYMENT_STATUS[newDisputeStatus];
   if (!targetPaymentStatus) return;
 
-  try {
-    await Payment.findOneAndUpdate(
-      { schoolId, txHash },
-      { $set: { status: targetPaymentStatus } },
-    );
-    logger.info('Payment status synced after dispute transition', {
-      schoolId, txHash, disputeStatus: newDisputeStatus, paymentStatus: targetPaymentStatus,
-    });
-  } catch (err) {
-    logger.error('Failed to sync payment status after dispute transition', {
-      schoolId, txHash, error: err.message,
-    });
+  const payment = await Payment.findOne({ schoolId, txHash });
+  if (!payment) {
+    logger.warn('No payment found to sync after dispute transition', { schoolId, txHash, disputeStatus: newDisputeStatus });
+    return;
   }
+
+  const previousStatus = payment.status;
+  if (previousStatus === targetPaymentStatus) {
+    const err = new Error(`Payment status transition from ${previousStatus} to ${targetPaymentStatus} is not allowed`);
+    err.code = 'INVALID_TRANSITION';
+    throw err;
+  }
+
+  // Dispute resolution is an authoritative decision equivalent to an admin
+  // action, so it uses the wider ADMIN_PAYMENT_STATUS_TRANSITIONS table
+  // (e.g. DISPUTED -> SUCCESS on rejection, DISPUTED -> REFUNDED on
+  // resolution) via the same $locals.adminOverride flag updatePaymentStatus
+  // uses. $locals is Mongoose's per-document transient store — never persisted.
+  payment.$locals.adminOverride = true;
+  payment.status = targetPaymentStatus;
+  await payment.save();
+
+  logger.info('Payment status synced after dispute transition', {
+    schoolId, txHash, disputeStatus: newDisputeStatus, previousStatus, paymentStatus: targetPaymentStatus,
+  });
 }
 
 // ── Controller actions ────────────────────────────────────────────────────────
