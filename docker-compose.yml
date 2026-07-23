@@ -93,29 +93,33 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Runs a mongodump every 24 hours and retains 7 days of backups.
+  # Runs scripts/backup.sh every 24 hours and retains RETAIN_DAYS of backups.
   # Backups are written to the host path defined by BACKUP_DIR (default: ./backups).
+  #
+  # This deliberately invokes the SAME verified scripts/backup.sh used for
+  # manual/CI backups rather than a raw mongodump call, so the compose-embedded
+  # path carries identical integrity guarantees (minimum-size check +
+  # mongorestore --dryRun verification + retention pruning). See issue #1106 —
+  # there is now a single, well-verified backup implementation, not two.
   backup:
     image: mongo:7
     entrypoint: >
-      /bin/sh -c '
+      /bin/bash -c '
         while true; do
           echo "[backup] $(date -u) — starting backup";
-          mongodump
-            --uri="$$MONGO_URI"
-            --archive="/backups/$$(date -u +%Y%m%dT%H%M%SZ).gz"
-            --gzip &&
-          echo "[backup] done" ||
-          echo "[backup] FAILED";
-          find /backups -name "*.gz" -mtime +$$RETAIN_DAYS -delete;
+          bash /scripts/backup.sh || echo "[backup] FAILED";
           sleep 86400;
         done
       '
     environment:
       - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD:-password}@mongo:27017/stellaredupay?authSource=admin
+      - BACKUP_DIR=/backups
       - RETAIN_DAYS=${RETAIN_DAYS:-7}
+      - MIN_BACKUP_SIZE=${MIN_BACKUP_SIZE:-1024}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups
+      - ./scripts:/scripts:ro
     depends_on:
       mongo:
         condition: service_healthy
