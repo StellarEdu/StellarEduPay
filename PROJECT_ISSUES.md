@@ -31,6 +31,8 @@
 
 ## Issue #1: `syncAllPayments` calls `syncPaymentsForSchool` twice and sends two HTTP responses
 
+> **STATUS: RESOLVED (fixed before this backlog was compiled).** This is one of the "#1-25 previously-tracked items... de-duplicated from `GITHUB_ISSUES.md`/`issues.md`" per this document's own header — carried forward from the 2026-05-26 pre-fix audit without re-verification, not independently re-checked on 2026-06-24. Current code has moved to `backend/src/controllers/paymentAdminController.js` and calls `syncPaymentsForSchool`/`res.json` exactly once. Independently re-confirmed by `CHANGELOG.md` issue #731. See `SECURITY_STATUS_RECONCILIATION.md`.
+
 **Labels:** `bug`, `critical`, `backend`
 
 ### Problem
@@ -55,6 +57,8 @@ Call the service once, log the audit, and send one response inside a `try/finall
 ---
 
 ## Issue #2: `GET /api/payments/:studentId` lacks cross-school isolation tests
+
+> **STATUS: RESOLVED (fixed before this backlog was compiled).** Carried forward from the 2026-05-26 pre-fix audit without re-verification (see this document's header note on issues #1-25). Current code (`backend/src/controllers/paymentQueryController.js`) scopes the student lookup, payment find/count, and both balance aggregations by `schoolId`. `tests/cross-school-isolation.test.js` and `backend/tests/cross-school-isolation.test.js` exist and are substantial. Note: the separate, still-open issue is that `resolveSchool` trusts the `X-School-ID`/`X-School-Slug` header alone on read endpoints when no JWT is present — a different problem from this one. See `SECURITY_STATUS_RECONCILIATION.md`.
 
 **Labels:** `bug`, `security`, `multi-school`, `testing`
 
@@ -117,6 +121,8 @@ Guarantee `getPaymentInstructions` returns the plaintext student ID as the memo.
 ---
 
 ## Issue #5: Write endpoints for students, fees, and schools have no authentication
+
+> **STATUS: RESOLVED (fixed before this backlog was compiled).** Carried forward from the 2026-05-26 pre-fix audit without re-verification (see this document's header note on issues #1-25). Every endpoint listed below now has `requireAdminAuth` applied in its route file. `tests/authentication-enforcement.test.js` exists and is substantial. See `SECURITY_STATUS_RECONCILIATION.md`.
 
 **Labels:** `security`, `critical`, `backend`
 

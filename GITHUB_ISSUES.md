@@ -4,6 +4,8 @@
 
 ## Issue #1: `syncAllPayments` calls `syncPaymentsForSchool` twice and sends two HTTP responses
 
+> **STATUS: RESOLVED (fixed before this document was compiled).** This entry derives from the `issues.md` audit dated 2026-05-26, one day before the fix landed in `fix/559-560-561-562` (see `IMPLEMENTATION_SUMMARY.md`, 2026-05-27). Current code (`backend/src/controllers/paymentAdminController.js`) calls `syncPaymentsForSchool` and `res.json` exactly once. Independently re-confirmed by `CHANGELOG.md` issue #731. See `SECURITY_STATUS_RECONCILIATION.md`.
+
 **Labels:** `bug`, `critical`, `backend`
 
 ### Problem
@@ -48,6 +50,8 @@ async function syncAllPayments(req, res, next) {
 ---
 
 ## Issue #2: `GET /api/payments/:studentId` lacks cross-school isolation tests
+
+> **STATUS: RESOLVED (fixed before this document was compiled).** This entry derives from the `issues.md` audit dated 2026-05-26, before the fix in `IMPLEMENTATION_SUMMARY.md` (2026-05-27, issue #561) landed. Current code (`backend/src/controllers/paymentQueryController.js`) scopes the student lookup, payment find/count, and both balance aggregations by `schoolId`. `tests/cross-school-isolation.test.js` and `backend/tests/cross-school-isolation.test.js` exist and are substantial. Note: the separate, still-open issue is that `resolveSchool` trusts the `X-School-ID`/`X-School-Slug` header alone on read endpoints when no JWT is present — a different problem from this one. See `SECURITY_STATUS_RECONCILIATION.md`.
 
 **Labels:** `bug`, `security`, `multi-school`
 
@@ -129,6 +133,8 @@ res.json({
 ---
 
 ## Issue #5: Write endpoints for students, fees, and schools have no authentication
+
+> **STATUS: RESOLVED (fixed before this document was compiled).** This entry derives from the `issues.md` audit dated 2026-05-26, before the fix in `IMPLEMENTATION_SUMMARY.md` (2026-05-27, issue #562) landed. Every endpoint listed below now has `requireAdminAuth` applied in its route file. `tests/authentication-enforcement.test.js` exists and is substantial. See `SECURITY_STATUS_RECONCILIATION.md`.
 
 **Labels:** `security`, `critical`, `backend`
 
