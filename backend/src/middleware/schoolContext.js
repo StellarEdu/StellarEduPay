@@ -13,14 +13,27 @@ const { logAudit } = require('../services/auditService');
  *   2. X-School-Slug header — human slug (e.g. "lincoln-high")
  *
  * Security — tenant binding:
- *   If the request carries a JWT, the resolved school is validated against the
- *   token's schoolId. Super-admin tokens (role:'admin' or roles:['super_admin'])
- *   may override any school, but each override is audited.
+ *   X-School-ID / X-School-Slug are identifiers, not credentials. Possessing
+ *   them grants nothing by itself; they only select WHICH tenant a request
+ *   refers to. Authorisation always comes from the JWT:
+ *     • A request carrying a JWT must present a valid one. An expired or
+ *       malformed token is rejected here with 401 rather than silently
+ *       treated as anonymous ("presented a broken credential" is not
+ *       "presented no credential").
+ *     • The resolved school is validated against the token's schoolId.
+ *     • Super-admin tokens (role:'admin' or roles:['super_admin']) may
+ *       override any school, but each override is audited.
+ *   Every route that mounts this middleware MUST also mount an authentication
+ *   middleware (requireAdminAuth / requireSchoolAuth), unless the route appears
+ *   on the documented public-endpoint allowlist
+ *   (backend/src/config/publicEndpoints.js).
  *
  * Results are cached in memory with a 5-minute TTL to reduce DB load.
  *
  * On success: attaches req.school (lean School doc) and req.schoolId (string).
- * On failure: 400 if no header provided, 404 if school not found or inactive,
+ * On failure: 400 if no header provided, 404 if school not found OR inactive
+ *             (identical responses — do not leak which identifiers are real),
+ *             401 if a token is present but invalid/expired,
  *             403 on tenant mismatch.
  */
 async function resolveSchool(req, res, next) {
@@ -91,16 +104,23 @@ async function resolveSchool(req, res, next) {
     }
 
     if (!school.isActive) {
+      // Deactivated schools are answered with the SAME response as unknown
+      // schools. A distinct status/code here (e.g. 403 SCHOOL_INACTIVE) turns
+      // this endpoint into an enumeration oracle that confirms which school
+      // identifiers are real.
       res.set('Cache-Control', 'no-store');
-      return res.status(403).json({
-        error: 'School is deactivated.',
-        code: 'SCHOOL_INACTIVE',
+      return res.status(404).json({
+        error: 'School not found.',
+        code: 'NOT_FOUND',
       });
     }
 
     // ── Tenant binding: check JWT schoolId matches resolved school ────────────
-    // Extract token from Authorization header or cookie (no hard failure if absent
-    // — unauthenticated requests are handled by subsequent auth middleware).
+    // A request that PRESENTS a credential is held to it: an expired or
+    // malformed token is a 401 here, not a silent fall-through to anonymous.
+    // ("Let the auth middleware handle it downstream" was only true for routes
+    // that actually mount one — treating a broken credential as no credential
+    // at all is the weaker interpretation and hides the failure.)
     const secret = process.env.JWT_SECRET;
     if (secret) {
       const authHeader = req.headers['authorization'];
@@ -109,39 +129,45 @@ async function resolveSchool(req, res, next) {
       const rawToken = cookieToken || bearerToken;
 
       if (rawToken) {
+        let decoded;
         try {
-          const decoded = jwt.verify(rawToken, secret);
-          const isSuperAdmin =
-            decoded.role === 'admin' ||
-            (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
+          decoded = jwt.verify(rawToken, secret);
+        } catch (err) {
+          res.set('Cache-Control', 'no-store');
+          if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ error: 'Token has expired.', code: 'TOKEN_EXPIRED' });
+          }
+          return res.status(401).json({ error: 'Invalid token.', code: 'INVALID_AUTH_TOKEN' });
+        }
 
-          if (isSuperAdmin) {
-            // Super-admin override is permitted — audit every cross-tenant use.
-            if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-              const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-                req.socket?.remoteAddress || 'unknown';
-              await logAudit({
-                schoolId: school.schoolId,
-                action: 'super_admin_school_override',
-                performedBy: decoded.sub || decoded.id || 'super_admin',
-                targetId: school.schoolId,
-                targetType: 'school',
-                details: { tokenSchoolId: decoded.schoolId, requestedSchoolId: school.schoolId, ip },
-                result: 'success',
-                ipAddress: ip,
-                userAgent: req.headers?.['user-agent'],
-              });
-            }
-          } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-            // Non-super-admin token for a different tenant — reject immediately.
-            res.set('Cache-Control', 'no-store');
-            return res.status(403).json({
-              error: 'Forbidden. Token schoolId does not match the requested school.',
-              code: 'TENANT_MISMATCH',
+        const isSuperAdmin =
+          decoded.role === 'admin' ||
+          (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
+
+        if (isSuperAdmin) {
+          // Super-admin override is permitted — audit every cross-tenant use.
+          if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
+            const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+              req.socket?.remoteAddress || 'unknown';
+            await logAudit({
+              schoolId: school.schoolId,
+              action: 'super_admin_school_override',
+              performedBy: decoded.sub || decoded.id || 'super_admin',
+              targetId: school.schoolId,
+              targetType: 'school',
+              details: { tokenSchoolId: decoded.schoolId, requestedSchoolId: school.schoolId, ip },
+              result: 'success',
+              ipAddress: ip,
+              userAgent: req.headers?.['user-agent'],
             });
           }
-        } catch (_) {
-          // Malformed/expired token — let the auth middleware handle it downstream.
+        } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
+          // Non-super-admin token for a different tenant — reject immediately.
+          res.set('Cache-Control', 'no-store');
+          return res.status(403).json({
+            error: 'Forbidden. Token schoolId does not match the requested school.',
+            code: 'TENANT_MISMATCH',
+          });
         }
       }
     }

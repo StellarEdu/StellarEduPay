@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Closed the read-endpoint header-trust gap (`resolveSchool` treats `X-School-ID` as context, not authorisation)**: `GET /api/disputes`, `GET /api/disputes/:id`, `POST /api/disputes` and `GET /api/fee-adjustments` were reachable with nothing but a guessable `X-School-ID` header — dispute records join student identity to payment history and free-text narrative, and an anonymous dispute creation triggered outbound email + webhook fan-out. All dispute and fee-adjustment handlers now require a school-scoped JWT (`requireSchoolAuth()`); admin-only transitions keep `requireAdminAuth`. `resolveSchool` no longer falls through silently when a JWT is presented but expired/malformed (now `401 TOKEN_EXPIRED` / `401 INVALID_AUTH_TOKEN`), and unknown vs. deactivated schools return byte-identical 404s so resolution can no longer confirm which school identifiers are real (`SCHOOL_INACTIVE` 403 removed). Added `backend/src/config/publicEndpoints.js`, the canonical allowlist of intentionally-anonymous endpoints with a written threat model per entry, and `tests/allRoutesRequireAuth.test.js`, which walks every mounted route in the live Express stack on CI and fails if an unauthenticated request reaches any handler that is not allowlisted — new handlers cannot be published by omission of an auth middleware. `docs/threat-model.md` gained the "Identifiers Are Not Credentials" section; `SECURITY_STATUS_RECONCILIATION.md` updated to mark this formerly "still-open" gap fixed.
+- **`GET /api/fees` now requires a school-scoped JWT**: fee structures were readable tenant data behind the guessable header; `includeDeleted=true` continues to additionally require super-admin.
+
 ### Fixed
 
 - **Investigated duplicate sync bug (#731)**: Audited `syncAllPayments` in `paymentController.js` for the reported double `syncPaymentsForSchool` call and `ERR_HTTP_HEADERS_SENT` crash. Confirmed the code already calls `syncPaymentsForSchool` exactly once, sends a single response, and correctly passes `summary` to the audit log. No code change required.

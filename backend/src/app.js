@@ -145,7 +145,13 @@ app.use(deduplicateQueryParams);
 const concurrentMiddleware = createConcurrentRequestMiddleware({
   circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 30000, halfOpenSuccessThreshold: 2 },
   queue: { maxConcurrent: 50, maxSize: 1000, defaultTimeoutMs: 30000 },
-  rateLimit: { windowMs: 60000, maxRequests: 100 },
+  // RATE_LIMIT_WINDOW_MS / RATE_LIMIT_MAX_REQUESTS are the documented global
+  // limiter knobs (README "Security & Rate Limiting"); defaults keep the
+  // historical 100 requests/minute/IP.
+  rateLimit: {
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  },
   deduplicationTtlMs: 60000,
 });
 // ── Metrics ───────────────────────────────────────────────────────────────────

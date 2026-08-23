@@ -228,12 +228,18 @@ describe('GET /api/fee-adjustments — list rules', () => {
     jest.clearAllMocks();
   });
 
+  test('401 — anonymous caller cannot list rules (header alone is not a credential)', async () => {
+    const res = await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('code', 'MISSING_AUTH_TOKEN');
+  });
+
   test('200 — returns all rules for the school', async () => {
     FeeAdjustmentRule.find.mockReturnValueOnce({
       sort: jest.fn().mockResolvedValueOnce([MOCK_RULE]),
     });
 
-    const res = await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    const res = await adminApi('get', '/api/fee-adjustments');
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -245,7 +251,7 @@ describe('GET /api/fee-adjustments — list rules', () => {
       sort: jest.fn().mockResolvedValueOnce([]),
     });
 
-    const res = await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    const res = await adminApi('get', '/api/fee-adjustments');
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(0);
@@ -256,7 +262,7 @@ describe('GET /api/fee-adjustments — list rules', () => {
       sort: jest.fn().mockResolvedValueOnce([MOCK_RULE]),
     });
 
-    await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    await adminApi('get', '/api/fee-adjustments');
 
     expect(FeeAdjustmentRule.find).toHaveBeenCalledWith(expect.objectContaining({ schoolId: 'SCH001' }));
   });

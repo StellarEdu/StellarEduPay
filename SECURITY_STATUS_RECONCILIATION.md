@@ -27,9 +27,11 @@ What that removal doesn't establish on its own is whether the underlying **code 
 ### 3. Missing write-endpoint authentication — still fixed
 Every endpoint named in the original fix carries `requireAdminAuth` today: student routes (`studentRoutes.js`), fee routes (`feeRoutes.js`), school routes (`schoolRoutes.js`), and `POST /api/payments/sync` / `PATCH /api/payments/:txHash/status` (`paymentRoutes.js`).
 
-## A related, still-open gap (do not confuse with the above)
+## A related gap — read-endpoint header trust (filed separately, now fixed)
 
-Most payment **read** endpoints trust the `X-School-ID`/`X-School-Slug` header alone — `resolveSchool` (`backend/src/middleware/schoolContext.js`) only validates tenant binding against a JWT when one happens to be present on the request. That's a header-trust gap specific to reads, distinct from the write-endpoint `requireAdminAuth` gap fixed in #562. It should be tracked as its own GitHub issue, not folded into this reconciliation.
+Most payment **read** endpoints trusted the `X-School-ID`/`X-School-Slug` header alone — `resolveSchool` (`backend/src/middleware/schoolContext.js`) only validated tenant binding against a JWT when one happened to be present on the request. That was a header-trust gap specific to reads, distinct from the write-endpoint `requireAdminAuth` gap fixed in #562, and it was tracked as its own GitHub issue rather than folded into this reconciliation.
+
+**Status: fixed.** The follow-up issue closed with: authentication required on every dispute and fee-adjustment handler (including the previously anonymous `GET /api/disputes`, `GET /api/disputes/:id`, `POST /api/disputes` and `GET /api/fee-adjustments`); `resolveSchool` now returns 401 for a present-but-invalid token instead of falling through to anonymous; unknown and inactive schools produce identical responses so resolution is no longer an enumeration oracle; a documented public-endpoint allowlist (`backend/src/config/publicEndpoints.js`) captures every intentionally-anonymous route with its threat model; `tests/allRoutesRequireAuth.test.js` enforces on CI that no mounted route reaches a controller without authentication unless allowlisted; and `docs/threat-model.md` ("Identifiers Are Not Credentials") records the model. See that document for details.
 
 ## Disposition
 

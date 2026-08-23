@@ -46,3 +46,18 @@ Verify provider signatures before parsing business fields, reject callbacks outs
 ## Tenant Isolation Controls
 
 Every query for user-visible payment data must include tenant scope. Tenant IDs must come from authenticated server-side context, not request body alone. Tests should cover cross-tenant reads, writes, webhook events, and SSE subscriptions.
+
+## Identifiers Are Not Credentials
+
+`X-School-ID` and `X-School-Slug` are **identifiers**, not credentials. They select *which* tenant a request refers to; they never prove *who* is asking.
+
+- School IDs follow the `SCH-3F2A` format — four hex characters (65,536-value space), enumerable in seconds. Slugs (`lincoln-high`) are guessable without enumeration.
+- Neither value is treated as a secret anywhere else in the system: the frontend keeps `schoolId` in `localStorage`, sends it on every request, and slugs appear in URLs and operator documentation.
+- Failure responses are deliberately indistinguishable for unknown and deactivated schools so resolution cannot be used as an identifier-validity oracle.
+- A request that *presents* a JWT is held to it: `resolveSchool` returns `401 TOKEN_EXPIRED` / `401 INVALID_AUTH_TOKEN` for broken credentials rather than treating them as anonymous, and rejects cross-tenant tokens with `403 TENANT_MISMATCH`.
+
+Consequences:
+
+1. **Authentication is the default.** Every route that mounts `resolveSchool` must also mount an authentication middleware (`requireAdminAuth` or `requireSchoolAuth`). The only exceptions live on the explicit allowlist in [`backend/src/config/publicEndpoints.js`](../backend/src/config/publicEndpoints.js), each with its own written threat model. `tests/allRoutesRequireAuth.test.js` walks every mounted route on every CI run and fails if an unauthenticated request can reach a handler that is not allowlisted — a new handler cannot silently go public by omission.
+2. **No anonymous dispute or fee-rule surface.** Disputes join student identity to payment history and free-text narrative; fee-adjustment rules disclose discount/scholarship policy. Reading, listing, or creating either requires a school-scoped JWT. If a parent-facing anonymous dispute form becomes a product requirement, it must be a separately mounted public route with per-school + per-IP rate limiting, a captcha or signed-link requirement, and no outbound email/webhook fan-out from unauthenticated callers — not an unauthenticated hole inside an otherwise-protected router.
+3. **Known accepted residual risk.** The parent payment flow (`POST /api/payments/intent|submit|verify`, `GET /api/payments/instructions/:studentId`, tx-hash-keyed status/receipt/refund lookups) is anonymous by design because parents have no accounts; each entry's enumerability and mitigations are documented on the allowlist. `GET /api/payments/instructions/:studentId` remains the weakest point — student IDs are low-entropy and the response discloses fee amounts — and is flagged there for future captcha/signed-link hardening if abuse is observed.

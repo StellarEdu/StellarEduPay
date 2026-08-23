@@ -19,7 +19,9 @@ const requireIncludeDeletedAccess = (req, res, next) => {
 };
 
 router.post('/',              requireAdminAuth, auditContext, validateFeeStructure, createFeeStructure);
-router.get('/',               requireIncludeDeletedAccess, getAllFeeStructures);
+// Fee structures are tenant financial data: the base list requires a
+// school-scoped JWT; includeDeleted additionally requires super-admin.
+router.get('/',               requireSchoolAuth(), requireIncludeDeletedAccess, getAllFeeStructures);
 router.get('/:className',     requireSchoolAuth(), getFeeByClass);
 router.put('/:className',     requireAdminAuth, auditContext, validateFeeStructure, updateFeeStructure);
 router.delete('/:className',  requireAdminAuth, auditContext, deleteFeeStructure);

@@ -281,15 +281,23 @@ const app = require('../backend/src/app');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function api(method, path) {
-  return request(app)[method](path).set('X-School-ID', 'SCH001');
-}
-
 const ADMIN_TOKEN = require('jsonwebtoken').sign(
   { role: 'admin', email: 'admin@school.test', sub: 'admin-1' },
   'test-secret',
   { expiresIn: '1h' },
 );
+
+// All dispute handlers require a school-scoped JWT (see disputeRoutes.js).
+function api(method, path) {
+  return request(app)[method](path)
+    .set('X-School-ID', 'SCH001')
+    .set('Authorization', `Bearer ${ADMIN_TOKEN}`);
+}
+
+// Same request WITHOUT credentials — for asserting the 401s themselves.
+function anonApi(method, path) {
+  return request(app)[method](path).set('X-School-ID', 'SCH001');
+}
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -315,6 +323,45 @@ const MOCK_DISPUTE = {
 };
 
 // ─── POST /api/disputes ───────────────────────────────────────────────────────
+
+describe('POST/GET /api/disputes — authentication is mandatory', () => {
+  test('401 — anonymous caller cannot raise a dispute (header alone is not a credential)', async () => {
+    const res = await anonApi('post', '/api/disputes').send({
+      txHash: 'a'.repeat(64), studentId: 'STU001',
+      raisedBy: 'Alice Parent', reason: 'Already paid in cash',
+    });
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('code', 'MISSING_AUTH_TOKEN');
+  });
+
+  test('401 — anonymous caller cannot list disputes', async () => {
+    const res = await anonApi('get', '/api/disputes');
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('code', 'MISSING_AUTH_TOKEN');
+  });
+
+  test('401 — anonymous caller cannot fetch a dispute by id', async () => {
+    const res = await anonApi('get', `/api/disputes/${MOCK_DISPUTE._id}`);
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('code', 'MISSING_AUTH_TOKEN');
+  });
+
+  test('403 — token scoped to another school cannot read this tenant’s disputes', async () => {
+    const otherTenantToken = require('jsonwebtoken').sign(
+      { role: 'user', roles: ['staff'], schoolId: 'SCH-OTHER', sub: 'other-admin' },
+      'test-secret',
+      { expiresIn: '1h' },
+    );
+    const res = await request(app)
+      .get('/api/disputes')
+      .set('X-School-ID', 'SCH001')
+      .set('Authorization', `Bearer ${otherTenantToken}`);
+    // resolveSchool's tenant binding rejects the cross-school token before
+    // the route handler is ever reached.
+    expect(res.status).toBe(403);
+    expect(res.body).toHaveProperty('code', 'TENANT_MISMATCH');
+  });
+});
 
 describe('POST /api/disputes — flag a dispute', () => {
   let Dispute, Payment;
@@ -453,7 +500,7 @@ describe('PATCH /api/disputes/:id/resolve — state machine, auth, audit, SSE, p
   // ── Authentication (#895) ──────────────────────────────────────────────────
 
   test('401 — no token', async () => {
-    const res = await api('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
+    const res = await anonApi('patch', `/api/disputes/${MOCK_DISPUTE._id}/resolve`)
       .send({ resolutionNote: 'Done' });
     expect(res.status).toBe(401);
   });

@@ -11,14 +11,17 @@ const {
   applyRule,
 } = require('../controllers/feeAdjustmentController');
 const { resolveSchool } = require('../middleware/schoolContext');
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 router.use(resolveSchool);
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
+// Fee rules disclose a school's discount/scholarship/surcharge policy and are
+// therefore not readable on the strength of the X-School-ID header alone —
+// a school-scoped JWT is required (see docs/threat-model.md).
 router.post('/',      requireAdminAuth, auditContext, createRule);
-router.get('/',       listRules);
+router.get('/',       requireSchoolAuth(), listRules);
 router.put('/:id',    requireAdminAuth, auditContext, updateRule);
 router.delete('/:id', requireAdminAuth, auditContext, deleteRule);
 

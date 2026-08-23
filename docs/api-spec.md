@@ -881,6 +881,7 @@ All dispute routes require school context.
 ### Flag a dispute
 ```
 POST /api/disputes
+Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
 **Request body**
@@ -913,6 +914,7 @@ X-School-ID: SCH-3F2A
 ### List disputes
 ```
 GET /api/disputes
+Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
 **Query parameters** — `status` (`open`, `under_review`, `resolved`, `rejected`), `studentId`.
@@ -922,6 +924,7 @@ X-School-ID: SCH-3F2A
 ### Get a dispute
 ```
 GET /api/disputes/:id
+Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
 **Response `200`** — dispute object. **`404 NOT_FOUND`** if not found.
@@ -1486,7 +1489,7 @@ Create a new fee adjustment rule for the school.
 
 List all fee adjustment rules for the school (active and inactive).
 
-**Headers:** `X-School-ID` or `X-School-Slug`
+**Headers:** `Authorization: Bearer <token>`, `X-School-ID` or `X-School-Slug`
 
 **Response `200`:**
 
@@ -1511,6 +1514,7 @@ List all fee adjustment rules for the school (active and inactive).
 | Status | Code | Reason |
 |--------|------|--------|
 | 400 | `MISSING_SCHOOL_CONTEXT` | No school header provided |
+| 401 | `MISSING_AUTH_TOKEN` | No credentials provided |
 | 404 | `SCHOOL_NOT_FOUND` | School not found or inactive |
 
 ---

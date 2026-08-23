@@ -608,6 +608,7 @@ Common error codes: `NOT_FOUND`, `VALIDATION_ERROR`, `DUPLICATE_TX`, `TX_FAILED`
 ## Security
 
 - **JWT + HttpOnly cookies**: Access tokens are short-lived; refresh tokens stored in HttpOnly cookies to prevent XSS theft.
+- **Authentication is the default**: Every tenant route requires a JWT — `X-School-ID`/`X-School-Slug` are identifiers, not credentials. Intentionally-public endpoints are documented (with their threat models) in [`backend/src/config/publicEndpoints.js`](backend/src/config/publicEndpoints.js), and CI enforces that no other route is reachable unauthenticated.
 - **TOTP MFA**: Optional per-admin TOTP second factor.
 - **Step-up authentication**: Sensitive operations require re-authentication regardless of session state.
 - **Helmet**: Strict CSP (`default-src 'none'`), `X-Frame-Options`, and other security headers.

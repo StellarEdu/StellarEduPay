@@ -250,7 +250,7 @@ describe('#901 GET /api/fee-adjustments — deterministic priority order', () =>
     const mockSort = jest.fn().mockResolvedValueOnce([MOCK_RULE]);
     FeeAdjustmentRule.find.mockReturnValueOnce({ sort: mockSort });
 
-    await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    await adminApi('get', '/api/fee-adjustments');
 
     expect(mockSort).toHaveBeenCalledWith({ priority: 1, name: 1 });
   });
@@ -260,7 +260,7 @@ describe('#901 GET /api/fee-adjustments — deterministic priority order', () =>
       sort: jest.fn().mockResolvedValueOnce([]),
     });
 
-    await request(app).get('/api/fee-adjustments').set(SCHOOL_HEADERS);
+    await adminApi('get', '/api/fee-adjustments');
 
     expect(FeeAdjustmentRule.find).toHaveBeenCalledWith(
       expect.objectContaining({ schoolId: 'SCH001' })

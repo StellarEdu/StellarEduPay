@@ -227,6 +227,7 @@ describe('Audit — flagDispute', () => {
 
     const res = await request(app).post('/api/disputes')
       .set('X-School-ID', 'SCH001')
+      .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
       .send({ txHash: MOCK_PAYMENT.txHash, studentId: 'STU001', raisedBy: 'Alice Parent', reason: 'Already paid' });
 
     expect(res.status).toBe(201);
@@ -245,6 +246,7 @@ describe('Audit — flagDispute', () => {
 
     const res = await request(app).post('/api/disputes')
       .set('X-School-ID', 'SCH001')
+      .set('Authorization', `Bearer ${ADMIN_TOKEN}`)
       .send({ txHash: MOCK_PAYMENT.txHash, studentId: 'STU001', raisedBy: 'Alice', reason: 'test' });
 
     expect(res.status).toBe(404);
