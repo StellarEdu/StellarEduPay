@@ -212,8 +212,15 @@ jobs:
 
       - run: cd frontend && npm ci && cd ..
 
+      # Syntax gate — walks backend/src (node --check) and frontend/src
+      # (@babel/core parseSync for JSX) with a pure-Node recursive fs walk:
+      # no glob dependency required.
+      # Exit codes are distinct so a red step is unambiguous:
+      #   0 = clean · 1 = syntax error detected (names file:line)
+      #   2 = the gate itself failed to run (missing dep/dir, zero files)
       - name: Syntax check
         run: npm run check:syntax
+
       - name: Run migrations against CI MongoDB
         working-directory: backend
         run: npm run migrate
