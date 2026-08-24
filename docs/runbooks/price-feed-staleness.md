@@ -51,6 +51,25 @@ price_feed_stale == 1
 
 ---
 
+## Signal Hierarchy — Which Metric Is Authoritative?
+
+Three of the metrics above describe staleness from different angles. They are **not** interchangeable:
+
+| Signal | Set when | Role |
+|---|---|---|
+| `price_feed_staleness_seconds{provider}` | Updated on every fetch attempt: set to the provider's success age on success, or refreshed from the cached timestamp when a failure exhausts the stale window | **Continuous early-warning gradient.** Drives `PriceFeedStalenessWarning` (> 300 s) so operators get a heads-up while cached rates are still being served. Moves during both the warning phase and the critical phase. |
+| `price_feed_last_success_timestamp{provider}` | Updated only on successful fetches; `0` means no successful fetch since process start (restarts reset it) | **Diagnosis / frozen-pipeline detector.** Powers `PriceFeedNoRecentSuccess`, which catches the edge case where the process restarted and nothing has succeeded since. Not meaningful as an absolute age across restarts — use `time() - price_feed_last_success_timestamp`. |
+| `price_feed_stale{provider}` | Set to `1` for **both** providers when BOTH have failed and either the stale-while-revalidate window (`PRICE_STALE_THRESHOLD_MS`) is exhausted or there was never a usable cached rate; cleared back to `0` as soon as any provider serves a fresh rate | **The authoritative prolonged-outage flag.** `PriceFeedStale` (critical, `price_feed_stale == 1` for 15 min) keys off this metric and this metric alone. It answers exactly one question: *is fiat display degraded right now?* |
+
+**For detecting a prolonged total outage, `price_feed_stale == 1` is authoritative.** The other two signals exist because they fire earlier (staleness age) and aid diagnosis (success timestamp), but they can be noisy or ambiguous on their own: `price_feed_staleness_seconds` also rises while stale-but-valid cache is still being served, and `price_feed_last_success_timestamp` resets on every deploy.
+
+Implementation notes:
+
+- Because the flag is feed-level ("fiat display is degraded"), it is raised for **all** provider labels when the total-failure condition is met, and cleared for **all** labels once any single provider succeeds — one working provider means conversions work again, even if its sibling is still down (the per-provider `price_feed_available` and `price_feed_staleness_seconds` series continue to show which one lags).
+- Historical note: the call sites that raise this flag previously referenced a nonexistent `_recordStale(...)` helper; the resulting `ReferenceError` was swallowed by `getRates`' error handling and the gauge was never set, making the critical alert unreachable. Fixed alongside the logging of swallowed `getRates` failures.
+
+---
+
 ## Step-by-Step Response
 
 ### 1. Confirm the alert

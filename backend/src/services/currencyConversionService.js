@@ -11,8 +11,10 @@
  *     Falls back to in-process LRU Map when Redis is unavailable, so each
  *     replica does not independently hammer the price feed.
  *   - All logging via logger.child('CurrencyConversion') — no console.warn.
- *   - Prometheus gauges: price_feed_available{provider} and
- *     price_feed_staleness_seconds{provider}.
+ *   - Prometheus gauges: price_feed_available{provider},
+ *     price_feed_staleness_seconds{provider}, price_feed_last_success_timestamp{provider}
+ *     and the authoritative prolonged-outage flag price_feed_stale{provider}
+ *     (see docs/runbooks/price-feed-staleness.md for the signal hierarchy).
  *   - Stale-while-revalidate: serve stale cache when both providers fail,
  *     up to PRICE_STALE_THRESHOLD_MS (default 1 hour).
  *
@@ -200,7 +202,7 @@ function _initMetrics() {
     });
 
     _metricsInitialized = true;
-  } catch (_) {
+  } catch {
     // metrics/index not loaded yet — will be initialized lazily on first use
   }
 }
@@ -223,6 +225,34 @@ function _recordLastSuccess(provider) {
   if (priceFeedLastSuccessTimestamp) {
     priceFeedLastSuccessTimestamp.set({ provider }, Math.floor(Date.now() / 1000));
   }
+}
+
+// Providers known to the conversion pipeline — used to raise/lower the binary
+// staleness flag across both label values in one place.
+const FEED_PROVIDERS = ["coingecko", "coinbase"];
+
+/**
+ * Set/clear the AUTHORITATIVE prolonged-outage flag (`price_feed_stale`,
+ * alerted on as `price_feed_stale == 1` / alert name PriceFeedStale).
+ *
+ * It is set to 1 only when BOTH providers have failed and either the
+ * stale-while-revalidate window is exhausted or there was never a cached
+ * rate — i.e. exactly when fiat display degrades to "rate unavailable".
+ * It is cleared back to 0 as soon as any provider serves a fresh rate
+ * (see _fetchRates), so the flag is self-healing across recovery.
+ *
+ * This is deliberately separate from price_feed_staleness_seconds, which is
+ * a continuous per-provider age signal that also moves during the warning
+ * phase. See docs/runbooks/price-feed-staleness.md for the signal hierarchy.
+ */
+function _markFeedStale(provider, stale = true) {
+  _initMetrics();
+  if (priceFeedStale) priceFeedStale.set({ provider }, stale ? 1 : 0);
+}
+
+/** Clear the prolonged-outage flag for every provider (feed recovered). */
+function _clearFeedStale() {
+  for (const provider of FEED_PROVIDERS) _markFeedStale(provider, false);
 }
 
 // ── In-process LRU cache (fallback when Redis unavailable) ───────────────────
@@ -467,6 +497,10 @@ async function _fetchRates(currency) {
       _recordAvailable(name, true);
       _recordStaleness(name, now);
       _recordLastSuccess(name);
+      // A fresh rate is being served — clear the prolonged-outage flag for
+      // the whole feed, not just this provider: fiat display is no longer
+      // degraded once any single provider works.
+      _clearFeedStale();
       logger.info("Price feed fetch succeeded", { provider: name, currency });
       return { rates, fetchedAt: now, lastSuccessfulFetch: now, provider: name };
     } catch (err) {
@@ -509,27 +543,41 @@ async function getRates(currency) {
       return entry;
     } catch (err) {
       _inFlight.delete(key);
-      // Stale-while-revalidate: return stale data within threshold.
+
+      // Both providers failed. Stale-while-revalidate: return stale data while
+      // the cached rate is still inside the threshold window.
       if (cached) {
         const staleAge = Math.floor((Date.now() - cached.lastSuccessfulFetch) / 1000);
         if (Date.now() - cached.lastSuccessfulFetch < PRICE_STALE_THRESHOLD_MS) {
           logger.warn("Serving stale rate", { currency: key, staleAge, provider: cached.provider });
           return { ...cached, stale: true, staleAge };
         }
-        // Cache exists but the stale threshold is exhausted — flag the feed as stale.
-        _recordStale(cached.provider);
-      } else {
-        // No cache at all — mark both providers as stale so the alert fires.
-        _recordStale("coingecko");
-        _recordStale("coinbase");
+        // Cache exists but the stale threshold is exhausted — keep the
+        // per-provider staleness age accurate from the cached timestamp.
+        _recordStaleness(cached.provider, cached.lastSuccessfulFetch);
       }
+
+      // The stale window is exhausted (or there was never a cached rate):
+      // raise the AUTHORITATIVE prolonged-outage flag for every provider so
+      // the PriceFeedStale alert (`price_feed_stale == 1`) can fire. Both
+      // providers are down at this point — that is the precondition of this
+      // branch — so the feed as a whole is degraded.
+      for (const provider of FEED_PROVIDERS) _markFeedStale(provider, true);
       throw err;
     }
   })();
 
   _inFlight.set(key, fetchPromise);
   try { return await fetchPromise; }
-  catch { return null; }
+  catch (err) {
+    // A blanket swallow here once hid a ReferenceError on the path above:
+    // callers saw "rate unavailable" with nothing in the logs to say a code
+    // defect had occurred. Programming errors must be visible — log at error
+    // level, then still return null (the public contract: null means "no rate
+    // available").
+    logger.error("getRates failed — returning null", { currency: key, error: err.message });
+    return null;
+  }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -741,4 +789,7 @@ module.exports = {
   _resetAllowlist,
   _getAllowlist: () => ALLOWED_FIAT_CURRENCIES,
   _getLocalCacheSize: () => _localCache.size,
+  // Testing internals: seed/replace a local-cache entry directly (the values
+  // returned by getCachedRates() are copies, so tests cannot back-date them).
+  _setLocalCacheEntry: (key, entry) => _localCache.set(key, entry),
 };
