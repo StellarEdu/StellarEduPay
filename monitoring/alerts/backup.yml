@@ -65,3 +65,24 @@ groups:
             backup container can reach the backend on
             BACKEND_INTERNAL_URL.
           runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
+      # ── Warning: backup restore has not been verified within 8 days ──────
+      # last_backup_verification_age_seconds is recomputed on every scrape by
+      # backend/src/metrics/index.js from the timestamp recorded via
+      # POST /api/internal/backup-verification-heartbeat, which
+      # scripts/verify-latest-backup.sh calls after successfully restoring
+      # the latest backup to a temporary instance and matching document
+      # counts against production. See issue #1343.
+      - alert: BackupVerificationStale
+        expr: last_backup_verification_age_seconds > 691200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup restore has not been verified in over 8 days"
+          description: >
+            last_backup_verification_age_seconds is
+            {{ $value | humanizeDuration }} (threshold: 8 days). The
+            weekly backup-verify job may have failed silently. Check
+            `docker logs <backup-verify-container>`.
+          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"

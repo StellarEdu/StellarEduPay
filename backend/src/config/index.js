@@ -10,7 +10,7 @@
  */
 
 // ── Required variables ────────────────────────────────────────────────────────
-const REQUIRED = ["MONGO_URI"];
+const REQUIRED = ["MONGO_URI", "JWT_SECRET"];
 
 const missing = REQUIRED.filter((key) => !process.env[key]);
 if (missing.length) {
@@ -39,12 +39,20 @@ const STELLAR_HORIZON_URLS = process.env.STELLAR_HORIZON_URLS
 
 // Optional — only used by the migration script to seed the default school
 const SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || null;
+if (SCHOOL_WALLET_ADDRESS && !/^G[A-Z2-7]{55}$/.test(SCHOOL_WALLET_ADDRESS)) {
+  throw new Error(`[Config] SCHOOL_WALLET_ADDRESS '${SCHOOL_WALLET_ADDRESS}' is not a valid Stellar account address (StrKey format).`);
+}
 
 const USDC_ISSUER =
   process.env.USDC_ISSUER ||
   (IS_TESTNET
     ? "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
     : "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN");
+
+// Validate USDC_ISSUER format (Stellar StrKey account ID)
+if (USDC_ISSUER && !/^G[A-Z2-7]{55}$/.test(USDC_ISSUER)) {
+  throw new Error(`[Config] USDC_ISSUER '${USDC_ISSUER}' is not a valid Stellar account address (StrKey format).`);
+}
 
 // Which asset the school accepts: 'XLM' (default) or 'USDC'
 const ACCEPTED_ASSET = (process.env.ACCEPTED_ASSET || "XLM").toUpperCase();
@@ -130,25 +138,21 @@ const STELLAR_TIMEOUT_MS = parseInt(
   10,
 );
 
+// ── Proxy Configuration ────────────────────────────────────────────────────────
+const TRUSTED_PROXY_HOPS = parseInt(process.env.TRUSTED_PROXY_HOPS || '1', 10);
+if (isNaN(TRUSTED_PROXY_HOPS) || TRUSTED_PROXY_HOPS < 0) {
+  throw new Error(`[Config] TRUSTED_PROXY_HOPS must be a non-negative integer, got: ${process.env.TRUSTED_PROXY_HOPS}`);
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Secret used to sign/verify admin JWTs. Must be at least 32 characters.
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_SECRET_MIN_LENGTH = 32;
-if (!JWT_SECRET || JWT_SECRET.length < JWT_SECRET_MIN_LENGTH) {
-  const reason = !JWT_SECRET
-    ? 'JWT_SECRET is not set'
-    : `JWT_SECRET is too short (${JWT_SECRET.length} chars; minimum ${JWT_SECRET_MIN_LENGTH})`;
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error(
-      `[Config] ${reason}. ` +
-      "Generate a strong secret with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
-    );
-  } else {
-    console.warn(
-      `[Config] WARNING: ${reason}. Admin authentication is insecure. ` +
-      'Set a strong JWT_SECRET before deploying to production.'
-    );
-  }
+if (JWT_SECRET.length < JWT_SECRET_MIN_LENGTH) {
+  throw new Error(
+    `[Config] JWT_SECRET is too short (${JWT_SECRET.length} chars; minimum ${JWT_SECRET_MIN_LENGTH}). ` +
+    "Generate a strong secret with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
+  );
 }
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
@@ -212,6 +216,18 @@ const TWILIO_AUTH_TOKEN   = process.env.TWILIO_AUTH_TOKEN   || null;
 const TWILIO_FROM_NUMBER  = process.env.TWILIO_FROM_NUMBER  || null;
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || null;
 
+// ── Reconciliation Service ────────────────────────────────────────────────────
+// Batch size for processing students during reconciliation (default: 500)
+const RECONCILIATION_BATCH_SIZE = parseInt(
+  process.env.RECONCILIATION_BATCH_SIZE || "500",
+  10,
+);
+// How often the reconciliation scheduler runs (default: 24 hours)
+const RECONCILIATION_INTERVAL_MS = parseInt(
+  process.env.RECONCILIATION_INTERVAL_MS || String(24 * 60 * 60 * 1000),
+  10,
+);
+
 // ── Freeze to prevent accidental mutation at runtime ─────────────────────────
 const config = Object.freeze({
   EMAIL_PROVIDER_WEBHOOK_SECRET,
@@ -239,6 +255,7 @@ const config = Object.freeze({
   MAX_BODY_SIZE,
   REQUEST_TIMEOUT_MS,
   STELLAR_TIMEOUT_MS,
+  TRUSTED_PROXY_HOPS,
   JWT_SECRET,
   JWT_EXPIRES_IN,
   REMINDER_INTERVAL_MS,
@@ -257,7 +274,8 @@ const config = Object.freeze({
   EMAIL_PROVIDER,
   SENDGRID_API_KEY,
   AWS_REGION,
-  APP_URL,
+  RECONCILIATION_BATCH_SIZE,
+  RECONCILIATION_INTERVAL_MS,
 });
 
 module.exports = config;

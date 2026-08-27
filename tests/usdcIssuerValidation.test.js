@@ -18,7 +18,7 @@ const ATTACKER_ISSUER = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSG
 function loadConfig({ network, acceptedAsset = 'USDC', usdcIssuer } = {}) {
   jest.resetModules();
   process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-  process.env.JWT_SECRET = 'test-jwt-secret-for-usdc-issuer-suite-1234567890';
+  process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
   process.env.STELLAR_NETWORK = network || 'testnet';
   process.env.ACCEPTED_ASSET = acceptedAsset;
   if (usdcIssuer === undefined) delete process.env.USDC_ISSUER;

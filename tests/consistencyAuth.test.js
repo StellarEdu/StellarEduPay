@@ -10,7 +10,7 @@
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET = 'test-secret-for-consistency-auth';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const path = require('path');
 const fs = require('fs');

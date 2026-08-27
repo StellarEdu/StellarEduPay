@@ -10,6 +10,7 @@
 
 const Student = require('../models/studentModel');
 const Payment = require('../models/paymentModel');
+const { toMoney, decimalFromMongo, classifyFeePayment } = require('./money');
 
 /**
  * Update a student's balance fields (totalPaid, remainingBalance, feePaid) after
@@ -31,7 +32,10 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
     return null;
   }
 
-  // Aggregate all successful, non-suspicious payments for this student
+  // Aggregate all successful, non-suspicious payments for this student.
+  // Summed via $toDecimal (#1123 money-representation fix) so MongoDB adds
+  // the amounts in exact Decimal128 space instead of accumulating float
+  // error across every installment for the life of the account.
   const paymentAgg = await Payment.aggregate([
     {
       $match: {
@@ -42,17 +46,17 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
         isSuspicious: false,
       },
     },
-    { $group: { _id: null, total: { $sum: '$amount' } } },
+    { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
   ]).session(session);
 
-  const cumulativeTotal = paymentAgg.length ? paymentAgg[0].total : 0;
-  const cumulativeNormalized = parseFloat(cumulativeTotal.toFixed(7));
+  const cumulativeTotal = paymentAgg.length ? decimalFromMongo(paymentAgg[0].total) : toMoney(0);
+  const classification = classifyFeePayment(cumulativeTotal, student.feeAmount);
 
   // Compute top-level student balance
   const updateData = {
-    totalPaid: cumulativeNormalized,
-    remainingBalance: parseFloat(Math.max(0, student.feeAmount - cumulativeNormalized).toFixed(7)),
-    feePaid: cumulativeNormalized >= student.feeAmount,
+    totalPaid: classification.cumulativeTotal,
+    remainingBalance: classification.remainingBalance,
+    feePaid: classification.feePaid,
   };
 
   // If student has per-category fees, update those balances too
@@ -73,16 +77,17 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
             isSuspicious: false,
           },
         },
-        { $group: { _id: null, total: { $sum: '$amount' } } },
+        { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
       ]).session(session);
 
-      const categoryTotalPaid = categoryPayments.length
-        ? parseFloat(categoryPayments[0].total.toFixed(7))
-        : 0;
+      const categoryTotalDecimal = categoryPayments.length
+        ? decimalFromMongo(categoryPayments[0].total)
+        : toMoney(0);
+      const categoryClassification = classifyFeePayment(categoryTotalDecimal, feesUpdated[i].amount);
 
-      feesUpdated[i].totalPaid = categoryTotalPaid;
-      feesUpdated[i].remainingBalance = Math.max(0, feesUpdated[i].amount - categoryTotalPaid);
-      feesUpdated[i].paid = categoryTotalPaid >= feesUpdated[i].amount;
+      feesUpdated[i].totalPaid = categoryClassification.cumulativeTotal;
+      feesUpdated[i].remainingBalance = categoryClassification.remainingBalance;
+      feesUpdated[i].paid = categoryClassification.feePaid;
     }
 
     updateData.fees = feesUpdated;
