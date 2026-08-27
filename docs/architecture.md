@@ -14,6 +14,7 @@ StellarEduPay is a three-tier application: a Next.js frontend, a Node.js/Express
 - [Middleware](#middleware)
 - [MongoDB Schema Relationships](#mongodb-schema-relationships)
 - [Replica Set Requirement](#replica-set-requirement)
+- [Kubernetes Deployment](#kubernetes-deployment)
 - [Background Workers](#background-workers)
 - [Queue Durability](#queue-durability)
 - [Multi-School Tenancy](#multi-school-tenancy)
@@ -357,6 +358,110 @@ StellarEduPay uses multi-document transactions on its core write paths, so this 
 | Local development | Run `mongod --replSet rs0` and call `rs.initiate()` once (see README "Prerequisites"). |
 
 > **Note**: MongoDB Atlas deployments are replica sets by default and need no extra configuration. A standalone `mongod` is sufficient ONLY where no code path opens a session — which is nowhere in this backend.
+
+---
+
+## Kubernetes Deployment
+
+StellarEduPay is deployed on Kubernetes using manifests in `deploy/k8s/`, which can be applied directly or overlaid with Kustomize for environment-specific configuration.
+
+### Image Configuration
+
+The base manifests reference placeholder image tags: `stellaredupay/backend:placeholder` and `stellaredupay/frontend:placeholder`. These **must** be overridden in production.
+
+**CI Image Promotion:**
+1. The CI pipeline (`docker-build` job) tags images with a commit SHA on every merge to main: `stellaredupay/backend:sha-<commit>` and `stellaredupay/frontend:sha-<commit>`.
+2. Use Kustomize image overrides in environment-specific overlays to plumb the SHA tag into deployments automatically.
+
+**Example Kustomization (testnet overlay):**
+```yaml
+# deploy/k8s/overlays/testnet/kustomization.yaml
+images:
+  - name: stellaredupay/backend
+    newTag: sha-abc1234  # Updated by your CD pipeline
+  - name: stellaredupay/frontend
+    newTag: sha-abc1234
+```
+
+**Private Registry with imagePullSecrets:**
+
+If your registry requires authentication, create a Kubernetes secret and reference it:
+```bash
+kubectl create secret docker-registry regcred \
+  --docker-server=your.registry.com \
+  --docker-username=<username> \
+  --docker-password=<password> \
+  --docker-email=<email>
+```
+
+Then add to your overlay's `kustomization.yaml`:
+```yaml
+imagePullSecrets:
+  - name: regcred
+```
+
+### TLS / HTTPS Configuration
+
+The ingress manifest (`deploy/k8s/ingress.yaml`) includes automatic TLS termination using cert-manager and Let's Encrypt. **Prerequisites:**
+
+1. **Install cert-manager** in your cluster:
+   ```bash
+   helm repo add jetstack https://charts.jetstack.io
+   helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace \
+     --set installCRDs=true
+   ```
+
+2. **Create a ClusterIssuer** for Let's Encrypt (create a file like `letsencrypt-issuer.yaml`):
+   ```yaml
+   apiVersion: cert-manager.io/v1
+   kind: ClusterIssuer
+   metadata:
+     name: letsencrypt-prod
+   spec:
+     acme:
+       server: https://acme-v02.api.letsencrypt.org/directory
+       email: ops@example.com  # Replace with a real email
+       privateKeySecretRef:
+         name: letsencrypt-prod
+       solvers:
+         - http01:
+             ingress:
+               class: nginx
+   ```
+
+3. **Update the ingress domain:** Replace `YOUR_DOMAIN_HERE` in `deploy/k8s/ingress.yaml` with your actual domain (e.g., `stellaredupay.example.com`):
+   ```yaml
+   spec:
+     tls:
+       - hosts:
+           - stellaredupay.example.com  # Your domain
+         secretName: stellaredupay-tls
+     rules:
+       - host: stellaredupay.example.com  # Match the TLS host
+         http:
+           paths: [...]
+   ```
+
+4. **Deploy the issuer and ingress:**
+   ```bash
+   kubectl apply -f letsencrypt-issuer.yaml
+   kubectl apply -k deploy/k8s/overlays/mainnet  # or testnet
+   ```
+
+**TLS Configuration Details:**
+- `cert-manager.io/cluster-issuer: "letsencrypt-prod"` — annotation tells cert-manager to use the `letsencrypt-prod` ClusterIssuer.
+- `nginx.ingress.kubernetes.io/ssl-redirect: "true"` — enforces HTTPS by redirecting all HTTP traffic to HTTPS.
+- `tls:` block specifies the hosts and the secret name where the certificate is stored (auto-created by cert-manager).
+
+**Verification:**
+
+Once deployed, cert-manager automatically issues a certificate and stores it in the secret. Monitor the issuing process:
+```bash
+kubectl describe certificate stellaredupay-tls
+kubectl describe clusterissuer letsencrypt-prod
+```
+
+Your API traffic (JWT tokens, payment transaction hashes, student PII) is now encrypted end-to-end, and browsers will see a valid HTTPS certificate.
 
 ---
 

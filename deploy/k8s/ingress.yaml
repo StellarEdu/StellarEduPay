@@ -6,10 +6,20 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # Enforce HTTPS by redirecting all HTTP traffic to HTTPS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Issue TLS certificate using cert-manager and Let's Encrypt
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
   ingressClassName: nginx
+  # TLS configuration — certificate termination at the Ingress
+  tls:
+    - hosts:
+        - YOUR_DOMAIN_HERE  # Replace with your domain name (e.g., stellaredupay.example.com)
+      secretName: stellaredupay-tls
   rules:
-    - http:
+    - host: YOUR_DOMAIN_HERE  # Replace with your domain name (e.g., stellaredupay.example.com)
+      http:
         paths:
           # API traffic goes directly to the backend; /api prefix is preserved
           # so the backend's Express routes (which are all under /api/) match.
@@ -28,8 +38,3 @@ spec:
                 name: frontend
                 port:
                   number: 3000
-  # Uncomment and populate to terminate TLS at the Ingress:
-  # tls:
-  #   - hosts:
-  #       - your-domain.example.com
-  #     secretName: stellaredupay-tls
