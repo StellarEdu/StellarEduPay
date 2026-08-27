@@ -107,6 +107,31 @@ async function logAudit({
 
 const MAX_PAGE_SIZE = 200;
 
+/**
+ * Decode a cursor token or return null if invalid.
+ * Cursor format: base64-encoded JSON { createdAt, _id }
+ */
+function _decodeCursor(cursorToken) {
+  if (!cursorToken) return null;
+  try {
+    const json = Buffer.from(cursorToken, 'base64').toString('utf-8');
+    const obj = JSON.parse(json);
+    return obj.createdAt && obj._id ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Encode a cursor token from an audit log entry.
+ */
+function _encodeCursor(entry) {
+  return Buffer.from(JSON.stringify({
+    createdAt: entry.createdAt,
+    _id: entry._id,
+  })).toString('base64');
+}
+
 async function getAuditLogs(filters = {}) {
   const {
     schoolId, action, targetType, performedBy, result, search,
@@ -126,8 +151,6 @@ async function getAuditLogs(filters = {}) {
   }
 
   const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), MAX_PAGE_SIZE);
-  const actualPage  = Math.max(parseInt(page,  10) || 1, 1);
-  const skip = (actualPage - 1) * actualLimit;
 
   let indexHint;
   if (search)            indexHint = 'details_text';
