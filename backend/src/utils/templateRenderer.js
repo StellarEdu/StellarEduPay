@@ -14,9 +14,22 @@
 
 const fs = require('fs');
 const path = require('path');
+const { t, translations } = require('../services/i18n');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
 const _cache = new Map();
+
+/**
+ * Build `{{i18n_<key>}}` vars for every key in the given locale's translation
+ * dict. Unsupported locales fall back to English (handled by `t()` itself).
+ */
+function buildI18nVars(locale) {
+  const out = {};
+  for (const key of Object.keys(translations.en)) {
+    out[`i18n_${key}`] = t(locale, key);
+  }
+  return out;
+}
 
 function loadTemplate(filename, { fresh = false } = {}) {
   if (!fresh && _cache.has(filename)) return _cache.get(filename);
@@ -37,12 +50,16 @@ function renderTemplate(template, vars = {}) {
 
 /**
  * Load `name.txt` and `name.html` and render both with the same vars.
+ * When `vars.locale` is set, `{{i18n_<key>}}` placeholders are populated from
+ * the matching locale's translations (falling back to English for an
+ * unsupported locale or a missing key).
  * @returns {{text: string, html: string}}
  */
 function renderEmailTemplate(name, vars, opts = {}) {
+  const merged = { ...buildI18nVars(vars.locale || 'en'), ...vars };
   return {
-    text: renderTemplate(loadTemplate(`${name}.txt`, opts), vars),
-    html: renderTemplate(loadTemplate(`${name}.html`, opts), vars),
+    text: renderTemplate(loadTemplate(`${name}.txt`, opts), merged),
+    html: renderTemplate(loadTemplate(`${name}.html`, opts), merged),
   };
 }
 

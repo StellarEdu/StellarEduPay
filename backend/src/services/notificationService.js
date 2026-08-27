@@ -23,6 +23,7 @@ const config = require('../config');
 const logger = require('../utils/logger').child('NotificationService');
 const { generateUnsubscribeToken } = require('../utils/unsubscribeToken');
 const { renderEmailTemplate } = require('../utils/templateRenderer');
+const { t } = require('./i18n');
 const email = require('./email');
 const { sendSms, sendWhatsApp, isTwilioConfigured } = require('./smsService');
 
@@ -39,6 +40,7 @@ async function verifySmtp() {
  */
 function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
+  const locale = emailLocale || 'en';
 
   // Determine escalation prefix and urgency message
   const ESCALATION_LABELS = {
@@ -48,9 +50,7 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
   };
   const esc = ESCALATION_LABELS[escalationLevel] || ESCALATION_LABELS[1];
   const subject = `${esc.prefix}[${schoolName}] Fee Payment Reminder — ${studentName}`;
-  const reminderNote = reminderCount > 1
-    ? `Note: This is reminder #${reminderCount}. If you have already paid, please disregard this message.`
-    : '';
+  const reminderNote = reminderCount > 1 ? t(locale, 'reminderNote', { n: reminderCount }) : '';
 
   const deadlineStr = paymentDeadline
     ? new Date(paymentDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
