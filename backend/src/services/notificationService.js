@@ -25,6 +25,7 @@ const { generateUnsubscribeToken } = require('../utils/unsubscribeToken');
 const { renderEmailTemplate } = require('../utils/templateRenderer');
 const { t } = require('./i18n');
 const email = require('./email');
+const { sendSms, sendWhatsApp, isTwilioConfigured } = require('./smsService');
 
 /**
  * Verify the active email provider is reachable/configured.
@@ -37,7 +38,7 @@ async function verifySmtp() {
 /**
  * Build the reminder email body from external template files.
  */
-function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, emailLocale }) {
+function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
   const locale = emailLocale || 'en';
 
@@ -55,7 +56,30 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
     ? new Date(paymentDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : null;
 
-  const vars = { studentName, studentId, className, feeAmount, outstanding, schoolName, reminderNote, urgency: esc.urgency, deadline: deadlineStr || '', unsubscribeUrl: unsubscribeUrl || '', locale };
+  const vars = {
+    studentName,
+    studentId,
+    className,
+    feeAmount,
+    outstanding,
+    schoolName,
+    reminderNote,
+    urgency: esc.urgency,
+    deadline: deadlineStr || '',
+    unsubscribeUrl: unsubscribeUrl || '',
+    logoUrl: logoUrl || '',
+    primaryColor: primaryColor || '#1a56db',
+    schoolAddress: address || '',
+    i18n_greeting: 'Dear Parent/Guardian,',
+    i18n_feeReminder: 'We are writing to remind you that school fees are due for',
+    i18n_school: 'School',
+    i18n_feeAmount: 'Fee Amount',
+    i18n_amountDue: 'Amount Due',
+    i18n_payPrompt: 'Please arrange payment at your earliest convenience to avoid any disruption to your child\'s education.',
+    i18n_thanks: 'Thank you,',
+    i18n_administration: 'Administration',
+    i18n_unsubscribeText: 'Not interested in payment reminders?',
+  };
   const { text, html } = renderEmailTemplate('reminderEmail', vars);
 
   return { subject, text, html };
@@ -80,10 +104,25 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
  */
 async function sendFeeReminder(opts) {
   const token = generateUnsubscribeToken(opts.studentId, opts.schoolId || 'unknown', config.JWT_SECRET);
-  const baseUrl = config.APP_URL || process.env.APP_URL || 'http://localhost:5000';
+  const baseUrl = config.APP_URL || 'http://localhost:5000';
   const unsubscribeUrl = `${baseUrl}/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`;
 
-  const { subject, text, html } = buildReminderEmail({ ...opts, unsubscribeUrl });
+  let school = null;
+  if (opts.schoolId) {
+    try {
+      school = await School.findOne({ schoolId: opts.schoolId });
+    } catch (err) {
+      logger.warn('Failed to fetch school branding for reminder', { schoolId: opts.schoolId, error: err.message });
+    }
+  }
+
+  const { subject, text, html } = buildReminderEmail({
+    ...opts,
+    unsubscribeUrl,
+    logoUrl: school?.logoUrl || '',
+    primaryColor: school?.primaryColor || '#1a56db',
+    address: school?.address || '',
+  });
 
   const result = await email.sendEmail({
     to: opts.to,
@@ -126,4 +165,107 @@ async function sendFeeReminder(opts) {
   throw new Error(result.error || 'Email delivery failed after retries');
 }
 
-module.exports = { sendFeeReminder, verifySmtp };
+/**
+ * Build an SMS reminder message body.
+ */
+function buildReminderSMS({ studentName, className, feeAmount, remainingBalance, schoolName, reminderCount, escalationLevel, paymentDeadline }) {
+  const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
+
+  const ESCALATION_LABELS = {
+    1: { prefix: '', urgency: 'Friendly reminder' },
+    2: { prefix: 'URGENT: ', urgency: 'Urgent reminder' },
+    3: { prefix: 'OVERDUE: ', urgency: 'Overdue notice' },
+  };
+  const esc = ESCALATION_LABELS[escalationLevel] || ESCALATION_LABELS[1];
+
+  const deadlineStr = paymentDeadline
+    ? new Date(paymentDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    : null;
+
+  let message = `${esc.prefix}${esc.urgency}: ${studentName} (${className}) has unpaid school fees at ${schoolName}. Outstanding: ${outstanding}. `;
+  if (deadlineStr) {
+    message += `Due: ${deadlineStr}. `;
+  }
+  if (reminderCount > 1) {
+    message += `(Reminder #${reminderCount}) `;
+  }
+  message += 'Please arrange payment.';
+
+  return message;
+}
+
+/**
+ * Send an SMS fee reminder to a parent.
+ *
+ * @param {object} opts
+ * @param {string} opts.to            - Parent phone number (E.164 format)
+ * @param {string} opts.studentName
+ * @param {string} opts.className
+ * @param {number} opts.feeAmount
+ * @param {number|null} opts.remainingBalance
+ * @param {string} opts.schoolName
+ * @param {number} opts.reminderCount
+ * @param {number} [opts.escalationLevel=1]
+ * @param {Date|null} [opts.paymentDeadline]
+ * @returns {Promise<{sent: boolean, sid?: string}>}
+ */
+async function sendSmsReminder(opts) {
+  const message = buildReminderSMS(opts);
+  const result = await sendSms(opts.to, message);
+
+  if (result.sent) {
+    logger.info('Reminder SMS sent', {
+      sid: result.sid,
+      to: opts.to,
+      studentId: opts.studentId,
+      reminderCount: opts.reminderCount,
+    });
+    return { sent: true, sid: result.sid };
+  }
+
+  logger.warn('Reminder SMS not sent', {
+    to: opts.to,
+    studentId: opts.studentId,
+    error: result.error,
+  });
+  return { sent: false, error: result.error };
+}
+
+/**
+ * Send a WhatsApp fee reminder to a parent.
+ *
+ * @param {object} opts
+ * @param {string} opts.to            - Parent WhatsApp number (E.164 format)
+ * @param {string} opts.studentName
+ * @param {string} opts.className
+ * @param {number} opts.feeAmount
+ * @param {number|null} opts.remainingBalance
+ * @param {string} opts.schoolName
+ * @param {number} opts.reminderCount
+ * @param {number} [opts.escalationLevel=1]
+ * @param {Date|null} [opts.paymentDeadline]
+ * @returns {Promise<{sent: boolean, sid?: string}>}
+ */
+async function sendWhatsAppReminder(opts) {
+  const message = buildReminderSMS(opts);
+  const result = await sendWhatsApp(opts.to, message);
+
+  if (result.sent) {
+    logger.info('Reminder WhatsApp sent', {
+      sid: result.sid,
+      to: opts.to,
+      studentId: opts.studentId,
+      reminderCount: opts.reminderCount,
+    });
+    return { sent: true, sid: result.sid };
+  }
+
+  logger.warn('Reminder WhatsApp not sent', {
+    to: opts.to,
+    studentId: opts.studentId,
+    error: result.error,
+  });
+  return { sent: false, error: result.error };
+}
+
+module.exports = { sendFeeReminder, sendSmsReminder, sendWhatsAppReminder, verifySmtp };

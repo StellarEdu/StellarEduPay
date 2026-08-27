@@ -173,7 +173,7 @@ async function getSchool(req, res, next) {
 // PATCH /api/schools/:schoolSlug
 async function updateSchool(req, res, next) {
   try {
-    const allowed = ['name', 'stellarAddress', 'network', 'adminEmail', 'address', 'suspiciousPaymentMultiplier', 'suspiciousAmountConfig', 'localCurrency'];
+    const allowed = ['name', 'stellarAddress', 'network', 'adminEmail', 'address', 'suspiciousPaymentMultiplier', 'suspiciousAmountConfig', 'localCurrency', 'classOptions'];
     const updates = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -243,6 +243,23 @@ async function updateSchool(req, res, next) {
         });
       }
       updates.localCurrency = String(updates.localCurrency).toUpperCase();
+    }
+
+    // Issue #1337: Validate classOptions if being updated
+    if (updates.classOptions !== undefined) {
+      if (!Array.isArray(updates.classOptions) || updates.classOptions.length === 0) {
+        return res.status(400).json({
+          error: 'classOptions must be a non-empty array of class/grade names',
+          code: 'INVALID_CLASS_OPTIONS',
+        });
+      }
+      if (!updates.classOptions.every(opt => typeof opt === 'string' && opt.trim().length > 0)) {
+        return res.status(400).json({
+          error: 'All classOptions must be non-empty strings',
+          code: 'INVALID_CLASS_OPTIONS',
+        });
+      }
+      updates.classOptions = updates.classOptions.map(opt => opt.trim());
     }
 
     const original = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }).lean();

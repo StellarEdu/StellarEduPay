@@ -11,6 +11,7 @@ const WebhookRetry = require('../models/webhookRetryModel');
 const WebhookEndpoint = require('../models/webhookEndpointModel');
 const WebhookDelivery = require('../models/webhookDeliveryModel');
 const { validateWebhookUrl, validateResolvedIp } = require('../utils/validateWebhookUrl');
+const { resolveDnsWithCache } = require('../utils/dnsCache');
 const { buildWebhookPayload } = require('../utils/buildWebhookPayload');
 const logger = require('../utils/logger').child('WebhookService');
 
@@ -153,8 +154,12 @@ function getBackoffDelay(attemptNumber) {
 
 // ── DNS pinning: re-resolve at send time ──────────────────────────────────────
 /**
- * Re-resolve the hostname at send time and verify every returned IP against
- * the deny list (DNS-rebinding defence).
+ * Re-resolve the hostname at send time with TTL-aware caching and verify
+ * every returned IP against the deny list (DNS-rebinding defence).
+ *
+ * Uses TTL-aware caching to detect DNS changes when TTL expires, ensuring
+ * a post-registration DNS rebinding attack (where DNS record changes to point
+ * to a private IP) is caught at delivery time.
  *
  * @param {string} url
  * @returns {Promise<{ ok: boolean, reason?: string }>}
@@ -173,13 +178,13 @@ async function _validateAtSendTime(url) {
     return check.blocked ? { ok: false, reason: check.reason } : { ok: true };
   }
 
-  // DNS re-resolution
-  const [v4, v6] = await Promise.all([
-    dns.resolve4(hostname).catch(() => []),
-    dns.resolve6(hostname).catch(() => []),
-  ]);
-  const all = [...v4, ...v6];
-  if (all.length === 0) return { ok: false, reason: 'DNS_RESOLUTION_FAILED' };
+  // DNS re-resolution with TTL-aware caching (cache expires when TTL expires)
+  let all;
+  try {
+    all = await resolveDnsWithCache(hostname);
+  } catch {
+    return { ok: false, reason: 'DNS_RESOLUTION_FAILED' };
+  }
 
   for (const addr of all) {
     const check = validateResolvedIp(addr);

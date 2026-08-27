@@ -17,6 +17,13 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
+      # imagePullSecrets is used for private registries.
+      # Create the secret with:
+      #   kubectl create secret docker-registry regcred \
+      #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
+      # Then reference it in your Kustomize overlay:
+      #   imagePullSecrets:
+      #     - name: regcred
       initContainers:
         - name: migrate
           image: stellaredupay/backend:placeholder

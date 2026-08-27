@@ -17,7 +17,8 @@ const Student = require('../models/studentModel');
 const School  = require('../models/schoolModel');
 const Payment = require('../models/paymentModel');
 const ReminderLog = require('../models/reminderLogModel');
-const { sendFeeReminder, verifySmtp } = require('./notificationService');
+const { sendFeeReminder, sendSmsReminder, sendWhatsAppReminder, verifySmtp } = require('./notificationService');
+const { isTwilioConfigured } = require('./smsService');
 const config = require('../config');
 const logger = require('../utils/logger').child('ReminderService');
 
@@ -99,15 +100,21 @@ function computeEscalationLevel(student) {
  * Determine whether a student is eligible for a reminder right now.
  * Respects the per-fee-period cap so a perpetually-unpaid fee does not
  * generate endless reminders across academic years.
+ *
+ * A student is eligible if they have at least one contact channel configured
+ * (email or phone) and are not opted out.
  */
 function isEligible(student, school) {
   if (student.feePaid)          return false;
-  if (!student.parentEmail)           return false;
-  if (student.reminderOptOut)         return false;
-  if (student.parentEmailSuppressed)  return false;
+  if (student.reminderOptOut)   return false;
   // Pause all automated reminders while a dispute is active on this student's payment.
-  if (student.disputeHold)            return false;
+  if (student.disputeHold)      return false;
   if (student.reminderCount >= REMINDER_MAX_COUNT) return false;
+
+  // Must have at least one contact channel
+  const hasEmail = student.parentEmail && !student.parentEmailSuppressed;
+  const hasPhone = student.parentPhone && isTwilioConfigured();
+  if (!hasEmail && !hasPhone) return false;
 
   // Scope reminder count to the current fee period.
   // Reset tracking when period changes so each term/year starts fresh.
@@ -136,6 +143,56 @@ function computeWindowStart(timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(new Date());
   const isoDate = parts.map(p => p.value).join('').slice(0, 10); // YYYY-MM-DD
   return new Date(isoDate + 'T00:00:00.000Z');
+}
+
+/**
+ * Determine which reminder channels to use for this student and school.
+ * Returns an object with { email: boolean, sms: boolean, whatsapp: boolean }
+ *
+ * Respects school-level settings:
+ *   - school.settings.reminderChannels.default — 'email', 'sms', 'whatsapp', or 'both'
+ *     (default: 'email')
+ *
+ * Always checks channel availability (email configured, phone set, Twilio configured).
+ */
+function determineReminderChannels(student, school) {
+  const defaults = { email: true, sms: false, whatsapp: false };
+
+  const hasEmail = student.parentEmail && !student.parentEmailSuppressed;
+  const hasPhone = student.parentPhone && isTwilioConfigured();
+
+  // Get school preference
+  const channelPref = (school.settings && school.settings.reminderChannels?.default) || 'email';
+
+  const channels = { ...defaults };
+
+  switch (channelPref) {
+    case 'email':
+      channels.email = hasEmail;
+      channels.sms = false;
+      channels.whatsapp = false;
+      break;
+    case 'sms':
+      channels.email = false;
+      channels.sms = hasPhone;
+      channels.whatsapp = false;
+      break;
+    case 'whatsapp':
+      channels.email = false;
+      channels.sms = false;
+      channels.whatsapp = hasPhone;
+      break;
+    case 'email-sms':
+    case 'both':
+      channels.email = hasEmail;
+      channels.sms = hasPhone;
+      channels.whatsapp = false;
+      break;
+    default:
+      channels.email = hasEmail;
+  }
+
+  return channels;
 }
 
 /**
@@ -245,9 +302,10 @@ async function processReminders() {
 
         const escalationLevel = computeEscalationLevel(student);
         const currentPeriod = school.settings?.currentFeePeriod || student.academicYear;
+        const channels = determineReminderChannels(student, school);
+        const reminderCount = (student.reminderCount || 0) + 1;
 
-        const result = await sendFeeReminder({
-          to:               student.parentEmail,
+        const commonOpts = {
           studentName:      student.name,
           studentId:        student.studentId,
           schoolId:         school.schoolId,
@@ -255,14 +313,43 @@ async function processReminders() {
           feeAmount:        student.feeAmount,
           remainingBalance,
           schoolName:       school.name,
-          reminderCount:    (student.reminderCount || 0) + 1,
+          reminderCount,
           escalationLevel,
           paymentDeadline:  student.paymentDeadline,
-          emailLocale:      school.emailLocale,
-        });
+        };
 
-        // Only update tracking fields if email was actually sent
-        if (result.sent) {
+        const sentChannels = [];
+        let anyChannelSent = false;
+
+        // Send email
+        if (channels.email) {
+          const result = await sendFeeReminder({ ...commonOpts, to: student.parentEmail });
+          if (result.sent) {
+            sentChannels.push('email');
+            anyChannelSent = true;
+          }
+        }
+
+        // Send SMS
+        if (channels.sms) {
+          const result = await sendSmsReminder({ ...commonOpts, to: student.parentPhone });
+          if (result.sent) {
+            sentChannels.push('sms');
+            anyChannelSent = true;
+          }
+        }
+
+        // Send WhatsApp
+        if (channels.whatsapp) {
+          const result = await sendWhatsAppReminder({ ...commonOpts, to: student.parentPhone });
+          if (result.sent) {
+            sentChannels.push('whatsapp');
+            anyChannelSent = true;
+          }
+        }
+
+        // Only update tracking fields if at least one channel sent successfully
+        if (anyChannelSent) {
           const updateFields = {
             $set: {
               lastReminderSentAt: new Date(),
@@ -274,22 +361,21 @@ async function processReminders() {
             Student.findByIdAndUpdate(student._id, updateFields),
             ReminderLog.updateOne(
               { schoolId: school.schoolId, studentId: student.studentId, windowStart },
-              { $set: { status: 'sent', sentAt: new Date(), escalationLevel } }
+              { $set: { status: 'sent', sentAt: new Date(), escalationLevel, channels: sentChannels } }
             ),
           ]);
           summary.sent++;
           // Successful send — reset circuit
           if (_circuitState !== 'closed') {
             _circuitState = 'closed';
-            logger.warn('Circuit closed — email provider recovered');
+            logger.warn('Circuit closed — provider recovered');
           }
           _consecutiveFailures = 0;
         } else {
-          // Email wasn't sent (dev mode / no SMTP) — keep the idempotency
-          // record so the same student isn't skipped on the next tick.
+          // No channel sent — keep the idempotency record so the same student isn't skipped on the next tick.
           await ReminderLog.updateOne(
             { schoolId: school.schoolId, studentId: student.studentId, windowStart },
-            { $set: { status: 'skipped' } }
+            { $set: { status: 'skipped', channels: [] } }
           );
           summary.skipped++;
         }

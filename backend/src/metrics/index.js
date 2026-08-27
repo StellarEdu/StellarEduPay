@@ -400,52 +400,42 @@ const backupLastSuccessTimestamp = new client.Gauge({
   registers: [registry],
 });
 
-// transaction_queue_depth — actionable (waiting + active + delayed) jobs in the
-// BullMQ transaction-processing queue, queried live on each scrape so operators
-// can tell "no new payments" apart from "queue backed up silently" (Issue #1348).
-const transactionQueueDepth = new client.Gauge({
-  name: 'transaction_queue_depth',
-  help: 'Number of actionable jobs (waiting + active + delayed) in the transaction processing queue',
+// horizon_unreachable_since_seconds — Unix timestamp of the first Horizon
+// poll failure in the current outage (0 = currently reachable). Set by
+// transactionPollingService on first failure, cleared on first success. Lets
+// the health check and alerting distinguish a transient blip from an outage
+// that has persisted since startup. See issue #1340.
+const horizonUnreachableSince = new client.Gauge({
+  name: 'horizon_unreachable_since_seconds',
+  help: 'Unix timestamp when Horizon first became unreachable in the current outage (0 = reachable)',
   registers: [registry],
-  async collect() {
-    try {
-      const { getQueueCounts } = require('../queue/transactionQueue');
-      const counts = await getQueueCounts();
-      this.set(counts ? counts.waiting + counts.active + counts.delayed : 0);
-    } catch (_) {
-      // Redis may not be configured — scrape still succeeds
-    }
-  },
 });
 
-// transaction_queue_depth_alert_threshold — mirrors the configurable
-// TRANSACTION_QUEUE_ALERT_THRESHOLD env var so the Prometheus alert rule stays
-// correct even if the threshold is overridden per-deployment.
-const transactionQueueDepthAlertThreshold = new client.Gauge({
-  name: 'transaction_queue_depth_alert_threshold',
-  help: 'Configured transaction queue depth above which the sustained-backlog alert fires',
+// last_backup_verification_age_seconds — seconds since the most recent
+// successful backup restore-verification (scripts/test-backup-recovery.sh),
+// recorded via POST /api/internal/backup-verification-heartbeat. Recomputed
+// fresh on every scrape (collect()) since it is an age, not a timestamp.
+// A very large sentinel is reported before the first verification ever
+// succeeds so the "not verified within 8 days" alert fires immediately.
+// See issue #1343.
+let _lastBackupVerificationSuccessAt = 0; // unix seconds; 0 = never recorded
+const NEVER_VERIFIED_AGE_SECONDS = 30 * 24 * 3600; // sentinel: 30 days
+const lastBackupVerificationAgeSeconds = new client.Gauge({
+  name: 'last_backup_verification_age_seconds',
+  help: 'Seconds since the last successful backup integrity verification (large sentinel if never verified)',
   registers: [registry],
   collect() {
-    this.set(parseInt(process.env.TRANSACTION_QUEUE_ALERT_THRESHOLD, 10) || 100);
+    this.set(
+      _lastBackupVerificationSuccessAt
+        ? Math.floor(Date.now() / 1000) - _lastBackupVerificationSuccessAt
+        : NEVER_VERIFIED_AGE_SECONDS
+    );
   },
 });
 
-// transaction_queue_processing_duration_seconds — per-job processing time,
-// recorded by the worker on completion/failure.
-const transactionQueueProcessingDurationSeconds = new client.Histogram({
-  name: 'transaction_queue_processing_duration_seconds',
-  help: 'Duration of transaction queue job processing in seconds',
-  buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
-  registers: [registry],
-});
-
-// transaction_queue_failed_total — count of jobs that reached the BullMQ
-// 'failed' state, recorded by the worker.
-const transactionQueueFailedTotal = new client.Counter({
-  name: 'transaction_queue_failed_total',
-  help: 'Total number of transaction queue jobs that failed',
-  registers: [registry],
-});
+function recordBackupVerificationSuccess(timestampSeconds = Math.floor(Date.now() / 1000)) {
+  _lastBackupVerificationSuccessAt = timestampSeconds;
+}
 
 module.exports = {
   registry,
@@ -473,8 +463,7 @@ module.exports = {
   webhookDeliveryTotal,
   notificationSentTotal,
   backupLastSuccessTimestamp,
-  transactionQueueDepth,
-  transactionQueueDepthAlertThreshold,
-  transactionQueueProcessingDurationSeconds,
-  transactionQueueFailedTotal,
+  horizonUnreachableSince,
+  lastBackupVerificationAgeSeconds,
+  recordBackupVerificationSuccess,
 };
