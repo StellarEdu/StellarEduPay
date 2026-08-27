@@ -22,6 +22,13 @@ const {
   discardFailedJob,
   getQueueStats,
 } = require('../controllers/bullMQAdminController');
+const {
+  listDeadLetterEvents,
+  getDeadLetterEventDetails,
+  replayDeadLetterEvent,
+  discardDeadLetterEvent,
+  getOutboxStats,
+} = require('../controllers/outboxAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
@@ -52,5 +59,12 @@ router.get('/retry-queue/failed/:jobId', requireAdminAuth, getFailedJobDetails);
 router.post('/retry-queue/failed/:jobId/retry', requireAdminAuth, auditContext, retryFailedJob);
 router.delete('/retry-queue/failed/:jobId', requireAdminAuth, auditContext, discardFailedJob);
 router.get('/retry-queue/stats', requireAdminAuth, getQueueStats);
+
+// Outbox dead-letter queue admin endpoints (Issue #1339)
+router.get('/outbox/dead-letter', requireAdminAuth, listDeadLetterEvents);
+router.get('/outbox/dead-letter/:eventId', requireAdminAuth, getDeadLetterEventDetails);
+router.post('/outbox/dead-letter/:eventId/replay', requireAdminAuth, auditContext, replayDeadLetterEvent);
+router.delete('/outbox/dead-letter/:eventId', requireAdminAuth, auditContext, discardDeadLetterEvent);
+router.get('/outbox/stats', requireAdminAuth, getOutboxStats);
 
 module.exports = router;

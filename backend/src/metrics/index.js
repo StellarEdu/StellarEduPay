@@ -400,6 +400,25 @@ const backupLastSuccessTimestamp = new client.Gauge({
   registers: [registry],
 });
 
+// outbox_dead_letter_events_total — count of outbox events that have exhausted
+// their retry budget and landed in the dead-letter queue (Issue #1339).
+// Operators alert on any non-zero value, as events that cannot be delivered are
+// silently dropped webhook notifications, refund events, etc. that break downstream integrations.
+new client.Gauge({
+  name: 'outbox_dead_letter_events_total',
+  help: 'Number of outbox events that have exhausted their retry budget and are dead-lettered',
+  registers: [registry],
+  async collect() {
+    try {
+      const Outbox = require('../models/outboxModel');
+      const count = await Outbox.countDocuments({ deadLettered: true });
+      this.set(count);
+    } catch (_) {
+      // DB may not be ready yet — scrape still succeeds with stale/zero values
+    }
+  },
+});
+
 module.exports = {
   registry,
   mongoConnectionState,
