@@ -28,6 +28,7 @@ const { withStellarRetry } = require('../utils/withStellarRetry');
 const { makePaymentAuditLogger } = require('../utils/paymentAuditLogger');
 const lock = require('../services/distributedLock');
 const logger = require('../utils/logger');
+const { toMoney, decimalFromMongo, classifyFeePayment } = require('../utils/money');
 
 // TTL for the per-school distributed verify lock.  Verify is a fast Horizon
 // round-trip; 30 s is more than enough while still auto-expiring on crash.
@@ -424,24 +425,31 @@ async function verifyPayment(req, res, next) {
       let cumulativeTotal;
       let feeValidationStatus;
       let computedExcessAmount;
+      let remainingBalance;
       let now;
       try {
         // Determine cumulative feeValidationStatus (#846).
         // Partial payments (amount < fee) are accepted — money is already on-chain.
         // The cumulative total drives the status; per-payment underpaid rejection
         // is not applied here because a parent may be paying in installments.
+        //
+        // Summed via $toDecimal (#1123 money-representation fix) so the addition
+        // happens in exact Decimal128 space inside MongoDB — a plain `$sum` over
+        // the `amount` doubles would accumulate float error server-side, before
+        // the result ever reaches this function, and toFixed(7) cannot repair
+        // that afterwards. classifyFeePayment then compares in exact Decimal
+        // space, so an installment plan that sums exactly to the fee is never
+        // misclassified by a float epsilon.
         const prevAgg = await Payment.aggregate([
           { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
+          { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
         ]);
-        const prevTotal = prevAgg.length ? prevAgg[0].total : 0;
-        cumulativeTotal = parseFloat((prevTotal + result.amount).toFixed(7));
-        if (cumulativeTotal < studentObj.feeAmount) feeValidationStatus = 'partial';
-        else if (cumulativeTotal > studentObj.feeAmount) feeValidationStatus = 'overpaid';
-        else feeValidationStatus = 'valid';
-        computedExcessAmount = feeValidationStatus === 'overpaid'
-          ? parseFloat((cumulativeTotal - studentObj.feeAmount).toFixed(7))
-          : 0;
+        const prevTotal = prevAgg.length ? decimalFromMongo(prevAgg[0].total) : toMoney(0);
+        const classification = classifyFeePayment(prevTotal.plus(toMoney(result.amount)), studentObj.feeAmount);
+        cumulativeTotal = classification.cumulativeTotal;
+        feeValidationStatus = classification.status;
+        computedExcessAmount = classification.excessAmount;
+        remainingBalance = classification.remainingBalance;
 
         now = new Date();
 
@@ -551,7 +559,6 @@ async function verifyPayment(req, res, next) {
       const targetCurrency = req.school.localCurrency || 'USD';
       const conversion = await convertToLocalCurrency(result.amount, result.assetCode || 'XLM', targetCurrency);
       const stellarExplorerUrl = getExplorerUrl(result.hash);
-      const remainingBalance = parseFloat(Math.max(0, studentObj.feeAmount - cumulativeTotal).toFixed(7));
 
       res.json({
         verified: true,

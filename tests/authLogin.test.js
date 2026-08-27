@@ -6,7 +6,7 @@
  * Tests the pure handler function directly — no Express, no JWT lib needed.
  */
 
-process.env.JWT_SECRET = 'test-secret-for-jest';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 process.env.ADMIN_USERNAME = 'admin';
 process.env.ADMIN_PASSWORD = 'correct-password';
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';

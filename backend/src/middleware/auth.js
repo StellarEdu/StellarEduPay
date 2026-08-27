@@ -222,7 +222,15 @@ function requireSchoolAuth(allowedRoles = []) {
       (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
 
     if (!isSuperAdmin) {
-      // Tenant scope: token schoolId must match the requested school
+      // Tenant scope: non-super-admin tokens MUST have a schoolId
+      if (!decoded.schoolId) {
+        return res.status(403).json({
+          error: 'Forbidden. Token is not scoped to a school.',
+          code: 'MISSING_TENANT_CLAIM',
+        });
+      }
+
+      // Token schoolId must match the requested school.
       // Accept schoolId from X-School-ID header, URL param, or route param.
       // URL param support enables EventSource (which cannot send custom headers).
       const requestedSchoolId = req.headers['x-school-id'] || req.query?.schoolId || req.params?.schoolId;
@@ -244,6 +252,9 @@ function requireSchoolAuth(allowedRoles = []) {
           });
         }
       }
+
+      // Set req.schoolId from token — authoritative source for downstream use
+      req.schoolId = decoded.schoolId;
     }
 
     req.user = decoded;

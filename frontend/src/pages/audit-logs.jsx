@@ -50,6 +50,20 @@ function AuditLogsContent() {
   const [resultFilter, setResultFilter]         = useState("");
   const [startDate, setStartDate]               = useState("");
   const [endDate, setEndDate]                   = useState("");
+  const [actorIdInput, setActorIdInput]         = useState("");
+  const [actorIdFilter, setActorIdFilter]       = useState("");
+  const [searchInput, setSearchInput]           = useState("");
+  const [searchFilter, setSearchFilter]         = useState("");
+
+  // Debounce the free-text inputs so we don't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setActorIdFilter(actorIdInput.trim()), 350);
+    return () => clearTimeout(t);
+  }, [actorIdInput]);
+  useEffect(() => {
+    const t = setTimeout(() => setSearchFilter(searchInput.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const fetchLogs = (p = page) => {
     setLoading(true);
@@ -58,6 +72,8 @@ function AuditLogsContent() {
     if (actionFilter)     params.action     = actionFilter;
     if (targetTypeFilter) params.targetType = targetTypeFilter;
     if (resultFilter)     params.result     = resultFilter;
+    if (actorIdFilter)    params.performedBy = actorIdFilter;
+    if (searchFilter)     params.search     = searchFilter;
     if (startDate)        params.startDate  = new Date(startDate).toISOString();
     if (endDate) {
       const end = new Date(endDate);
@@ -77,7 +93,7 @@ function AuditLogsContent() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchLogs(1); }, [actionFilter, targetTypeFilter, resultFilter, startDate, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchLogs(1); }, [actionFilter, targetTypeFilter, resultFilter, actorIdFilter, searchFilter, startDate, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -222,6 +238,28 @@ function AuditLogsContent() {
                 <option value="success">Success</option>
                 <option value="failure">Failure</option>
               </select>
+            </div>
+
+            <div>
+              <label className="al-filter-label">Actor ID</label>
+              <input
+                type="text"
+                value={actorIdInput}
+                onChange={e => setActorIdInput(e.target.value)}
+                placeholder="Performed by..."
+                className="al-filter-input"
+              />
+            </div>
+
+            <div>
+              <label className="al-filter-label">Search</label>
+              <input
+                type="text"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                placeholder="Search details..."
+                className="al-filter-input"
+              />
             </div>
 
             <div>

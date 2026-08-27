@@ -109,7 +109,7 @@ const MAX_PAGE_SIZE = 200;
 
 async function getAuditLogs(filters = {}) {
   const {
-    schoolId, action, targetType, performedBy, result,
+    schoolId, action, targetType, performedBy, result, search,
     startDate, endDate, cursor, page = 1, limit = 50,
   } = filters;
 
@@ -118,6 +118,7 @@ async function getAuditLogs(filters = {}) {
   if (targetType) baseQuery.targetType = targetType;
   if (performedBy) baseQuery.performedBy = performedBy;
   if (result) baseQuery.result = result;
+  if (search) baseQuery.$text = { $search: search };
   if (startDate || endDate) {
     baseQuery.createdAt = {};
     if (startDate) baseQuery.createdAt.$gte = new Date(startDate);
@@ -129,7 +130,8 @@ async function getAuditLogs(filters = {}) {
   const skip = (actualPage - 1) * actualLimit;
 
   let indexHint;
-  if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
+  if (search)            indexHint = 'details_text';
+  else if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
   else if (performedBy) indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
   else if (targetType)  indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
   else              indexHint = { schoolId: 1, createdAt: -1 };
@@ -137,7 +139,7 @@ async function getAuditLogs(filters = {}) {
   const [logs, total] = await Promise.all([
     AuditLog.find(baseQuery)
       .hint(indexHint)
-      .sort({ createdAt: -1 })
+      .sort(search ? { score: { $meta: 'textScore' } } : { createdAt: -1 })
       .skip(skip)
       .limit(actualLimit)
       .lean(),
