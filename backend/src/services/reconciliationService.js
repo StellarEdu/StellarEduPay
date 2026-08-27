@@ -1,47 +1,154 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const Student = require('../models/studentModel');
 const Payment = require('../models/paymentModel');
 const School = require('../models/schoolModel');
 const ReconciliationReport = require('../models/reconciliationReportModel');
+const ReconciliationCursor = require('../models/reconciliationCursorModel');
 const { checkSchoolConsistency, fetchChainTransactions } = require('./consistencyService');
+const config = require('../config');
 const logger = require('../utils/logger').child('ReconciliationService');
 
-const INTERVAL_MS = parseInt(process.env.RECONCILIATION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const BATCH_SIZE = config.RECONCILIATION_BATCH_SIZE;
+const INTERVAL_MS = config.RECONCILIATION_INTERVAL_MS;
 let _timer = null;
 
+/**
+ * Reconcile students in batches using cursor-based pagination.
+ * Tracks progress so a crash mid-run can resume from the last processed student.
+ *
+ * @param {string} schoolId - Optional: if set, reconcile only this school
+ * @returns {Promise<{checked: number, fixed: number, errors: number, resumed: boolean}>}
+ */
 async function reconcileAll(schoolId) {
-  const students = await Student.find(schoolId ? { schoolId } : {}).lean();
-  let fixed = 0, errors = 0;
+  const query = schoolId ? { schoolId } : {};
+  let fixed = 0, errors = 0, checked = 0, resumed = false;
 
-  for (const s of students) {
-    try {
-      const [agg] = await Payment.aggregate([
-        { $match: { schoolId: s.schoolId, studentId: s.studentId, status: 'SUCCESS', deletedAt: null } },
-        { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
-      ]);
-      // creditAdjustments are intentional admin-applied manual credits.
-      // Including them here ensures the 24-hour reconciliation cycle never
-      // treats a partial-credit adjustment as drift and reverts it.
-      const paymentTotal = agg?.computedTotal ?? 0;
-      const creditAdjustments = s.creditAdjustments || 0;
-      const computed = parseFloat((paymentTotal + creditAdjustments).toFixed(7));
-      if (Math.abs(computed - (s.totalPaid || 0)) > 0.0000001) {
-        logger.warn('Reconciliation mismatch — correcting', { schoolId: s.schoolId, studentId: s.studentId, diff: computed - (s.totalPaid || 0) });
-        await Student.findOneAndUpdate(
-          { schoolId: s.schoolId, studentId: s.studentId },
-          { totalPaid: computed, remainingBalance: Math.max(0, s.feeAmount - computed), feePaid: computed >= s.feeAmount },
-        );
-        fixed++;
-      }
-    } catch (err) {
-      errors++;
-      logger.error('Reconciliation error', { studentId: s.studentId, error: err.message });
-    }
+  // Get or create cursor for this reconciliation cycle
+  const filter = schoolId ? { schoolId } : { schoolId: { $exists: false } };
+  let cursor = await ReconciliationCursor.findOne(filter);
+
+  if (cursor && cursor.status === 'in_progress') {
+    resumed = true;
+    logger.info('Resuming reconciliation from previous crash', {
+      schoolId: schoolId || 'all',
+      lastProcessedStudentId: cursor.lastProcessedStudentId,
+      processedCount: cursor.processedCount,
+    });
+  } else {
+    cursor = new ReconciliationCursor({
+      schoolId: schoolId || undefined,
+      cycleStartedAt: new Date(),
+      status: 'in_progress',
+    });
   }
 
-  logger.info('Reconciliation complete', { checked: students.length, fixed, errors });
-  return { checked: students.length, fixed, errors };
+  try {
+    let lastId = cursor.lastProcessedStudentId ? { _id: { $gt: mongoose.Types.ObjectId(cursor.lastProcessedStudentId) } } : {};
+    const baseQuery = { ...query, ...lastId };
+    let batchChecked = 0;
+
+    while (true) {
+      // Fetch next batch of students
+      const students = await Student.find(baseQuery)
+        .sort({ _id: 1 })
+        .limit(BATCH_SIZE)
+        .lean();
+
+      if (students.length === 0) break;
+
+      for (const s of students) {
+        try {
+          const [agg] = await Payment.aggregate([
+            { $match: { schoolId: s.schoolId, studentId: s.studentId, status: 'SUCCESS', deletedAt: null } },
+            { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
+          ]);
+          const paymentTotal = agg?.computedTotal ?? 0;
+          const creditAdjustments = s.creditAdjustments || 0;
+          const computed = parseFloat((paymentTotal + creditAdjustments).toFixed(7));
+
+          if (Math.abs(computed - (s.totalPaid || 0)) > 0.0000001) {
+            logger.warn('Reconciliation mismatch — correcting', {
+              schoolId: s.schoolId,
+              studentId: s.studentId,
+              diff: computed - (s.totalPaid || 0),
+            });
+            await Student.findOneAndUpdate(
+              { schoolId: s.schoolId, studentId: s.studentId },
+              {
+                totalPaid: computed,
+                remainingBalance: Math.max(0, s.feeAmount - computed),
+                feePaid: computed >= s.feeAmount,
+              },
+            );
+            fixed++;
+          }
+
+          checked++;
+          batchChecked++;
+          cursor.lastProcessedStudentId = s._id.toString();
+        } catch (err) {
+          errors++;
+          cursor.failedCount++;
+          logger.error('Reconciliation error', {
+            studentId: s.studentId,
+            schoolId: s.schoolId,
+            error: err.message,
+          });
+        }
+      }
+
+      // Update cursor after each batch
+      cursor.processedCount += batchChecked;
+      cursor.lastUpdatedAt = new Date();
+      await ReconciliationCursor.findByIdAndUpdate(cursor._id, {
+        processedCount: cursor.processedCount,
+        failedCount: cursor.failedCount,
+        lastProcessedStudentId: cursor.lastProcessedStudentId,
+        lastUpdatedAt: cursor.lastUpdatedAt,
+      });
+
+      batchChecked = 0;
+
+      // Continue to next batch
+      if (students.length < BATCH_SIZE) break;
+
+      // Move query to next batch
+      baseQuery._id = { $gt: mongoose.Types.ObjectId(students[students.length - 1]._id) };
+    }
+
+    // Mark cursor as completed
+    cursor.status = 'completed';
+    await ReconciliationCursor.findByIdAndUpdate(cursor._id, {
+      status: 'completed',
+      lastUpdatedAt: new Date(),
+    });
+
+    logger.info('Reconciliation complete', {
+      schoolId: schoolId || 'all',
+      checked,
+      fixed,
+      errors,
+      resumed,
+      batchSize: BATCH_SIZE,
+    });
+
+    return { checked, fixed, errors, resumed };
+  } catch (err) {
+    cursor.status = 'failed';
+    await ReconciliationCursor.findByIdAndUpdate(cursor._id, {
+      status: 'failed',
+      lastUpdatedAt: new Date(),
+    });
+    logger.error('Reconciliation failed', {
+      schoolId: schoolId || 'all',
+      error: err.message,
+      processedCount: cursor.processedCount,
+      resumable: true,
+    });
+    throw err;
+  }
 }
 
 function startReconciliationScheduler() {
