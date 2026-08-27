@@ -197,6 +197,18 @@ const TWILIO_AUTH_TOKEN   = process.env.TWILIO_AUTH_TOKEN   || null;
 const TWILIO_FROM_NUMBER  = process.env.TWILIO_FROM_NUMBER  || null;
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || null;
 
+// ── Reconciliation Service ────────────────────────────────────────────────────
+// Batch size for processing students during reconciliation (default: 500)
+const RECONCILIATION_BATCH_SIZE = parseInt(
+  process.env.RECONCILIATION_BATCH_SIZE || "500",
+  10,
+);
+// How often the reconciliation scheduler runs (default: 24 hours)
+const RECONCILIATION_INTERVAL_MS = parseInt(
+  process.env.RECONCILIATION_INTERVAL_MS || String(24 * 60 * 60 * 1000),
+  10,
+);
+
 // ── Freeze to prevent accidental mutation at runtime ─────────────────────────
 const config = Object.freeze({
   EMAIL_PROVIDER_WEBHOOK_SECRET,
@@ -243,6 +255,8 @@ const config = Object.freeze({
   EMAIL_PROVIDER,
   SENDGRID_API_KEY,
   AWS_REGION,
+  RECONCILIATION_BATCH_SIZE,
+  RECONCILIATION_INTERVAL_MS,
 });
 
 module.exports = config;

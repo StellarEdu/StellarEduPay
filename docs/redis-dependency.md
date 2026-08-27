@@ -25,7 +25,7 @@ Each consumer has a defined behaviour when Redis is unavailable:
 
 | Consumer          | Degradation mode                                                                 |
 |-------------------|---------------------------------------------------------------------------------|
-| Distributed locks | **Fail closed** — `acquire()` returns `null` on Redis error, so the cycle is skipped rather than risking two workers proceeding. The unique index on `Payment {schoolId, txHash}` remains the authoritative dedup guard. |
+| Distributed locks | **Fail closed** — `acquire()` returns `null` on Redis error, so the cycle is skipped rather than risking two workers proceeding. The unique index on `Payment {schoolId, txHash}` remains the authoritative dedup guard. In multi-replica deployments (`REPLICA_COUNT > 1`), the leader election service **refuses to start** if Redis is not configured. This prevents all replicas from thinking they are the leader and running all background jobs in parallel. |
 | SSE pub/sub       | **Falls back to local fan-out with client notification** — a failed `PUBLISH` still delivers to clients connected to the current replica; cross-replica delivery is lost until Redis recovers. All locally-connected clients receive an explicit `sse.degraded` SSE event so the frontend can render a visible warning banner (Issue #1054). An `sse.recovered` event is broadcast on reconnection. With `REDIS_HOST` unset it runs single-process by design (no degraded signal is emitted). |
 | Retry queue       | Initialization failure is surfaced loudly in logs and via `/health` (`retryQueue.status: failed`); the HTTP server still boots. Without `REDIS_HOST` the MongoDB backend is used (single-replica only — see [retry-backends.md](./retry-backends.md)). |
 | Rate limiting     | Counters become in-process per replica (not shared); limits still apply locally. A loud startup warning is emitted for the MongoDB/in-process path. |
@@ -91,3 +91,24 @@ Operationally: deploy Redis with persistence (AOF), monitor `redisStatus` via
 `/health`, and alert on `degraded`. Pair HA Redis with `REPLICA_COUNT` set
 correctly so the BullMQ backend is selected (never the in-process MongoDB
 fallback) in multi-replica deployments.
+
+## Leader Election & Multi-Replica Safety
+
+When `REPLICA_COUNT > 1` and `REDIS_HOST` is not configured, the leader election
+service (issue #1321) will **refuse to start** with a critical error. This is a hard
+requirement because without distributed locks in a multi-replica deployment:
+
+- All replicas believe they are the leader and run all background jobs N times per cycle.
+- Reminders are sent N times to each parent.
+- Audit logs record the same events N times, breaking the audit trail for compliance.
+- Reconciliation runs in parallel, causing race conditions and incorrect balances.
+- All other leader-only schedulers (webhook retry, metrics rollup, consistency checks) duplicate.
+
+This is an unrecoverable configuration error in production. To proceed:
+
+1. Set `REDIS_HOST` to a running Redis instance.
+2. Ensure `REPLICA_COUNT` accurately reflects the number of deployed backend replicas.
+3. Restart the application.
+
+In development and test environments where `REPLICA_COUNT=1` or is unset, the in-process
+lock fallback is safe and Redis is optional.
