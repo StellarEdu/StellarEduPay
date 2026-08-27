@@ -134,8 +134,8 @@ function _encodeCursor(entry) {
 
 async function getAuditLogs(filters = {}) {
   const {
-    schoolId, action, targetType, performedBy, result,
-    startDate, endDate, cursor, page, limit = 50,
+    schoolId, action, targetType, performedBy, result, search,
+    startDate, endDate, cursor, page = 1, limit = 50,
   } = filters;
 
   const baseQuery = { schoolId };
@@ -143,6 +143,7 @@ async function getAuditLogs(filters = {}) {
   if (targetType) baseQuery.targetType = targetType;
   if (performedBy) baseQuery.performedBy = performedBy;
   if (result) baseQuery.result = result;
+  if (search) baseQuery.$text = { $search: search };
   if (startDate || endDate) {
     baseQuery.createdAt = {};
     if (startDate) baseQuery.createdAt.$gte = new Date(startDate);
@@ -152,58 +153,31 @@ async function getAuditLogs(filters = {}) {
   const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), MAX_PAGE_SIZE);
 
   let indexHint;
-  if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
+  if (search)            indexHint = 'details_text';
+  else if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
   else if (performedBy) indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
   else if (targetType)  indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
   else              indexHint = { schoolId: 1, createdAt: -1 };
 
-  // Cursor-based pagination: if cursor is provided, fetch entries after it
-  let query = baseQuery;
-  if (cursor) {
-    const decoded = _decodeCursor(cursor);
-    if (decoded) {
-      query = {
-        ...baseQuery,
-        $or: [
-          { createdAt: { $lt: new Date(decoded.createdAt) } },
-          {
-            createdAt: new Date(decoded.createdAt),
-            _id: { $lt: decoded._id },
-          },
-        ],
-      };
-    }
-  }
+  const [logs, total] = await Promise.all([
+    AuditLog.find(baseQuery)
+      .hint(indexHint)
+      .sort(search ? { score: { $meta: 'textScore' } } : { createdAt: -1 })
+      .skip(skip)
+      .limit(actualLimit)
+      .lean(),
+    AuditLog.countDocuments(baseQuery),
+  ]);
 
-  // Fetch one extra to determine if there are more results
-  const logs = await AuditLog.find(query)
-    .hint(indexHint)
-    .sort({ createdAt: -1, _id: -1 })
-    .limit(actualLimit + 1)
-    .lean();
+  const nextCursor =
+    skip + logs.length < total && logs.length > 0
+      ? Buffer.from(JSON.stringify({
+          createdAt: logs[logs.length - 1].createdAt,
+          _id: logs[logs.length - 1]._id,
+        })).toString('base64')
+      : null;
 
-  const hasMore = logs.length > actualLimit;
-  const displayLogs = hasMore ? logs.slice(0, actualLimit) : logs;
-
-  // Get total count (only if not using cursor for efficiency)
-  const total = !cursor ? await AuditLog.countDocuments(baseQuery) : null;
-
-  const nextCursor = hasMore && displayLogs.length > 0
-    ? _encodeCursor(displayLogs[displayLogs.length - 1])
-    : null;
-
-  // Support legacy page-based navigation if no cursor and page param provided
-  const actualPage = !cursor && page ? Math.max(parseInt(page, 10) || 1, 1) : null;
-  const pages = !cursor && total ? Math.ceil(total / actualLimit) || 1 : null;
-
-  return {
-    data: displayLogs,
-    total,
-    page: actualPage,
-    limit: actualLimit,
-    pages,
-    nextCursor,
-  };
+  return { logs, total, page: actualPage, limit: actualLimit, pages: Math.ceil(total / actualLimit) || 1, nextCursor };
 }
 
 async function getRecentAuditLogs(schoolId, limit = 10) {

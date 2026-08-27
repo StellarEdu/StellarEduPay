@@ -17,6 +17,10 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
+      # imagePullSecrets is used for private registries.
+      # Reference it in your Kustomize overlay:
+      #   imagePullSecrets:
+      #     - name: regcred
       containers:
         - name: frontend
           image: stellaredupay/frontend:placeholder

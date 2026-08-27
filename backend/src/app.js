@@ -39,12 +39,14 @@ const webhookEndpointRoutes = require('./routes/webhookEndpointRoutes');
 const webhookDeliveryRoutes = require('./routes/webhookDeliveryRoutes');
 const paymentPlanRoutes = require('./routes/paymentPlanRoutes');
 const auditRoutes = require('./routes/auditRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
 const retrySelector = require('./services/retryServiceSelector');
 const { startConsistencyScheduler, stopConsistencyScheduler } = require('./services/consistencyScheduler');
 const { startReminderScheduler, stopReminderScheduler } = require('./services/reminderService');
+const { startPiiAnonymizationScheduler, stopPiiAnonymizationScheduler } = require('./services/piiAnonymizationScheduler');
 const { startWorker: startTxQueueWorker, stopWorker: stopTxQueueWorker } = require('./services/transactionQueueService');
 const { startSessionCleanupScheduler, stopSessionCleanupScheduler } = require('./services/sessionCleanupService');
 const { startReconciliationScheduler, stopReconciliationScheduler } = require('./services/reconciliationService');
@@ -181,6 +183,7 @@ app.use('/api/webhook-deliveries', webhookDeliveryRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/superadmin', superAdminRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);
@@ -194,8 +197,13 @@ try {
     res.json(swaggerSpecs);
   });
 
-  // Swagger UI (development only)
-  if (process.env.NODE_ENV !== 'production') {
+  // Swagger UI — defaults to enabled outside production, but can be
+  // explicitly toggled via SWAGGER_ENABLED (e.g. to turn it on for a
+  // staging/UAT environment that runs with NODE_ENV=production).
+  const swaggerEnabled = process.env.SWAGGER_ENABLED !== undefined
+    ? process.env.SWAGGER_ENABLED === 'true'
+    : process.env.NODE_ENV !== 'production';
+  if (swaggerEnabled) {
     const swaggerUi = require('swagger-ui-express');
     app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
       swaggerOptions: {
@@ -261,6 +269,7 @@ connectDatabase().then(async () => {
     logger.info('[Leader] Starting leader-only schedulers');
     startConsistencyScheduler();
     startReminderScheduler();
+    startPiiAnonymizationScheduler();
     startSessionCleanupScheduler();
     startReconciliationScheduler();
     startStuckPaymentReconciliationScheduler();
@@ -274,6 +283,7 @@ connectDatabase().then(async () => {
     logger.info('[Leader] Stopping leader-only schedulers');
     stopConsistencyScheduler();
     stopReminderScheduler();
+    stopPiiAnonymizationScheduler();
     stopSessionCleanupScheduler();
     stopReconciliationScheduler();
     stopStuckPaymentReconciliationScheduler();
