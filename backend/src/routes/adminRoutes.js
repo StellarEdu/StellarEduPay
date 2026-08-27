@@ -15,6 +15,13 @@ const {
   updateLimits,
   deleteSchoolLimits,
 } = require('../controllers/paymentLimitsAdminController');
+const {
+  listFailedJobs,
+  getFailedJobDetails,
+  retryFailedJob,
+  discardFailedJob,
+  getQueueStats,
+} = require('../controllers/bullMQAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
@@ -38,5 +45,12 @@ router.post('/pending-verifications/:id/retry', requireAdminAuth, auditContext, 
 router.get('/payment-limits', requireAdminAuth, getLimits);
 router.put('/payment-limits', requireAdminAuth, auditContext, updateLimits);
 router.delete('/payment-limits/:schoolId', requireAdminAuth, auditContext, deleteSchoolLimits);
+
+// BullMQ retry queue admin endpoints (Issue #1336)
+router.get('/retry-queue/failed', requireAdminAuth, listFailedJobs);
+router.get('/retry-queue/failed/:jobId', requireAdminAuth, getFailedJobDetails);
+router.post('/retry-queue/failed/:jobId/retry', requireAdminAuth, auditContext, retryFailedJob);
+router.delete('/retry-queue/failed/:jobId', requireAdminAuth, auditContext, discardFailedJob);
+router.get('/retry-queue/stats', requireAdminAuth, getQueueStats);
 
 module.exports = router;
