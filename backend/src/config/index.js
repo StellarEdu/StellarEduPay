@@ -189,6 +189,25 @@ const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || null;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || null;
 const AWS_REGION = process.env.AWS_REGION || null;
 
+// ── Application URL ──────────────────────────────────────────────────────────
+// Base URL of the application (used for generating unsubscribe links in emails, etc.)
+const APP_URL = process.env.APP_URL || null;
+if (process.env.NODE_ENV === 'production' && !APP_URL) {
+  throw new Error(
+    '[Config] APP_URL is required in production. ' +
+    'Set it to the base URL of your application (e.g., https://stellaredupay.example.com)'
+  );
+}
+if (APP_URL) {
+  try {
+    new URL(APP_URL);
+  } catch (err) {
+    throw new Error(
+      `[Config] APP_URL must be a valid absolute URL. Got: ${APP_URL}`
+    );
+  }
+}
+
 // ── Twilio (SMS / WhatsApp) ────────────────────────────────────────────────
 // All Twilio variables are optional. When unset, smsService falls back to
 // console-log (dev mode) so the application starts without SMS credentials.

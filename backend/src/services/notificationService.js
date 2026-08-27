@@ -81,7 +81,7 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
  */
 async function sendFeeReminder(opts) {
   const token = generateUnsubscribeToken(opts.studentId, opts.schoolId || 'unknown', config.JWT_SECRET);
-  const baseUrl = config.APP_URL || process.env.APP_URL || 'http://localhost:5000';
+  const baseUrl = config.APP_URL || 'http://localhost:5000';
   const unsubscribeUrl = `${baseUrl}/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`;
 
   const { subject, text, html } = buildReminderEmail({ ...opts, unsubscribeUrl });
