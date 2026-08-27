@@ -13,11 +13,15 @@ process.env.JWT_SECRET = 'test-secret';
 process.env.SMTP_HOST = 'smtp.example.com';
 process.env.SMTP_USER = 'user';
 process.env.SMTP_PASS = 'pass';
+process.env.TWILIO_ACCOUNT_SID = 'AC123456789';
+process.env.TWILIO_AUTH_TOKEN = 'auth-token';
+process.env.TWILIO_FROM_NUMBER = '+15005550006';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockVerify = jest.fn();
 const mockSendMail = jest.fn();
+const mockSendSms = jest.fn();
 const mockFindByIdAndUpdate = jest.fn();
 const mockStudentFind = jest.fn();
 const mockSchoolFind = jest.fn();
@@ -63,6 +67,12 @@ jest.mock('../backend/src/utils/logger', () => {
   return logger;
 });
 
+jest.mock('../backend/src/services/smsService', () => ({
+  sendSms: mockSendSms,
+  sendWhatsApp: jest.fn().mockResolvedValue({ sent: false }),
+  isTwilioConfigured: jest.fn().mockReturnValue(true),
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeStudent(overrides = {}) {
@@ -74,6 +84,7 @@ function makeStudent(overrides = {}) {
     feeAmount: 250,
     remainingBalance: 250,
     parentEmail: 'parent@example.com',
+    parentPhone: null,
     feePaid: false,
     reminderOptOut: false,
     reminderCount: 0,
@@ -206,5 +217,84 @@ describe('reminderService — balance check (issue #625)', () => {
 
     expect(summary.sent).toBe(1);
     expect(mockSendMail).toHaveBeenCalled();
+  });
+});
+
+// ── Issue #1320: SMS/WhatsApp reminders support ─────────────────────────────────
+
+describe('reminderService — SMS reminders (issue #1320)', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    mockVerify.mockReset();
+    mockSendMail.mockReset();
+    mockSendSms.mockReset();
+    mockFindByIdAndUpdate.mockReset();
+    mockStudentFind.mockReset();
+    mockSchoolFind.mockReset();
+    mockPaymentAggregate.mockReset();
+  });
+
+  test('sends SMS reminder when parentPhone is set and Twilio is configured', async () => {
+    mockVerify.mockResolvedValue(true);
+    mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
+    mockStudentFind.mockResolvedValue([makeStudent({
+      feeAmount: 250,
+      feePaid: false,
+      parentPhone: '+447700900000',
+      settings: { reminderChannels: { default: 'sms' } }
+    })]);
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 0 }]);
+    mockSendSms.mockResolvedValue({ sent: true, sid: 'SM123' });
+    mockFindByIdAndUpdate.mockResolvedValue({});
+
+    const { processReminders } = require('../backend/src/services/reminderService');
+    const summary = await processReminders();
+
+    expect(summary.sent).toBe(1);
+    expect(mockSendSms).toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  test('sends both email and SMS when school prefers both channels', async () => {
+    mockVerify.mockResolvedValue(true);
+    const schoolWithBoth = { ...SCHOOL, settings: { reminderChannels: { default: 'email-sms' } } };
+    mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([schoolWithBoth]) });
+    mockStudentFind.mockResolvedValue([makeStudent({
+      feeAmount: 250,
+      feePaid: false,
+      parentEmail: 'parent@example.com',
+      parentPhone: '+447700900000',
+    })]);
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 0 }]);
+    mockSendMail.mockResolvedValue({ messageId: 'msg-789' });
+    mockSendSms.mockResolvedValue({ sent: true, sid: 'SM456' });
+    mockFindByIdAndUpdate.mockResolvedValue({});
+
+    const { processReminders } = require('../backend/src/services/reminderService');
+    const summary = await processReminders();
+
+    expect(summary.sent).toBe(1);
+    expect(mockSendMail).toHaveBeenCalled();
+    expect(mockSendSms).toHaveBeenCalled();
+  });
+
+  test('skips student with no contact channels (no email, no phone)', async () => {
+    mockVerify.mockResolvedValue(true);
+    mockSchoolFind.mockReturnValue({ lean: () => Promise.resolve([SCHOOL]) });
+    mockStudentFind.mockResolvedValue([makeStudent({
+      feeAmount: 250,
+      feePaid: false,
+      parentEmail: null,
+      parentPhone: null,
+    })]);
+    mockPaymentAggregate.mockResolvedValue([{ totalPaid: 0 }]);
+
+    const { processReminders } = require('../backend/src/services/reminderService');
+    const summary = await processReminders();
+
+    expect(summary.sent).toBe(0);
+    expect(summary.skipped).toBeGreaterThanOrEqual(1);
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(mockSendSms).not.toHaveBeenCalled();
   });
 });
