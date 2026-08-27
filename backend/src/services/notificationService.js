@@ -37,7 +37,7 @@ async function verifySmtp() {
 /**
  * Build the reminder email body from external template files.
  */
-function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline }) {
+function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
 
   // Determine escalation prefix and urgency message
@@ -56,7 +56,30 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
     ? new Date(paymentDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : null;
 
-  const vars = { studentName, studentId, className, feeAmount, outstanding, schoolName, reminderNote, urgency: esc.urgency, deadline: deadlineStr || '', unsubscribeUrl: unsubscribeUrl || '' };
+  const vars = {
+    studentName,
+    studentId,
+    className,
+    feeAmount,
+    outstanding,
+    schoolName,
+    reminderNote,
+    urgency: esc.urgency,
+    deadline: deadlineStr || '',
+    unsubscribeUrl: unsubscribeUrl || '',
+    logoUrl: logoUrl || '',
+    primaryColor: primaryColor || '#1a56db',
+    schoolAddress: address || '',
+    i18n_greeting: 'Dear Parent/Guardian,',
+    i18n_feeReminder: 'We are writing to remind you that school fees are due for',
+    i18n_school: 'School',
+    i18n_feeAmount: 'Fee Amount',
+    i18n_amountDue: 'Amount Due',
+    i18n_payPrompt: 'Please arrange payment at your earliest convenience to avoid any disruption to your child\'s education.',
+    i18n_thanks: 'Thank you,',
+    i18n_administration: 'Administration',
+    i18n_unsubscribeText: 'Not interested in payment reminders?',
+  };
   const { text, html } = renderEmailTemplate('reminderEmail', vars);
 
   return { subject, text, html };
@@ -84,7 +107,22 @@ async function sendFeeReminder(opts) {
   const baseUrl = config.APP_URL || 'http://localhost:5000';
   const unsubscribeUrl = `${baseUrl}/api/reminders/unsubscribe?token=${encodeURIComponent(token)}`;
 
-  const { subject, text, html } = buildReminderEmail({ ...opts, unsubscribeUrl });
+  let school = null;
+  if (opts.schoolId) {
+    try {
+      school = await School.findOne({ schoolId: opts.schoolId });
+    } catch (err) {
+      logger.warn('Failed to fetch school branding for reminder', { schoolId: opts.schoolId, error: err.message });
+    }
+  }
+
+  const { subject, text, html } = buildReminderEmail({
+    ...opts,
+    unsubscribeUrl,
+    logoUrl: school?.logoUrl || '',
+    primaryColor: school?.primaryColor || '#1a56db',
+    address: school?.address || '',
+  });
 
   const result = await email.sendEmail({
     to: opts.to,

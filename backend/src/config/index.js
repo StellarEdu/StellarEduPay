@@ -172,6 +172,15 @@ const REMINDER_COOLDOWN_HOURS = parseInt(
 // Maximum reminders to send per student before stopping (default: 5)
 const REMINDER_MAX_COUNT = parseInt(process.env.REMINDER_MAX_COUNT || "5", 10);
 
+// ── Student PII Data Retention ────────────────────────────────────────────────
+// Number of days to retain student PII (name, date of birth, parent name, etc.)
+// after soft-delete before automatic anonymization (default: 90 days, ~3 months).
+// After the retention window, sensitive fields are cleared to reduce breach exposure.
+const STUDENT_PII_RETENTION_DAYS = parseInt(
+  process.env.STUDENT_PII_RETENTION_DAYS || "90",
+  10,
+);
+
 // SMTP settings for nodemailer
 const SMTP_HOST = process.env.SMTP_HOST || null;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || "587", 10);
@@ -261,6 +270,7 @@ const config = Object.freeze({
   REMINDER_INTERVAL_MS,
   REMINDER_COOLDOWN_HOURS,
   REMINDER_MAX_COUNT,
+  STUDENT_PII_RETENTION_DAYS,
   SMTP_HOST,
   SMTP_PORT,
   SMTP_SECURE,
