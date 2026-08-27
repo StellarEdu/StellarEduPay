@@ -18,7 +18,7 @@ const { getAuditLogs, getRecentAuditLogs, verifyAuditChain } = require('../servi
 async function getAuditLogsEndpoint(req, res, next) {
   try {
     const { schoolId } = req;
-    const { action, targetType, performedBy, result, startDate, endDate, cursor, page, limit } = req.query;
+    const { action, targetType, performedBy, result, search, startDate, endDate, cursor, page, limit } = req.query;
 
     const auditResult = await getAuditLogs({
       schoolId,
@@ -26,6 +26,7 @@ async function getAuditLogsEndpoint(req, res, next) {
       targetType,
       performedBy,
       result,
+      search,
       startDate,
       endDate,
       cursor: cursor || null,

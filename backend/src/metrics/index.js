@@ -400,6 +400,43 @@ const backupLastSuccessTimestamp = new client.Gauge({
   registers: [registry],
 });
 
+// horizon_unreachable_since_seconds — Unix timestamp of the first Horizon
+// poll failure in the current outage (0 = currently reachable). Set by
+// transactionPollingService on first failure, cleared on first success. Lets
+// the health check and alerting distinguish a transient blip from an outage
+// that has persisted since startup. See issue #1340.
+const horizonUnreachableSince = new client.Gauge({
+  name: 'horizon_unreachable_since_seconds',
+  help: 'Unix timestamp when Horizon first became unreachable in the current outage (0 = reachable)',
+  registers: [registry],
+});
+
+// last_backup_verification_age_seconds — seconds since the most recent
+// successful backup restore-verification (scripts/test-backup-recovery.sh),
+// recorded via POST /api/internal/backup-verification-heartbeat. Recomputed
+// fresh on every scrape (collect()) since it is an age, not a timestamp.
+// A very large sentinel is reported before the first verification ever
+// succeeds so the "not verified within 8 days" alert fires immediately.
+// See issue #1343.
+let _lastBackupVerificationSuccessAt = 0; // unix seconds; 0 = never recorded
+const NEVER_VERIFIED_AGE_SECONDS = 30 * 24 * 3600; // sentinel: 30 days
+const lastBackupVerificationAgeSeconds = new client.Gauge({
+  name: 'last_backup_verification_age_seconds',
+  help: 'Seconds since the last successful backup integrity verification (large sentinel if never verified)',
+  registers: [registry],
+  collect() {
+    this.set(
+      _lastBackupVerificationSuccessAt
+        ? Math.floor(Date.now() / 1000) - _lastBackupVerificationSuccessAt
+        : NEVER_VERIFIED_AGE_SECONDS
+    );
+  },
+});
+
+function recordBackupVerificationSuccess(timestampSeconds = Math.floor(Date.now() / 1000)) {
+  _lastBackupVerificationSuccessAt = timestampSeconds;
+}
+
 module.exports = {
   registry,
   mongoConnectionState,
@@ -426,4 +463,7 @@ module.exports = {
   webhookDeliveryTotal,
   notificationSentTotal,
   backupLastSuccessTimestamp,
+  horizonUnreachableSince,
+  lastBackupVerificationAgeSeconds,
+  recordBackupVerificationSuccess,
 };

@@ -46,8 +46,9 @@ function InfoRow({ label, children }) {
   );
 }
 
-export default function PaymentForm() {
-  const [studentId, setStudentId]             = useState("");
+export default function PaymentForm({ initialStudentId = "" }) {
+  const [studentId, setStudentId]             = useState(initialStudentId);
+  const [shareCopied, setShareCopied]         = useState(false);
   const [student, setStudent]                 = useState(null);
   const [instructions, setInstructions]       = useState(null);
   const [payments, setPayments]               = useState(null);
@@ -155,6 +156,23 @@ export default function PaymentForm() {
       }
     }
   }, []);
+
+  // #1344 — a bookmarked/shared /pay/:studentId URL pre-fills the lookup so a
+  // parent doesn't have to retype the student ID on every visit.
+  useEffect(() => {
+    if (initialStudentId?.trim()) lookupStudent(initialStudentId);
+  }, [initialStudentId, lookupStudent]);
+
+  function sharePaymentUrl(id) {
+    return `${window.location.origin}/pay/${encodeURIComponent(id)}`;
+  }
+
+  async function copyShareLink() {
+    if (!student?.studentId) return;
+    await navigator.clipboard.writeText(sharePaymentUrl(student.studentId)).catch(() => {});
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 2000);
+  }
 
   const retryBalance = useCallback(async () => {
     if (!studentId.trim()) return;
@@ -305,6 +323,20 @@ export default function PaymentForm() {
                   {student.feePaid ? "Paid" : "Unpaid"}
                 </span>
               </InfoRow>
+
+              {/* #1344 — bookmarkable/shareable payment link for this student */}
+              <div style={{ marginTop: "0.875rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                <button type="button" onClick={copyShareLink} className="btn btn-sm btn-ghost" style={{ alignSelf: "flex-start", gap: "0.3rem" }}>
+                  {shareCopied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                  {shareCopied ? "Link copied!" : "Share payment link"}
+                </button>
+                <div className="pf-code-row">
+                  <span className="pf-code">{sharePaymentUrl(student.studentId)}</span>
+                </div>
+                <div style={{ background: "#fff", padding: "0.5rem", borderRadius: "8px", alignSelf: "flex-start" }}>
+                  <QRCodeSVG value={sharePaymentUrl(student.studentId)} size={96} />
+                </div>
+              </div>
 
               {/* Wallet address */}
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>

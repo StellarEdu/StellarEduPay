@@ -330,6 +330,17 @@ School
 
 ---
 
+## Concurrency Mechanism: Redis Distributed Locks (not MongoDB Transactions)
+
+StellarEduPay's concurrency primitive for financial operations is **Redis-backed distributed locking**, not MongoDB multi-document transactions.
+
+- **Lock service**: `backend/src/services/distributedLock.js` provides Redis-backed locks with `studentBalanceLockKey`.
+- **Call sites**: `stellarService.js`, `paymentController.js`, `underpaidReconciliationService.js` use distributed locks to serialize access to shared resources (e.g. a student's balance during concurrent payments).
+
+**Rationale:** Distributed locks are simpler to reason about than MongoDB transactions, are not affected by replica set configuration, and work across both MongoDB and external state (Stellar blockchain). They scale better under contention because lock holders are individually bounded and timeouts prevent indefinite hangs.
+
+**Not in use:** `backend/src/services/transactionManager.js` was added in commit 43f18e0 as a MongoDB-transaction implementation but was never adopted. It remains unreferenced in the codebase (`grep -r transactionManager backend/src --include='*.js' | grep -v transactionManager.js` yields no results). The module contains latent defects (invalid aggregation operators in non-pipeline updates, unscoped upserts creating tenant-less documents with NaN balances, stale reads between multi-step updates) that would corrupt financial state if adopted. It was deleted in this change.
+
 ## Replica Set Requirement
 
 MongoDB **multi-document transactions require a replica set (or a sharded cluster)**. This is an infrastructure requirement, not an application-code concern: against a standalone `mongod`, every attempt to start a transaction fails with
@@ -340,12 +351,11 @@ MongoServerError: Transaction numbers are only allowed on a replica set member o
 
 and no change to application code can fix it — the database must run with `--replSet` and be initiated once with `rs.initiate()`.
 
-StellarEduPay uses multi-document transactions on its core write paths, so this requirement applies to every environment that runs the backend:
+StellarEduPay configures MongoDB to support transactions on all environments, though transactions are not currently used on core write paths (which rely on distributed locks instead):
 
 - `transactionPollingService.processTransaction` — records the Payment and updates the Student balance atomically
 - `stellarService.verifyTransaction` — same pair of writes for manually verified payments
 - `feeController` and `feeAdjustmentController` batch apply — multi-document fee updates
-- `transactionManager.js` (`withTransaction`, `safeDebit`, `safeCredit`, `atomicTransfer`)
 
 ### How each environment complies
 
@@ -458,6 +468,69 @@ Each school has its own `stellarAddress`. The transaction poller fans out to all
 - The `concurrentRequestHandler` middleware adds a circuit breaker (opens after 5 failures, resets after 30s) and a request queue (max 50 concurrent, max 1000 queued) to protect against Horizon API bursts.
 - Idempotency keys prevent duplicate payment processing from retried HTTP requests.
 - Graceful shutdown waits up to 8s for the retry worker to finish its current batch before closing the MongoDB connection.
+
+---
+
+## Money Representation on the Payment-Verification Path
+
+`paymentController.verifyPayment` and the `studentBalanceUpdater` it shares with
+`submitTransaction` decide whether a student's fee is settled — `valid`,
+`partial`, or `overpaid` — and compute `excessAmount` / `remainingBalance`.
+That decision used to run on IEEE-754 doubles: cumulative totals were summed
+with MongoDB's `{ $sum: '$amount' }` (float addition, done server-side, order
+not guaranteed), rounded with `toFixed(7)`, and re-parsed with `parseFloat`
+before being compared against `feeAmount` with exact `<` / `>` / `===`.
+`toFixed` cannot repair a value already corrupted by float addition, and
+`parseFloat` immediately turns the rounded string back into a double —
+reintroducing the same class of error on the next operation. A fee paid in
+installments that summed, in exact decimal, to precisely the fee amount could
+therefore land one unit-in-the-last-place away and be misclassified `partial`
+or `overpaid` instead of `valid`.
+
+**Chosen representation: `decimal.js`.** This was already the convention
+elsewhere in the codebase (`paymentLimitsService.js`,
+`currencyConversionService.js`, `feeAdjustmentEngine.js`,
+`utils/paymentLimits.js` — see their "ROUNDING POLICY" comments), so extending
+it to the verification path unifies on an existing pattern rather than adding
+a fourth. Integer Stellar stroops (`utils/stellarAmount.js`, used by
+`stellarService.js`) remain the right choice for on-chain amount parsing and
+comparison, and are unaffected by this change.
+
+`backend/src/utils/money.js` is the canonical entry point for this path:
+
+- `toMoney(value)` / `decimalFromMongo(value)` — parse a JS value or a BSON
+  `Decimal128` aggregation result into a `Decimal`.
+- `classifyFeePayment(cumulativeTotal, feeAmount)` — the single place that
+  decides `valid` / `partial` / `overpaid` and derives `excessAmount` /
+  `remainingBalance`, all via exact `Decimal` comparison (`.cmp()`), never
+  float `<`/`>`/`===`.
+- `roundMoney(value)` / `toMoneyNumber(value)` — round to Stellar's 7 decimal
+  places and convert to a plain `Number` **only at the output boundary**
+  (the HTTP response or the Mongo write).
+
+**Conversion boundaries:**
+
+```
+MongoDB (amount: Number)
+      │  $group: { $sum: { $toDecimal: '$amount' } }   ← summed as Decimal128, exact
+      ▼
+Decimal128 (aggregation result)
+      │  decimalFromMongo()
+      ▼
+Decimal (decimal.js) ── classifyFeePayment() ── all arithmetic and comparison here
+      │  toMoneyNumber() / roundMoney().toNumber()
+      ▼
+Number  → HTTP response body / Student.totalPaid, remainingBalance, feePaid
+```
+
+The MongoDB half of the fix matters as much as the JS half: summing
+`{ $sum: '$amount' }` accumulates BSON-double rounding **inside MongoDB**,
+before the result ever reaches Node, so no amount of `decimal.js` downstream
+can recover it. Wrapping the summed field in `$toDecimal` makes MongoDB
+perform the addition in exact Decimal128 space instead.
+
+`parseFloat(x.toFixed(7))` must not reappear anywhere on this path — it is a
+reliable marker of float money arithmetic creeping back in.
 
 ---
 

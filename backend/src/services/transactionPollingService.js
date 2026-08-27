@@ -50,6 +50,24 @@ const MAX_TRANSACTIONS_PER_POLL = 50;
 const POLL_MAX_BACKOFF_MS = parseInt(process.env.POLL_MAX_BACKOFF_MS || '300000', 10);
 let consecutiveErrors = 0;
 let currentIntervalMs = SYNC_INTERVAL_MS;
+// Timestamp (ms) of the first poll failure in the current outage; null while
+// Horizon is reachable. Backs the health check's horizonUnreachableSince
+// field and the horizon_unreachable_since_seconds gauge (#1340).
+let horizonUnreachableSince = null;
+
+function _markPollFailure() {
+  if (horizonUnreachableSince === null) horizonUnreachableSince = Date.now();
+  try {
+    require('../metrics').horizonUnreachableSince.set(horizonUnreachableSince / 1000);
+  } catch (_) { /* metrics module unavailable */ }
+}
+
+function _markPollSuccess() {
+  horizonUnreachableSince = null;
+  try {
+    require('../metrics').horizonUnreachableSince.set(0);
+  } catch (_) { /* metrics module unavailable */ }
+}
 
 // Coordinated cross-school Horizon request budget (#1124). Schools no longer
 // poll as independent operations that each assume the whole rate limit is
@@ -668,6 +686,7 @@ async function pollAllSchools() {
     if (summary.errors > 0) {
       // At least one school hit a Horizon error — back off.
       consecutiveErrors++;
+      _markPollFailure();
       const backoff = Math.min(SYNC_INTERVAL_MS * Math.pow(2, consecutiveErrors), POLL_MAX_BACKOFF_MS);
       currentIntervalMs = backoff;
       logger.info('Horizon errors detected; backing off polling interval', {
@@ -683,6 +702,7 @@ async function pollAllSchools() {
       }
       consecutiveErrors = 0;
       currentIntervalMs = SYNC_INTERVAL_MS;
+      _markPollSuccess();
     }
 
     if (summary.processed > 0 || summary.errors > 0) {
@@ -690,6 +710,7 @@ async function pollAllSchools() {
     }
   } catch (error) {
     consecutiveErrors++;
+    _markPollFailure();
     const backoff = Math.min(SYNC_INTERVAL_MS * Math.pow(2, consecutiveErrors), POLL_MAX_BACKOFF_MS);
     currentIntervalMs = backoff;
     logger.error('Error in polling cycle', { error: error.message, nextIntervalMs: currentIntervalMs });
@@ -734,6 +755,7 @@ function startPolling() {
   isPolling = true;
   consecutiveErrors = 0;
   currentIntervalMs = SYNC_INTERVAL_MS;
+  horizonUnreachableSince = null;
   logger.info('Starting transaction polling service', { intervalMs: SYNC_INTERVAL_MS });
 
   try {
@@ -771,6 +793,7 @@ module.exports = {
   processTransaction,
   // Exposed for testing
   _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
+  getHorizonUnreachableSince: () => horizonUnreachableSince,
   _getBudgetStats: () => pollBudget.getStats(),
   _setPollBudget: (budget) => { pollBudget = budget; },
   _runWithConcurrency: runWithConcurrency,
@@ -778,6 +801,7 @@ module.exports = {
   _resetBackoffState: () => {
     consecutiveErrors = 0;
     currentIntervalMs = SYNC_INTERVAL_MS;
+    horizonUnreachableSince = null;
     pollBudget = new HorizonPollBudget({ intervalMs: SYNC_INTERVAL_MS });
     isPolling = true; // allow direct pollAllSchools() calls in tests
     if (pollingInterval) { clearTimeout(pollingInterval); pollingInterval = null; }

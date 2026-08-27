@@ -3,7 +3,7 @@
 // Must set required env vars before app is loaded
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-secret';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const request = require('supertest');
 
@@ -320,7 +320,7 @@ describe('POST /api/disputes — flag a dispute', () => {
   let Dispute, Payment;
 
   beforeEach(() => {
-    process.env.JWT_SECRET = 'test-secret';
+    process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
     Dispute = require('../backend/src/models/disputeModel');
     Payment = require('../backend/src/models/paymentModel');
     jest.clearAllMocks();
@@ -442,7 +442,7 @@ describe('PATCH /api/disputes/:id/resolve — state machine, auth, audit, SSE, p
   let Dispute, Payment, auditService, sseService;
 
   beforeEach(() => {
-    process.env.JWT_SECRET = 'test-secret';
+    process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
     Dispute      = require('../backend/src/models/disputeModel');
     Payment      = require('../backend/src/models/paymentModel');
     auditService = require('../backend/src/services/auditService');
@@ -918,7 +918,7 @@ describe('Dispute resolution — hold lifted on terminal status', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.JWT_SECRET = 'test-secret';
+    process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
     Dispute       = require('../backend/src/models/disputeModel');
     Student       = require('../backend/src/models/studentModel');
     School        = require('../backend/src/models/schoolModel');

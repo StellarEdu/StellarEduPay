@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Tests for JWT_SECRET startup validation (#342).
+ * Tests for JWT_SECRET startup validation (#342, #1282).
  *
  * config/index.js must:
- *  - throw (exit-equivalent) in production when JWT_SECRET is absent
- *  - log a warning in non-production when JWT_SECRET is absent
- *  - pass silently when JWT_SECRET is present
+ *  - throw when JWT_SECRET is absent (in all environments)
+ *  - throw when JWT_SECRET is too short (<32 chars)
+ *  - pass silently when JWT_SECRET is present and valid (32+ chars)
  */
 
 function loadConfig(env = {}) {
@@ -26,26 +26,27 @@ function loadConfig(env = {}) {
 }
 
 describe('JWT_SECRET startup validation', () => {
-  it('throws in production when JWT_SECRET is missing', () => {
+  it('throws when JWT_SECRET is missing (all environments)', () => {
     expect(() =>
-      loadConfig({ NODE_ENV: 'production', JWT_SECRET: '' })
-    ).toThrow(/JWT_SECRET is not set/);
+      loadConfig({ NODE_ENV: 'production' })
+    ).toThrow(/Missing required environment variables.*JWT_SECRET/);
+
+    jest.resetModules();
+    expect(() =>
+      loadConfig({ NODE_ENV: 'development' })
+    ).toThrow(/Missing required environment variables.*JWT_SECRET/);
   });
 
-  it('logs a warning in development when JWT_SECRET is missing', () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    loadConfig({ NODE_ENV: 'development', JWT_SECRET: '' });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('JWT_SECRET is not set')
-    );
-    warnSpy.mockRestore();
+  it('throws when JWT_SECRET is too short (<32 chars)', () => {
+    expect(() =>
+      loadConfig({ JWT_SECRET: 'short-secret' })
+    ).toThrow(/JWT_SECRET is too short/);
   });
 
-  it('passes silently when JWT_SECRET is present', () => {
+  it('passes silently when JWT_SECRET is valid (32+ chars)', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    // Must be at least the 32-char minimum, otherwise config throws in production.
     expect(() =>
-      loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'a-sufficiently-long-secret-value-1234567890' })
+      loadConfig({ JWT_SECRET: 'a-sufficiently-long-secret-value-1234567890' })
     ).not.toThrow();
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();

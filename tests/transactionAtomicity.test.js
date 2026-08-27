@@ -3,7 +3,7 @@
 // ─── Env setup ────────────────────────────────────────────────────────────────
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GTEST123';
-process.env.JWT_SECRET = 'test-atomicity-secret';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 // ─── Session / transaction mock ───────────────────────────────────────────────
 // Use var so these are hoisted and available inside the jest.mock factory.

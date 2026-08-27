@@ -3,7 +3,7 @@
 // Must set required env vars before any module that loads config/index.js
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-jwt-secret-for-stellar-service-suite';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 // #606 — Mock the Stellar SDK so tests never make real network calls
 jest.mock('@stellar/stellar-sdk', () => ({

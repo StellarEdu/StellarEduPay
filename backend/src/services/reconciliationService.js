@@ -7,11 +7,12 @@ const School = require('../models/schoolModel');
 const ReconciliationReport = require('../models/reconciliationReportModel');
 const ReconciliationCursor = require('../models/reconciliationCursorModel');
 const { checkSchoolConsistency, fetchChainTransactions } = require('./consistencyService');
-const config = require('../config');
+const cache = require('../cache');
 const logger = require('../utils/logger').child('ReconciliationService');
 
-const BATCH_SIZE = config.RECONCILIATION_BATCH_SIZE;
-const INTERVAL_MS = config.RECONCILIATION_INTERVAL_MS;
+const INTERVAL_MS = parseInt(process.env.RECONCILIATION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const CHAIN_TOTAL_TTL_SEC = parseInt(process.env.RECONCILIATION_CHAIN_TOTAL_TTL_SEC, 10) || 300;
+const chainTotalCacheKey = (schoolId) => `reconciliation:chain_total:${schoolId}`;
 let _timer = null;
 
 /**
@@ -169,22 +170,32 @@ async function generateReconciliationReport(schoolId) {
       return null;
     }
 
-    const [dbPayments, chainTxs] = await Promise.all([
-      Payment.find({ schoolId, status: 'SUCCESS', deletedAt: null }).lean(),
-      fetchChainTransactions(school.stellarAddress),
-    ]);
-
+    const dbPayments = await Payment.find({ schoolId, status: 'SUCCESS', deletedAt: null }).lean();
     const dbTotalCredited = dbPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
 
-    let chainTotalReceived = 0;
-    for (const tx of chainTxs) {
-      const ops = await tx.operations();
-      const payOp = ops.records.find(
-        (op) => op.type === 'payment' && op.to === school.stellarAddress
-      );
-      if (payOp) {
-        chainTotalReceived += parseFloat(parseFloat(payOp.amount).toFixed(7));
+    // The chain total is expensive to compute (paginated Horizon fetch + a
+    // per-tx operations() call) and doesn't change meaningfully between
+    // repeated report requests, so cache it briefly per school.
+    const cacheKey = chainTotalCacheKey(schoolId);
+    let cached = cache.get(cacheKey);
+    let chainTotalReceived;
+    let chainTxCount;
+    if (cached) {
+      ({ chainTotalReceived, chainTxCount } = cached);
+    } else {
+      const chainTxs = await fetchChainTransactions(school.stellarAddress);
+      chainTotalReceived = 0;
+      for (const tx of chainTxs) {
+        const ops = await tx.operations();
+        const payOp = ops.records.find(
+          (op) => op.type === 'payment' && op.to === school.stellarAddress
+        );
+        if (payOp) {
+          chainTotalReceived += parseFloat(parseFloat(payOp.amount).toFixed(7));
+        }
       }
+      chainTxCount = chainTxs.length;
+      cache.set(cacheKey, { chainTotalReceived, chainTxCount }, CHAIN_TOTAL_TTL_SEC);
     }
 
     const drift = Math.abs(chainTotalReceived - dbTotalCredited);
@@ -202,7 +213,7 @@ async function generateReconciliationReport(schoolId) {
       threshold,
       alertRaised,
       paymentCount: dbPayments.length,
-      chainTxCount: chainTxs.length,
+      chainTxCount,
       details: {
         schoolName: school.name,
         checkTime: new Date().toISOString(),

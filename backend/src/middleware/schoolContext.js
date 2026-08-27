@@ -76,48 +76,45 @@ async function resolveSchool(req, res, next) {
     // ── Tenant binding: check JWT schoolId matches resolved school ────────────
     // Extract token from Authorization header or cookie (no hard failure if absent
     // — unauthenticated requests are handled by subsequent auth middleware).
-    const secret = process.env.JWT_SECRET;
-    if (secret) {
-      const authHeader = req.headers['authorization'];
-      const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-      const cookieToken = req.cookies?.admin_token || null;
-      const rawToken = cookieToken || bearerToken;
+    const authHeader = req.headers['authorization'];
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const cookieToken = req.cookies?.admin_token || null;
+    const rawToken = cookieToken || bearerToken;
 
-      if (rawToken) {
-        try {
-          const decoded = jwt.verify(rawToken, secret);
-          const isSuperAdmin =
-            decoded.role === 'admin' ||
-            (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
+    if (rawToken) {
+      try {
+        const decoded = jwt.verify(rawToken, process.env.JWT_SECRET);
+        const isSuperAdmin =
+          decoded.role === 'admin' ||
+          (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
 
-          if (isSuperAdmin) {
-            // Super-admin override is permitted — audit every cross-tenant use.
-            if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-              const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-                req.socket?.remoteAddress || 'unknown';
-              await logAudit({
-                schoolId: school.schoolId,
-                action: 'super_admin_school_override',
-                performedBy: decoded.sub || decoded.id || 'super_admin',
-                targetId: school.schoolId,
-                targetType: 'school',
-                details: { tokenSchoolId: decoded.schoolId, requestedSchoolId: school.schoolId, ip },
-                result: 'success',
-                ipAddress: ip,
-                userAgent: req.headers?.['user-agent'],
-              });
-            }
-          } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-            // Non-super-admin token for a different tenant — reject immediately.
-            res.set('Cache-Control', 'no-store');
-            return res.status(403).json({
-              error: 'Forbidden. Token schoolId does not match the requested school.',
-              code: 'TENANT_MISMATCH',
+        if (isSuperAdmin) {
+          // Super-admin override is permitted — audit every cross-tenant use.
+          if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
+            const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+              req.socket?.remoteAddress || 'unknown';
+            await logAudit({
+              schoolId: school.schoolId,
+              action: 'super_admin_school_override',
+              performedBy: decoded.sub || decoded.id || 'super_admin',
+              targetId: school.schoolId,
+              targetType: 'school',
+              details: { tokenSchoolId: decoded.schoolId, requestedSchoolId: school.schoolId, ip },
+              result: 'success',
+              ipAddress: ip,
+              userAgent: req.headers?.['user-agent'],
             });
           }
-        } catch {
-          // Malformed/expired token — let the auth middleware handle it downstream.
+        } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
+          // Non-super-admin token for a different tenant — reject immediately.
+          res.set('Cache-Control', 'no-store');
+          return res.status(403).json({
+            error: 'Forbidden. Token schoolId does not match the requested school.',
+            code: 'TENANT_MISMATCH',
+          });
         }
+      } catch {
+        // Malformed/expired token — let the auth middleware handle it downstream.
       }
     }
 
