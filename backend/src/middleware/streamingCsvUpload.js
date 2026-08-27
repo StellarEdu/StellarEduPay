@@ -25,9 +25,38 @@ function streamingCsvUpload(options = {}) {
       defParamCharset: 'utf-8',
     });
 
+    const allowedMimeTypes = ['text/csv', 'application/csv', 'application/vnd.ms-excel'];
+
     bb.on('file', (fieldname, file, info) => {
       if (fieldname !== 'file') {
         file.resume();
+        return;
+      }
+
+      const filename = info.filename || '';
+      const mimeType = info.mimeType || info.mime || '';
+
+      if (!filename.toLowerCase().endsWith('.csv')) {
+        aborted = true;
+        file.resume();
+        if (!res.headersSent) {
+          return res.status(400).json({
+            error: 'Uploaded file must have a .csv extension',
+            code: 'CSV_INVALID_EXTENSION',
+          });
+        }
+        return;
+      }
+
+      if (!allowedMimeTypes.includes(mimeType.toLowerCase())) {
+        aborted = true;
+        file.resume();
+        if (!res.headersSent) {
+          return res.status(400).json({
+            error: `Uploaded file must be text/csv or application/csv, got ${mimeType}`,
+            code: 'CSV_INVALID_MIME_TYPE',
+          });
+        }
         return;
       }
 

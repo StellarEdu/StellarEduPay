@@ -40,6 +40,8 @@ auditLogSchema.index({ schoolId: 1, createdAt: -1 });
 auditLogSchema.index({ createdAt: -1 });
 // Chain verification index: schoolId + sequential ordering
 auditLogSchema.index({ schoolId: 1, _id: 1 });
+// Free-text search over event details (#1342). Created via migration 026.
+auditLogSchema.index({ details: 'text' });
 
 // NOTE: No TTL index — audit records must be retained for compliance.
 // Use the archive flag + export job for cold-tier storage offload.
