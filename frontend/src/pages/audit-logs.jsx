@@ -40,10 +40,11 @@ function AuditLogsContent() {
   const [logs, setLogs]               = useState([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
-  const [page, setPage]               = useState(1);
   const [total, setTotal]             = useState(0);
-  const [pages, setPages]             = useState(1);
+  const [nextCursor, setNextCursor]   = useState(null);
+  const [cursorStack, setCursorStack] = useState([]); // Stack of previous cursors for back button
   const [expandedId, setExpandedId]   = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [actionFilter, setActionFilter]         = useState("");
   const [targetTypeFilter, setTargetTypeFilter] = useState("");
@@ -51,10 +52,18 @@ function AuditLogsContent() {
   const [startDate, setStartDate]               = useState("");
   const [endDate, setEndDate]                   = useState("");
 
-  const fetchLogs = (p = page) => {
-    setLoading(true);
+  const fetchLogs = (cursor = null) => {
+    const isLoadMore = cursor !== null && cursor !== undefined;
+    if (isLoadMore) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setLogs([]);
+      setCursorStack([]);
+    }
     setError(null);
-    const params = { page: p, limit: 50 };
+    const params = { limit: 50 };
+    if (cursor) params.cursor = cursor;
     if (actionFilter)     params.action     = actionFilter;
     if (targetTypeFilter) params.targetType = targetTypeFilter;
     if (resultFilter)     params.result     = resultFilter;
@@ -66,18 +75,28 @@ function AuditLogsContent() {
     }
     getAuditLogs(params)
       .then(({ data }) => {
-        setLogs(data.logs);
-        setTotal(data.total);
-        setPages(data.pages);
-        setPage(data.page);
+        if (isLoadMore) {
+          setLogs(prev => [...prev, ...data.data]);
+          setCursorStack(prev => [...prev, cursor]);
+        } else {
+          setLogs(data.data);
+          setTotal(data.total);
+        }
+        setNextCursor(data.nextCursor);
       })
       .catch((err) => {
         setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to load audit logs.");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (isLoadMore) {
+          setLoadingMore(false);
+        } else {
+          setLoading(false);
+        }
+      });
   };
 
-  useEffect(() => { fetchLogs(1); }, [actionFilter, targetTypeFilter, resultFilter, startDate, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchLogs(); }, [actionFilter, targetTypeFilter, resultFilter, startDate, endDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -173,9 +192,9 @@ function AuditLogsContent() {
           title="Audit Logs"
           subtitle="A complete, immutable trail of every administrative action across the platform."
         />
-        {!loading && (
+        {!loading && total !== null && (
           <p style={{ textAlign: "center", fontSize: "0.8125rem", color: "var(--text-muted)", marginTop: "-1.25rem", marginBottom: "1.5rem" }}>
-            {total.toLocaleString()} total entries
+            Showing {logs.length.toLocaleString()} of {total.toLocaleString()} entries
           </p>
         )}
 
@@ -347,31 +366,34 @@ function AuditLogsContent() {
           )}
 
           {/* Pagination */}
-          {!loading && pages > 1 && (
-            <div style={{ padding: "0.875rem 1.5rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span className="pagination-info" aria-live="polite">
-                Page {page} of {pages} — {total.toLocaleString()} entries
-              </span>
-              <nav className="pagination-controls" aria-label="Audit log pagination">
+          {!loading && nextCursor && (
+            <div style={{ padding: "0.875rem 1.5rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+              {cursorStack.length > 0 && (
                 <button
                   className="page-btn"
-                  onClick={() => fetchLogs(page - 1)}
-                  disabled={page === 1}
+                  onClick={() => {
+                    const prevStack = cursorStack.slice(0, -1);
+                    const prevCursor = prevStack.length > 0 ? prevStack[prevStack.length - 1] : null;
+                    setCursorStack(prevStack);
+                    // Reset to first page with current filters
+                    fetchLogs(null);
+                  }}
                   aria-label="Previous page"
                   style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
+                  disabled={loadingMore}
                 >
-                  <IconChevronLeft size={15} /> Prev
+                  <IconChevronLeft size={15} /> Back
                 </button>
-                <button
-                  className="page-btn"
-                  onClick={() => fetchLogs(page + 1)}
-                  disabled={page === pages}
-                  aria-label="Next page"
-                  style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
-                >
-                  Next <IconChevronRight size={15} />
-                </button>
-              </nav>
+              )}
+              <button
+                className="page-btn"
+                onClick={() => fetchLogs(nextCursor)}
+                aria-label="Next page"
+                style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
+                disabled={loadingMore}
+              >
+                {loadingMore ? "Loading..." : "Load More"} <IconChevronRight size={15} />
+              </button>
             </div>
           )}
         </div>
