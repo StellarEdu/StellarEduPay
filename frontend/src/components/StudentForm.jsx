@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { updateStudent } from "../services/api";
+import PaymentPlanForm from "./PaymentPlanForm";
 
 export default function StudentForm({ student, onClose, onSave }) {
   const [formData, setFormData] = useState({
@@ -285,10 +286,17 @@ export default function StudentForm({ student, onClose, onSave }) {
             </label>
           </div>
 
+          <PaymentPlanForm
+            student={student}
+            onClose={onClose}
+            onSave={onSave}
+          />
+
           <div style={{
             display: "flex",
             gap: "0.75rem",
             justifyContent: "flex-end",
+            marginTop: "1.5rem",
           }}>
             <button
               type="button"

@@ -52,6 +52,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
   const [student, setStudent]                 = useState(null);
   const [instructions, setInstructions]       = useState(null);
   const [payments, setPayments]               = useState(null);
+  const [paymentPlan, setPaymentPlan]         = useState(null);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [error, setError]                     = useState("");
   const [loading, setLoading]                 = useState(false);
@@ -97,13 +98,14 @@ export default function PaymentForm({ initialStudentId = "" }) {
     setStudent(null);
     setInstructions(null);
     setPayments(null);
+    setPaymentPlan(null);
     setHasDeletedPayments(false);
     setBalanceError(false);
     setLoading(true);
     setPaymentsLoading(true);
     try {
       const signal = controller.signal;
-      const [stuRes, instrRes, payRes, balRes] = await Promise.all([
+      const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
         getStudent(id, { signal }),
         getPaymentInstructions(id, { signal }),
         getStudentPayments(id, { signal }),
@@ -113,6 +115,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
           setBalanceError(true);
           return null;
         }),
+        getPaymentPlan(id, { signal }).catch(() => null),
       ]);
       setStudent(stuRes.data);
       setInstructions(instrRes.data);
