@@ -115,3 +115,47 @@ describe('isPrivateIPv6 helper', () => {
   test('fc00::1 is private', () => expect(isPrivateIPv6('fc00::1')).toBe(true));
   test('2001:db8::1 is public', () => expect(isPrivateIPv6('2001:db8::1')).toBe(false));
 });
+
+describe('DNS rebinding attack (Issue #1332)', () => {
+  test('catches post-registration DNS change to private IP', async () => {
+    const hostname = 'attacker.example.com';
+
+    // Initial registration: DNS resolves to public IP
+    mockDns(['93.184.216.34']);
+    const r1 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r1.valid).toBe(true);
+    expect(r1.resolvedIps).toContain('93.184.216.34');
+
+    // Later: attacker changes DNS to point to private IP
+    mockDns(['192.168.1.100']);
+    const r2 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r2.valid).toBe(false);
+  });
+
+  test('detects rebinding to localhost on delivery retry', async () => {
+    const hostname = 'rebind.example.com';
+
+    // First validation: public IP
+    mockDns(['1.2.3.4']);
+    const r1 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r1.valid).toBe(true);
+
+    // Attacker rebinds: second validation on delivery returns private IP
+    mockDns(['127.0.0.1']);
+    const r2 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r2.valid).toBe(false);
+  });
+
+  test('catches rebinding to AWS metadata service', async () => {
+    const hostname = 'compromised.example.com';
+
+    mockDns(['1.1.1.1']);
+    const r1 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r1.valid).toBe(true);
+
+    // Rebind to AWS metadata service (169.254.169.254)
+    mockDns(['169.254.169.254']);
+    const r2 = await validateWebhookUrl(`https://${hostname}/hook`);
+    expect(r2.valid).toBe(false);
+  });
+});
