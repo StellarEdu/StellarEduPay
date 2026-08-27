@@ -258,6 +258,7 @@ async function processReminders() {
           reminderCount:    (student.reminderCount || 0) + 1,
           escalationLevel,
           paymentDeadline:  student.paymentDeadline,
+          emailLocale:      school.emailLocale,
         });
 
         // Only update tracking fields if email was actually sent

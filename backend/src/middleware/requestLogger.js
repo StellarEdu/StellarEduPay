@@ -21,8 +21,9 @@
 const { logger } = require('../utils/logger');
 const { httpRequestDurationSeconds } = require('../metrics');
 const { generateCorrelationId } = require('../utils/correlationId');
+const { REQUEST_LOG_REDACT_FIELDS } = require('../utils/redactConfig');
 
-const DEFAULT_REDACT_FIELDS = ['txHash', 'studentId', 'memo', 'senderAddress'];
+const DEFAULT_REDACT_FIELDS = REQUEST_LOG_REDACT_FIELDS;
 
 // Headers that must never appear in logs (auth/session/PII)
 const SENSITIVE_HEADERS = new Set([

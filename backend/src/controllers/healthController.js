@@ -7,7 +7,7 @@ const { getReminderStatus } = require('../services/reminderService');
 const { getCachedRates } = require('../services/currencyConversionService');
 const { getAuditHealth } = require('../services/auditService');
 const { getRedisStatus } = require('../config/redisClient');
-const { checkLiveness } = require('../services/workerHeartbeat');
+const { checkLiveness, WORKER_NAMES } = require('../services/workerHeartbeat');
 const logger = require('../utils/logger');
 const { isReady: isShutdownReady } = require('../services/shutdownManager');
 
@@ -118,6 +118,24 @@ async function healthCheck(req, res) {
     statusCode = 503;
   }
 
+  // BullMQ transaction queue worker heartbeat — a silently crashed worker stops
+  // payment processing without tripping the generic staleness check above (whose
+  // threshold is tuned for a quiet queue). Degrade/alert sooner based directly on
+  // POLL_INTERVAL_MS so on-call is paged before parents notice stuck payments.
+  const pollIntervalMs = parseInt(process.env.POLL_INTERVAL_MS || '30000', 10);
+  const txQueueWorker = workerLiveness.workers[WORKER_NAMES.TX_QUEUE_WORKER];
+  const txQueueHeartbeatAgeMs =
+    txQueueWorker?.lastBeatMs != null ? Date.now() - txQueueWorker.lastBeatMs : null;
+
+  if (txQueueHeartbeatAgeMs !== null) {
+    if (txQueueHeartbeatAgeMs > pollIntervalMs * 5) {
+      overallStatus = 'unhealthy';
+      statusCode = 503;
+    } else if (txQueueHeartbeatAgeMs > pollIntervalMs * 2 && overallStatus === 'healthy') {
+      overallStatus = 'degraded';
+    }
+  }
+
   // Price feed status
   const cachedRates = getCachedRates();
   const priceFeedStatus = Object.entries(cachedRates).map(([currency, data]) => {
@@ -179,6 +197,11 @@ async function healthCheck(req, res) {
       workers: {
         healthy: workerLiveness.allHealthy,
         detail: workerLiveness.workers,
+        transactionQueueWorker: {
+          heartbeatAgeMs: txQueueHeartbeatAgeMs,
+          degradedThresholdMs: pollIntervalMs * 2,
+          unhealthyThresholdMs: pollIntervalMs * 5,
+        },
       },
     },
   };

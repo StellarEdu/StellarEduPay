@@ -400,6 +400,53 @@ const backupLastSuccessTimestamp = new client.Gauge({
   registers: [registry],
 });
 
+// transaction_queue_depth — actionable (waiting + active + delayed) jobs in the
+// BullMQ transaction-processing queue, queried live on each scrape so operators
+// can tell "no new payments" apart from "queue backed up silently" (Issue #1348).
+const transactionQueueDepth = new client.Gauge({
+  name: 'transaction_queue_depth',
+  help: 'Number of actionable jobs (waiting + active + delayed) in the transaction processing queue',
+  registers: [registry],
+  async collect() {
+    try {
+      const { getQueueCounts } = require('../queue/transactionQueue');
+      const counts = await getQueueCounts();
+      this.set(counts ? counts.waiting + counts.active + counts.delayed : 0);
+    } catch (_) {
+      // Redis may not be configured — scrape still succeeds
+    }
+  },
+});
+
+// transaction_queue_depth_alert_threshold — mirrors the configurable
+// TRANSACTION_QUEUE_ALERT_THRESHOLD env var so the Prometheus alert rule stays
+// correct even if the threshold is overridden per-deployment.
+const transactionQueueDepthAlertThreshold = new client.Gauge({
+  name: 'transaction_queue_depth_alert_threshold',
+  help: 'Configured transaction queue depth above which the sustained-backlog alert fires',
+  registers: [registry],
+  collect() {
+    this.set(parseInt(process.env.TRANSACTION_QUEUE_ALERT_THRESHOLD, 10) || 100);
+  },
+});
+
+// transaction_queue_processing_duration_seconds — per-job processing time,
+// recorded by the worker on completion/failure.
+const transactionQueueProcessingDurationSeconds = new client.Histogram({
+  name: 'transaction_queue_processing_duration_seconds',
+  help: 'Duration of transaction queue job processing in seconds',
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [registry],
+});
+
+// transaction_queue_failed_total — count of jobs that reached the BullMQ
+// 'failed' state, recorded by the worker.
+const transactionQueueFailedTotal = new client.Counter({
+  name: 'transaction_queue_failed_total',
+  help: 'Total number of transaction queue jobs that failed',
+  registers: [registry],
+});
+
 module.exports = {
   registry,
   mongoConnectionState,
@@ -426,4 +473,8 @@ module.exports = {
   webhookDeliveryTotal,
   notificationSentTotal,
   backupLastSuccessTimestamp,
+  transactionQueueDepth,
+  transactionQueueDepthAlertThreshold,
+  transactionQueueProcessingDurationSeconds,
+  transactionQueueFailedTotal,
 };

@@ -23,6 +23,7 @@ const config = require('../config');
 const logger = require('../utils/logger').child('NotificationService');
 const { generateUnsubscribeToken } = require('../utils/unsubscribeToken');
 const { renderEmailTemplate } = require('../utils/templateRenderer');
+const { t } = require('./i18n');
 const email = require('./email');
 
 /**
@@ -36,8 +37,9 @@ async function verifySmtp() {
 /**
  * Build the reminder email body from external template files.
  */
-function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline }) {
+function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, emailLocale }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
+  const locale = emailLocale || 'en';
 
   // Determine escalation prefix and urgency message
   const ESCALATION_LABELS = {
@@ -47,15 +49,13 @@ function buildReminderEmail({ studentName, studentId, className, feeAmount, rema
   };
   const esc = ESCALATION_LABELS[escalationLevel] || ESCALATION_LABELS[1];
   const subject = `${esc.prefix}[${schoolName}] Fee Payment Reminder — ${studentName}`;
-  const reminderNote = reminderCount > 1
-    ? `Note: This is reminder #${reminderCount}. If you have already paid, please disregard this message.`
-    : '';
+  const reminderNote = reminderCount > 1 ? t(locale, 'reminderNote', { n: reminderCount }) : '';
 
   const deadlineStr = paymentDeadline
     ? new Date(paymentDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : null;
 
-  const vars = { studentName, studentId, className, feeAmount, outstanding, schoolName, reminderNote, urgency: esc.urgency, deadline: deadlineStr || '', unsubscribeUrl: unsubscribeUrl || '' };
+  const vars = { studentName, studentId, className, feeAmount, outstanding, schoolName, reminderNote, urgency: esc.urgency, deadline: deadlineStr || '', unsubscribeUrl: unsubscribeUrl || '', locale };
   const { text, html } = renderEmailTemplate('reminderEmail', vars);
 
   return { subject, text, html };

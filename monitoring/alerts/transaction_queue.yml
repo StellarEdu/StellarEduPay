@@ -1,0 +1,22 @@
+groups:
+  - name: transaction_queue
+    interval: 60s
+    rules:
+      # transaction_queue_depth_alert_threshold mirrors the configurable
+      # TRANSACTION_QUEUE_ALERT_THRESHOLD env var (default 100), so this alert
+      # stays correct even if the threshold is overridden. Sustained backlog
+      # means the BullMQ transaction-processing worker isn't keeping up with
+      # intake — payments stop confirming even though /health may still report
+      # healthy for other subsystems.
+      - alert: TransactionQueueBacklogSustained
+        expr: transaction_queue_depth >= transaction_queue_depth_alert_threshold
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Transaction processing queue backlog sustained for 5+ minutes"
+          description: >
+            The transaction queue depth ({{ $value }}) has been at or above
+            the configured alert threshold for 5 minutes. Check the BullMQ
+            worker's liveness (see /health workers.transactionQueueWorker) and
+            whether Horizon or MongoDB latency is the bottleneck.

@@ -28,6 +28,7 @@ const PendingVerification = require('../models/pendingVerificationModel');
 const logger = require('../utils/logger');
 const { resolveCorrelationId } = require('../utils/correlationId');
 const { getRedisClient } = require('../config/redisClient');
+const { transactionQueueProcessingDurationSeconds, transactionQueueFailedTotal } = require('../metrics');
 
 const QUEUE_NAME = 'transaction-processing';
 
@@ -258,6 +259,21 @@ async function getJobStatus(txHash) {
 }
 
 /**
+ * Get current actionable job counts for the transaction processing queue.
+ * Used by the transaction_queue_depth Prometheus gauge.
+ */
+async function getQueueCounts() {
+  if (!transactionQueue) return null;
+  const [waiting, active, delayed, failed] = await Promise.all([
+    transactionQueue.getWaitingCount(),
+    transactionQueue.getActiveCount(),
+    transactionQueue.getDelayedCount(),
+    transactionQueue.getFailedCount(),
+  ]);
+  return { waiting, active, delayed, failed };
+}
+
+/**
  * Start the BullMQ worker that processes queued transactions.
  * The processor function is injected so this module stays decoupled
  * from the payment controller / stellar service.
@@ -276,21 +292,28 @@ function startTransactionWorker(processor) {
      concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
    });
 
-  worker.on('completed', (job) =>
+  worker.on('completed', (job) => {
     logger.info('[TransactionQueue] Job completed', {
       jobId: job.id,
       txHash: job.data.txHash,
       correlationId: job.data.correlationId || null,
-    })
-  );
-  worker.on('failed', (job, err) =>
+    });
+    if (job.processedOn && job.finishedOn) {
+      transactionQueueProcessingDurationSeconds.observe((job.finishedOn - job.processedOn) / 1000);
+    }
+  });
+  worker.on('failed', (job, err) => {
     logger.error('[TransactionQueue] Job failed', {
       jobId: job?.id,
       txHash: job?.data?.txHash,
       correlationId: job?.data?.correlationId || null,
       error: err.message,
-    })
-  );
+    });
+    transactionQueueFailedTotal.inc();
+    if (job?.processedOn && job?.finishedOn) {
+      transactionQueueProcessingDurationSeconds.observe((job.finishedOn - job.processedOn) / 1000);
+    }
+  });
 
   logger.info('[TransactionQueue] Worker started', {
     concurrency: parseInt(process.env.TX_QUEUE_CONCURRENCY, 10) || 5,
@@ -398,5 +421,6 @@ module.exports = {
    markInterrupted,
    drainWorker,
    getWorker,
+   getQueueCounts,
    QUEUE_NAME,
  };
