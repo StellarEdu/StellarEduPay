@@ -9,6 +9,7 @@ StellarEduPay is a three-tier application: a Next.js frontend, a Node.js/Express
 - [High-Level Overview](#high-level-overview)
 - [Component Diagram](#component-diagram)
 - [Data Flow: Payment Initiation to Confirmation](#data-flow-payment-initiation-to-confirmation)
+- [Payment Confirmation State Machine](#payment-confirmation-state-machine)
 - [Backend Services](#backend-services)
 - [Controllers](#controllers)
 - [Middleware](#middleware)
@@ -183,6 +184,40 @@ Admin creates fee  →  Admin registers student  →  Parent gets instructions
                                               │  Student.feePaid=true  │
                                               └────────────────────────┘
 ```
+
+---
+
+## Payment Confirmation State Machine
+
+Implemented in [`backend/src/services/paymentConfirmationStateMachine.js`](../backend/src/services/paymentConfirmationStateMachine.js) (issue #747). Payments move through five ranked states derived from Stellar ledger depth; transitions are monotonic (never regress) and idempotent under re-polling.
+
+```mermaid
+stateDiagram-v2
+    [*] --> detected
+
+    detected --> pending: 1..(CONFIRMATION_THRESHOLD-1) ledgers closed
+    detected --> confirmed: depth >= CONFIRMATION_THRESHOLD (fast-forward)
+    detected --> finalized: depth >= FINALIZATION_THRESHOLD (fast-forward)
+    detected --> failed: flagged suspicious
+
+    pending --> confirmed: depth >= CONFIRMATION_THRESHOLD
+    pending --> finalized: depth >= FINALIZATION_THRESHOLD (fast-forward)
+    pending --> failed: flagged suspicious
+
+    confirmed --> finalized: depth >= FINALIZATION_THRESHOLD
+    confirmed --> failed: flagged suspicious
+
+    finalized --> [*]
+    failed --> [*]
+```
+
+- **detected** — tx observed on Horizon, 0 ledgers closed since. Earliest possible state.
+- **pending** — awaiting enough ledger depth to be safe against a typical Horizon failover/replay.
+- **confirmed** — safe to treat as real money for balance/UI purposes.
+- **finalized** — practically irreversible; terminal.
+- **failed** — memo collision, fraud signal, or other invalid-payment escape; terminal, reachable from any non-terminal state.
+
+Forward jumps that skip intermediate states are allowed (e.g. a payment first observed already past `CONFIRMATION_THRESHOLD` goes straight from `detected` to `confirmed`). `finalized` and `failed` have no outgoing transitions, and re-computing a target state that doesn't outrank the current state is a no-op — see `resolveNextState()` and the transition table (`CONFIRMATION_STATE_TRANSITIONS`) for the enforced source of truth.
 
 ---
 

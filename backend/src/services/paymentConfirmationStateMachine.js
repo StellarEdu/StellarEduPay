@@ -30,6 +30,9 @@
  *     payment can be first observed already past CONFIRMATION_THRESHOLD and
  *     go straight from detected to confirmed).
  *   - failed is reachable from any non-terminal state.
+ *
+ * See the state diagram in docs/architecture.md (Payment Confirmation State
+ * Machine section) for a visual reference of the transitions below.
  */
 
 const CONFIRMATION_STATES = Object.freeze({
@@ -58,22 +61,35 @@ const TERMINAL_STATES = new Set([
 // resolveNextState (rank enforces "never go backwards"; this table documents
 // and enforces "which forward jumps are meaningful").
 const CONFIRMATION_STATE_TRANSITIONS = Object.freeze({
+  // detected: earliest observation. May advance one step at a time (pending),
+  // fast-forward straight to confirmed/finalized if first observed already
+  // deep in the ledger, or escape to failed on a fraud/anomaly signal.
   [CONFIRMATION_STATES.DETECTED]: [
     CONFIRMATION_STATES.PENDING,
     CONFIRMATION_STATES.CONFIRMED,
     CONFIRMATION_STATES.FINALIZED,
     CONFIRMATION_STATES.FAILED,
   ],
+  // pending: not yet safe for balance/UI purposes. Can reach confirmed once
+  // depth clears the threshold, skip straight to finalized on a slow poll
+  // cycle, or be flagged failed at any point before it is trusted.
   [CONFIRMATION_STATES.PENDING]: [
     CONFIRMATION_STATES.CONFIRMED,
     CONFIRMATION_STATES.FINALIZED,
     CONFIRMATION_STATES.FAILED,
   ],
+  // confirmed: already treated as real money. Only remaining moves are
+  // becoming irreversible (finalized) or being retroactively flagged failed
+  // (e.g. a fraud signal detected after initial confirmation).
   [CONFIRMATION_STATES.CONFIRMED]: [
     CONFIRMATION_STATES.FINALIZED,
     CONFIRMATION_STATES.FAILED,
   ],
+  // finalized: practically irreversible — no further manual correction
+  // should ever be needed, so no outgoing transitions.
   [CONFIRMATION_STATES.FINALIZED]: [],
+  // failed: terminal escape hatch — once flagged invalid/suspicious, a
+  // payment never re-enters the confirmation pipeline.
   [CONFIRMATION_STATES.FAILED]: [],
 });
 

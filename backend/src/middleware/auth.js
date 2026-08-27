@@ -257,10 +257,24 @@ function requireSchoolAuth(allowedRoles = []) {
       req.schoolId = decoded.schoolId;
     }
 
+    // #1356 — REQUIRE_MFA enforcement: a token minted while MFA setup was
+    // outstanding may only reach the MFA setup/verify/logout endpoints until
+    // the admin completes setup (see handleLogin/verifyAndEnableUserMfa).
+    if (decoded.mfaSetupPending && !MFA_SETUP_ALLOWED_PATHS.has(req.path)) {
+      return res.status(403).json({
+        error: 'MFA setup is required before accessing this resource.',
+        code: 'MFA_SETUP_REQUIRED',
+      });
+    }
+
     req.user = decoded;
     req.admin = decoded; // alias so downstream code works regardless of which middleware ran
     next();
   };
 }
+
+// Endpoints reachable with a restricted mfaSetupPending token — just enough
+// to complete MFA enrollment or abandon the session.
+const MFA_SETUP_ALLOWED_PATHS = new Set(['/mfa/user/setup', '/mfa/user/verify']);
 
 module.exports = { requireAdminAuth, requireSchoolAuth };

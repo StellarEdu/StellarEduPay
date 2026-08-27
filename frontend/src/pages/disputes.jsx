@@ -192,6 +192,7 @@ function DisputesContent() {
   const [error, setError]             = useState(null);
   const [page, setPage]               = useState(1);
   const [totalPages, setTotalPages]   = useState(1);
+  const [totalCount, setTotalCount]   = useState(0);
   const [statusFilter, setStatusFilter] = useState("");
   const [studentFilter, setStudentFilter] = useState("");
   const [draftStudent, setDraftStudent]   = useState("");
@@ -209,6 +210,7 @@ function DisputesContent() {
       const res = await getDisputes(params);
       setDisputes(res.data.disputes || []);
       setTotalPages(res.data.pagination?.totalPages || 1);
+      setTotalCount(res.data.pagination?.total || 0);
     } catch (err) {
       setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to load disputes.");
     } finally {
@@ -325,6 +327,10 @@ function DisputesContent() {
           </div>
         ) : (
           <div>
+            <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+              {totalCount} dispute{totalCount === 1 ? "" : "s"} total
+            </div>
+
             {disputes.map(d => (
               <DisputeCard
                 key={d._id}

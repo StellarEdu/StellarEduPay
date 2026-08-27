@@ -383,6 +383,7 @@ async function handleLogin(req, res) {
   }
 
   // ── MFA check ──────────────────────────────────────────────────────────────
+  let mfaSchool = null;
   {
     const { verifyTotpCode, verifyBackupCode } = require('./mfaController');
 
@@ -408,6 +409,7 @@ async function handleLogin(req, res) {
       } catch {
         school = null;
       }
+      mfaSchool = school;
 
       if (school?.mfaEnabled && school.mfaSecret) {
         if (!mfaCode) {
@@ -437,11 +439,22 @@ async function handleLogin(req, res) {
   const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
+  // #1356 — When REQUIRE_MFA is enabled, an admin with no MFA configured (on
+  // their own account or their school's) gets a restricted token: the auth
+  // middleware only lets it reach the MFA setup endpoints until MFA is
+  // enabled, closing the gap where a compromised password alone grants full
+  // access. See requireSchoolAuth's mfaSetupPending check in middleware/auth.js.
+  const mfaAlreadyEnabled = Boolean(
+    (user.mfaEnabled && user.mfaSecret) || (mfaSchool?.mfaEnabled && mfaSchool.mfaSecret)
+  );
+  const mfaSetupPending = process.env.REQUIRE_MFA === 'true' && !mfaAlreadyEnabled;
+
   const jwtPayload = {
     role:     'user',
     userId:   user._id.toString(),
     schoolId: user.schoolId,
     roles:    user.roles,
+    ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
   };
   const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
@@ -458,7 +471,7 @@ async function handleLogin(req, res) {
   res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
   res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
 
-  return res.json({ expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
+  return res.json({ expiresIn: accessTTL, refreshExpiresIn: refreshTTL, mfaSetupRequired: mfaSetupPending });
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────
@@ -525,6 +538,7 @@ async function handleRefresh(req, res) {
   if (meta.roles)    jwtPayload.roles    = meta.roles;
   if (meta.schoolId) jwtPayload.schoolId = meta.schoolId;
   if (meta.username) jwtPayload.username = meta.username;
+  if (meta.mfaSetupPending) jwtPayload.mfaSetupPending = meta.mfaSetupPending;
 
   const accessToken = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 

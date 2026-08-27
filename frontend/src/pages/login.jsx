@@ -27,9 +27,13 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await api.post('/auth/login', { username, password });
+      const res = await api.post('/auth/login', { username, password });
       login();
-      router.push(safeReturnTo(router.query.returnTo));
+      if (res.data?.mfaSetupRequired) {
+        router.push('/mfa-setup');
+      } else {
+        router.push(safeReturnTo(router.query.returnTo));
+      }
     } catch (err) {
       if (err.response) {
         // HTTP error response from the server (4xx, 5xx)
