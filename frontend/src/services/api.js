@@ -111,3 +111,7 @@ export const updateFeeAdjustmentRule = (id, data, schoolId) =>
   api.put(`/fee-adjustments/${id}`, data, { headers: { "X-School-ID": schoolId } });
 export const deleteFeeAdjustmentRule = (id, schoolId) =>
   api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId } });
+
+// School settings
+export const getSchool = (slug) => api.get(`/schools/${slug}`);
+export const updateSchool = (slug, data) => api.patch(`/schools/${slug}`, data);
