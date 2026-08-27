@@ -15,6 +15,7 @@ const ADMIN_LINKS = [
   { href: "/fee-adjustments", label: "Fee Rules" },
   { href: "/audit-logs",      label: "Audit Logs" },
   { href: "/disputes",        label: "Disputes" },
+  { href: "/webhooks",        label: "Webhooks" },
 ];
 
 const SunIcon = () => (
