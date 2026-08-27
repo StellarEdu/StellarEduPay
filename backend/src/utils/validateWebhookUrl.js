@@ -3,6 +3,7 @@
 const dns = require('dns').promises;
 const net = require('net');
 const { URL } = require('url');
+const { resolveDnsWithCache } = require('./dnsCache');
 
 // ── Private / reserved IPv4 ranges ───────────────────────────────────────────
 // Includes RFC 1918, loopback, link-local, CGNAT, metadata (AWS/GCP/Azure),
@@ -166,14 +167,10 @@ async function validateWebhookUrl(url) {
   }
 
   // ── DNS resolution: all addresses must be public ───────────────────────────
-  const [v4Results, v6Results] = await Promise.all([
-    dns.resolve4(hostname).catch(() => []),
-    dns.resolve6(hostname).catch(() => []),
-  ]);
-
-  const allAddresses = [...v4Results, ...v6Results];
-
-  if (allAddresses.length === 0) {
+  let allAddresses;
+  try {
+    allAddresses = await resolveDnsWithCache(hostname);
+  } catch {
     return { valid: false, reason: 'INVALID_WEBHOOK_URL' };
   }
 

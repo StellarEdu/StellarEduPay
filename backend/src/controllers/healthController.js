@@ -7,7 +7,7 @@ const { getReminderStatus } = require('../services/reminderService');
 const { getCachedRates } = require('../services/currencyConversionService');
 const { getAuditHealth } = require('../services/auditService');
 const { getRedisStatus } = require('../config/redisClient');
-const { checkLiveness } = require('../services/workerHeartbeat');
+const { checkLiveness, WORKER_NAMES } = require('../services/workerHeartbeat');
 const logger = require('../utils/logger');
 const { isReady: isShutdownReady } = require('../services/shutdownManager');
 
@@ -75,13 +75,23 @@ async function healthCheck(req, res) {
   let overallStatus = 'healthy';
   let statusCode = 200;
 
+  // If the background poller has had Horizon unreachable for longer than its
+  // own max backoff window, no payments have synced since startup or the
+  // outage began — surface that explicitly rather than letting a healthy DB
+  // mask it. See issue #1340.
+  const POLL_MAX_BACKOFF_MS = parseInt(process.env.POLL_MAX_BACKOFF_MS || '300000', 10);
+  const { getHorizonUnreachableSince } = require('../services/transactionPollingService');
+  const horizonUnreachableSinceMs = getHorizonUnreachableSince();
+  const horizonUnreachableTooLong =
+    horizonUnreachableSinceMs !== null && Date.now() - horizonUnreachableSinceMs > POLL_MAX_BACKOFF_MS;
+
   if (db.healthy !== true) {
     overallStatus = 'unhealthy';
     statusCode = 503;
   } else if (redisConfigured && redisStatus.status !== 'ready') {
     overallStatus = 'degraded';
     statusCode = 200;
-  } else if (stellar.status !== 'ok') {
+  } else if (stellar.status !== 'ok' || horizonUnreachableTooLong) {
     overallStatus = 'degraded';
     statusCode = 200; // Still return 200 since DB is up and cached data can be served
   }
@@ -116,6 +126,24 @@ async function healthCheck(req, res) {
   if (!workerLiveness.allHealthy && overallStatus !== 'unhealthy') {
     overallStatus = 'unhealthy';
     statusCode = 503;
+  }
+
+  // BullMQ transaction queue worker heartbeat — a silently crashed worker stops
+  // payment processing without tripping the generic staleness check above (whose
+  // threshold is tuned for a quiet queue). Degrade/alert sooner based directly on
+  // POLL_INTERVAL_MS so on-call is paged before parents notice stuck payments.
+  const pollIntervalMs = parseInt(process.env.POLL_INTERVAL_MS || '30000', 10);
+  const txQueueWorker = workerLiveness.workers[WORKER_NAMES.TX_QUEUE_WORKER];
+  const txQueueHeartbeatAgeMs =
+    txQueueWorker?.lastBeatMs != null ? Date.now() - txQueueWorker.lastBeatMs : null;
+
+  if (txQueueHeartbeatAgeMs !== null) {
+    if (txQueueHeartbeatAgeMs > pollIntervalMs * 5) {
+      overallStatus = 'unhealthy';
+      statusCode = 503;
+    } else if (txQueueHeartbeatAgeMs > pollIntervalMs * 2 && overallStatus === 'healthy') {
+      overallStatus = 'degraded';
+    }
   }
 
   // Price feed status
@@ -156,6 +184,9 @@ async function healthCheck(req, res) {
           resetTimeoutMs: CB_RESET_TIMEOUT_MS,
           halfOpenSuccessThreshold: CB_HALF_OPEN_SUCCESS_THRESHOLD,
         },
+        ...(horizonUnreachableSinceMs !== null && {
+          horizonUnreachableSince: new Date(horizonUnreachableSinceMs).toISOString(),
+        }),
       },
       paymentProcessor: {
         queueDepth,
@@ -179,6 +210,11 @@ async function healthCheck(req, res) {
       workers: {
         healthy: workerLiveness.allHealthy,
         detail: workerLiveness.workers,
+        transactionQueueWorker: {
+          heartbeatAgeMs: txQueueHeartbeatAgeMs,
+          degradedThresholdMs: pollIntervalMs * 2,
+          unhealthyThresholdMs: pollIntervalMs * 5,
+        },
       },
     },
   };

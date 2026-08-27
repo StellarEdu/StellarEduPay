@@ -19,6 +19,10 @@ const logger = require('../utils/logger').child('ReminderController');
 
 const { REMINDER_COOLDOWN_HOURS, REMINDER_MAX_COUNT, JWT_SECRET } = config;
 
+// Idempotency cache: per-school results cached for 60 seconds to deduplicate rapid requests
+const IDEMPOTENCY_CACHE = new Map();
+const IDEMPOTENCY_WINDOW_MS = 60 * 1000;
+
 /**
  * Escape HTML special characters to prevent XSS when interpolating
  * user-controlled values into HTML responses.
@@ -38,11 +42,36 @@ function escapeHtml(str) {
 /**
  * POST /api/reminders/trigger
  * Manually trigger a reminder run for all schools (or a specific school via body).
+ * Implements idempotency: rapid duplicate requests for the same school return cached result.
  */
 async function triggerReminders(req, res, next) {
   try {
-    logger.info('Manual reminder trigger', { triggeredBy: req.admin?.id || 'unknown' });
+    const schoolId = req.schoolId || 'all-schools';
+    const cacheKey = `reminder-trigger:${schoolId}`;
+    const now = Date.now();
+
+    // Check if a recent result exists in cache
+    const cached = IDEMPOTENCY_CACHE.get(cacheKey);
+    if (cached && (now - cached.timestamp) < IDEMPOTENCY_WINDOW_MS) {
+      logger.info('Reminder trigger cache hit (deduplicated)', { schoolId, age: now - cached.timestamp });
+      return res.json({ message: 'Reminder run complete (cached)', summary: cached.summary, deduped: true });
+    }
+
+    logger.info('Manual reminder trigger', { schoolId, triggeredBy: req.admin?.id || 'unknown' });
     const summary = await processReminders();
+
+    // Cache the result for subsequent requests within the window
+    IDEMPOTENCY_CACHE.set(cacheKey, { timestamp: now, summary });
+
+    // Clean up old cache entries periodically
+    if (IDEMPOTENCY_CACHE.size > 100) {
+      for (const [key, val] of IDEMPOTENCY_CACHE.entries()) {
+        if (now - val.timestamp > IDEMPOTENCY_WINDOW_MS) {
+          IDEMPOTENCY_CACHE.delete(key);
+        }
+      }
+    }
+
     res.json({ message: 'Reminder run complete', summary });
   } catch (err) {
     next(err);

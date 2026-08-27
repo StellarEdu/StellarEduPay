@@ -218,6 +218,50 @@ async function listDeliveries(req, res, next) {
   }
 }
 
+// ── POST /api/webhook-endpoints/:id/test ──────────────────────────────────────
+async function sendTestEvent(req, res, next) {
+  try {
+    const schoolId = _callerSchoolId(req);
+    const endpoint = await WebhookEndpoint.findOne({ _id: req.params.id, schoolId });
+    if (!endpoint) return res.status(404).json({ error: 'Endpoint not found', code: 'NOT_FOUND' });
+
+    const deliveryId = uuidv4();
+    const testPayload = {
+      testMode: true,
+      timestamp: new Date().toISOString(),
+      message: 'This is a test webhook event from StellarEduPay',
+    };
+
+    const result = await fireWebhook(
+      endpoint.url,
+      'payment.test',
+      testPayload,
+      endpoint.secret,
+      deliveryId,
+      endpoint._id,
+      schoolId,
+    );
+
+    await logAudit({
+      schoolId,
+      action: 'webhook_test_sent',
+      performedBy: _performedBy(req),
+      targetId: String(endpoint._id),
+      targetType: 'school',
+      details: { deliveryId, success: result.success },
+    });
+
+    return res.json({
+      success: result.success,
+      deliveryId,
+      statusCode: result.statusCode,
+      error: result.error || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── POST /api/webhook-deliveries/:id/replay ───────────────────────────────────
 async function replayDelivery(req, res, next) {
   try {
@@ -263,6 +307,7 @@ module.exports = {
   getEndpoint,
   updateEndpoint,
   deleteEndpoint,
+  sendTestEvent,
   listDeliveries,
   replayDelivery,
 };

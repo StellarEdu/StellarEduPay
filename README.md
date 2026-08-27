@@ -438,6 +438,7 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 | `RATE_LIMIT_MAX_REQUESTS` | `100` | Max requests per window |
 | `VERIFY_RATE_LIMIT` | `10` | Max verify requests per minute |
 | `ALLOWED_ORIGINS` | — | Comma-separated CORS origins |
+| `APP_URL` | — | Base URL of the application (required in production) |
 
 ### Server
 

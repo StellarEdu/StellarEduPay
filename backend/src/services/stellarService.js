@@ -221,6 +221,11 @@ async function determineConfirmationState(
  * Detect memo collision: same memo used by a different sender within 24h,
  * or payment amount is wildly outside the expected fee range.
  * Query is school-scoped via schoolId.
+ *
+ * The senderAddress predicate uses $nin to express "not this sender and not
+ * null" in a single operator, avoiding the duplicate-key bug that previously
+ * caused { $ne: senderAddress, $exists: true, $ne: null } to collapse to
+ * { $exists: true, $ne: null } at JS parse time (ESLint no-dupe-keys, #1271).
  */
 async function detectMemoCollision(
   memo,
@@ -236,9 +241,11 @@ async function detectMemoCollision(
   const recentFromOtherSender = await Payment.findOne({
     schoolId,
     memo,
-    senderAddress: { $ne: senderAddress, $exists: true, $ne: null },
+    // $nin expresses "not senderAddress AND not null" without a duplicate $ne key.
+    // $exists: true additionally excludes documents where the field is absent.
+    senderAddress: { $nin: [senderAddress, null], $exists: true },
     confirmedAt: { $gte: windowStart },
-    deletedAt: null,
+    deletedAt: { $in: [null, undefined] },
   });
 
   if (recentFromOtherSender) {

@@ -96,9 +96,11 @@ export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
 
-// MFA enrollment (#1356)
-export const setupUserMfa = () => api.post("/auth/mfa/user/setup");
-export const verifyUserMfa = (data) => api.post("/auth/mfa/user/verify", data);
+// Refunds
+export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
+export const approveRefund = (refundId, data) => api.post(`/payments/refunds/${refundId}/approve`, data);
+export const getPaymentRefunds = (txHash) => api.get(`/payments/${txHash}/refunds`);
+export const getSchoolRefunds = (params = {}) => api.get("/payments/refunds/school/list", { params });
 
 // Audit logs
 export const getRecentAuditLogs = (limit = 10) =>
@@ -115,3 +117,17 @@ export const updateFeeAdjustmentRule = (id, data, schoolId) =>
   api.put(`/fee-adjustments/${id}`, data, { headers: { "X-School-ID": schoolId } });
 export const deleteFeeAdjustmentRule = (id, schoolId) =>
   api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId } });
+
+// School settings
+export const getSchool = (slug) => api.get(`/schools/${slug}`);
+export const updateSchool = (slug, data) => api.patch(`/schools/${slug}`, data);
+
+// Payment plans
+export const createPaymentPlan = (studentId, data) =>
+  api.post(`/payment-plans/${studentId}`, data);
+export const getPaymentPlan = (studentId) =>
+  api.get(`/payment-plans/${studentId}`);
+export const updateInstallment = (studentId, installmentIndex, data) =>
+  api.patch(`/payment-plans/${studentId}/installment/${installmentIndex}`, data);
+export const cancelPaymentPlan = (studentId) =>
+  api.delete(`/payment-plans/${studentId}`);

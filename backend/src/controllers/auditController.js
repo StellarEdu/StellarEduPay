@@ -18,7 +18,15 @@ const { getAuditLogs, getRecentAuditLogs, verifyAuditChain } = require('../servi
 async function getAuditLogsEndpoint(req, res, next) {
   try {
     const { schoolId } = req;
-    const { action, targetType, performedBy, result, startDate, endDate, cursor, page, limit } = req.query;
+    const { action, targetType, performedBy, result, search, startDate, endDate, cursor, page, limit } = req.query;
+
+    // Validate page and limit as positive integers if provided
+    if (page && (isNaN(parseInt(page, 10)) || parseInt(page, 10) < 1)) {
+      return res.status(400).json({ error: 'page must be a positive integer', code: 'VALIDATION_ERROR' });
+    }
+    if (limit && (isNaN(parseInt(limit, 10)) || parseInt(limit, 10) < 1)) {
+      return res.status(400).json({ error: 'limit must be a positive integer', code: 'VALIDATION_ERROR' });
+    }
 
     const auditResult = await getAuditLogs({
       schoolId,
@@ -26,6 +34,7 @@ async function getAuditLogsEndpoint(req, res, next) {
       targetType,
       performedBy,
       result,
+      search,
       startDate,
       endDate,
       cursor: cursor || null,

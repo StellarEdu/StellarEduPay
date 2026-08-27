@@ -62,7 +62,12 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
 const generalLimiter       = rl(15 * 60 * 1000, 100);
 const strictLimiter        = rl(15 * 60 * 1000, 10);
 const verifyLimiter        = rl(60 * 1000, parseInt(process.env.VERIFY_RATE_LIMIT || '10', 10));
-const reminderTriggerLimiter = rl(60 * 60 * 1000, 5, { error: 'Too many reminder requests. Please wait.', code: 'RATE_LIMIT_EXCEEDED' });
+const reminderTriggerLimiter = rl(
+  60 * 1000,
+  5,
+  { error: 'Too many reminder requests. Please wait.', code: 'RATE_LIMIT_EXCEEDED' },
+  { keyGenerator: (req) => `reminders:${req.schoolId || 'unknown-tenant'}` }
+);
 const bulkImportLimiter    = rl(
   60 * 60 * 1000,
   parseInt(process.env.BULK_IMPORT_RATE_LIMIT, 10) || 5,

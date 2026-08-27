@@ -1,6 +1,6 @@
 'use strict';
 
-process.env.JWT_SECRET = 'test-secret';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 process.env.SCHOOL_WALLET_ADDRESS = 'GTEST123';
 
 const mongoose = require('mongoose');

@@ -166,3 +166,64 @@ The Axios instance used for delivery is configured with `maxRedirects: 0`. Any 3
 ### Response size cap
 
 Response bodies are capped at 64 KB (`maxContentLength: 65536`). Requests that exceed this are aborted.
+
+---
+
+## Student PII Data Retention Policy
+
+StellarEduPay implements automatic anonymization of student personally identifiable information (PII) to reduce breach exposure and align with data minimization principles from GDPR and similar privacy frameworks.
+
+### What data is anonymized
+
+Once the retention window expires for a soft-deleted student record, the following PII fields are cleared:
+
+| Field | Cleared to |
+|-------|-----------|
+| `name` | `"Anonymized"` |
+| `dateOfBirth` | `null` |
+| `gender` | `null` |
+| `parentName` | `null` |
+| `contactNumber` | `null` |
+| `parentPhone` | `null` |
+
+Non-PII fields retained for audit and reconciliation purposes:
+
+- `studentId`, `schoolId`, `class`, `academicYear` — for payment tracking
+- `feeAmount`, `totalPaid`, `remainingBalance`, `fees` — for billing history
+- Payment and transaction records — for regulatory compliance
+
+### Configuration
+
+**Environment variable:** `STUDENT_PII_RETENTION_DAYS` (default: 90)
+
+- Specifies the number of days to retain PII after soft-delete before anonymization
+- Default of 90 days (~3 months) balances operational need against breach exposure
+- Set to `0` to disable anonymization (not recommended for production)
+
+Example:
+
+```bash
+# Retain PII for 180 days (6 months) before anonymization
+STUDENT_PII_RETENTION_DAYS=180
+```
+
+### Automation
+
+The `piiAnonymizationScheduler` runs once daily on the leader node and:
+
+1. Queries for soft-deleted students whose deletion date exceeds `STUDENT_PII_RETENTION_DAYS`
+2. Skips records already anonymized (name="Anonymized" and all other PII fields null)
+3. Bulk-updates matching records to clear sensitive fields
+4. Logs the count of anonymized records for audit purposes
+
+The scheduler is integrated into the leader-election system, ensuring it runs on exactly one instance in a clustered deployment.
+
+### Regulatory compliance
+
+This implementation supports:
+
+- **GDPR Article 5** (data minimization) — data kept no longer than necessary
+- **GDPR Article 17** (right to be forgotten) — PII erasure after the retention window
+- **Local privacy regulations** — configurable retention period per deployment
+
+Schools should configure `STUDENT_PII_RETENTION_DAYS` to match their legal obligations and operational needs.

@@ -4,7 +4,7 @@
  * Tests for issue #595 — JWT refresh token flow
  */
 
-process.env.JWT_SECRET = 'test-secret-595';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 process.env.ADMIN_USERNAME = 'admin';
 process.env.ADMIN_PASSWORD = 'correct-password';
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';

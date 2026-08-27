@@ -1,5 +1,6 @@
 'use strict';
 
+const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const School = require('../models/schoolModel');
@@ -418,6 +419,121 @@ async function verifyAndEnableUserMfa(req, res) {
 }
 
 /**
+ * POST /api/auth/mfa/backup-codes/regenerate
+ * Headers: X-School-Slug
+ * Body: { code } (valid TOTP code) OR { password }
+ *
+ * Regenerates backup codes for a school. Requires step-up verification
+ * (either a valid TOTP code or the school password) to prevent unauthorized
+ * backup code rotation. Invalidates all previously issued codes.
+ */
+async function regenerateBackupCodes(req, res) {
+  const slug = req.headers['x-school-slug'];
+  const { code, password } = req.body || {};
+
+  if (!slug) {
+    return res.status(400).json({ error: 'X-School-Slug header is required.', code: 'MISSING_SCHOOL_SLUG' });
+  }
+
+  try {
+    const school = await School.findOne({ slug, isActive: true });
+    if (!school) {
+      return res.status(404).json({ error: 'School not found.', code: 'SCHOOL_NOT_FOUND' });
+    }
+
+    // Verify step-up authentication
+    let verified = false;
+
+    // Step 1: Try TOTP code verification if provided
+    if (code) {
+      if (!school.mfaSecret) {
+        return res.status(400).json({
+          error: 'MFA is not configured for this school. Cannot use TOTP code for verification.',
+          code: 'MFA_NOT_CONFIGURED',
+        });
+      }
+      verified = speakeasy.totp.verify({
+        secret: decryptMfaSecret(school.mfaSecret),
+        encoding: 'base32',
+        token: code,
+        window: 1,
+      });
+      if (!verified) {
+        return res.status(401).json({
+          error: 'Invalid TOTP code.',
+          code: 'INVALID_MFA_CODE',
+        });
+      }
+    }
+
+    // Step 2: Try password verification if TOTP failed and password provided
+    if (!verified && password) {
+      // For school-level MFA, we use an environment-based password or stored hash
+      const envPasswordHash = process.env.SCHOOL_ADMIN_PASSWORD_HASH;
+      const envPassword = process.env.SCHOOL_ADMIN_PASSWORD;
+
+      if (envPasswordHash) {
+        verified = await bcrypt.compare(password, envPasswordHash);
+      } else if (envPassword) {
+        // Timing-safe comparison for environment-based password
+        const crypto = require('crypto');
+        verified = crypto.timingSafeEqual(Buffer.from(password), Buffer.from(envPassword));
+      }
+      if (!verified) {
+        return res.status(401).json({
+          error: 'Invalid password.',
+          code: 'INVALID_PASSWORD',
+        });
+      }
+    }
+
+    // Require at least one form of verification
+    if (!verified) {
+      return res.status(400).json({
+        error: 'Either a valid TOTP code or password is required.',
+        code: 'VERIFICATION_REQUIRED',
+      });
+    }
+
+    // Generate new backup codes and invalidate old ones
+    const newCodes = generateBackupCodes();
+    const updatedSchool = await School.findOneAndUpdate(
+      { slug },
+      {
+        $set: {
+          mfaBackupCodes: newCodes.map((c) => ({ hash: hashBackupCode(c), used: false })),
+        },
+      },
+      { new: true }
+    );
+    if (updatedSchool) schoolCache.invalidate(updatedSchool);
+
+    // Audit the backup code regeneration
+    await logAudit({
+      schoolId: school.schoolId || slug,
+      action: 'MFA_BACKUP_CODES_REGENERATED',
+      performedBy: req.admin?.username || req.admin?.email || 'admin',
+      targetId: school._id?.toString() || slug,
+      targetType: 'school',
+      details: {
+        slug,
+        verificationMethod: code ? 'TOTP' : 'password',
+      },
+      result: 'success',
+      severity: 'high',
+    });
+
+    return res.json({
+      message: 'Backup codes regenerated successfully.',
+      backupCodes: newCodes,
+    });
+  } catch (err) {
+    logger.error('[MFA] regenerateBackupCodes error', { error: err.message });
+    return res.status(500).json({ error: 'Failed to regenerate backup codes.', code: 'MFA_REGENERATE_ERROR' });
+  }
+}
+
+/**
  * POST /api/auth/mfa/user/disable
  * Body: { code }
  *
@@ -484,6 +600,7 @@ module.exports = {
   setupMfa,
   verifyAndEnableMfa,
   disableMfa,
+  regenerateBackupCodes,
   setupUserMfa,
   verifyAndEnableUserMfa,
   disableUserMfa,

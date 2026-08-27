@@ -12,7 +12,7 @@
  */
 
 process.env.MONGO_URI  = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET = 'test-secret-for-cache-headers';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const request = require('supertest');
 const jwt     = require('jsonwebtoken');

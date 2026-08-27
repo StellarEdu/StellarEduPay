@@ -13,6 +13,13 @@ const {
   ADMIN_PAYMENT_STATUS_TRANSITIONS,
   isTransitionAllowed,
 } = require('../constants/paymentStatus');
+const logger = require('../utils/logger');
+// Student/emailService/reportCacheInvalidator are required lazily inside the
+// post('save') hook below, not hoisted here: emailService pulls in
+// services/email -> config, which throws at require time if MONGO_URI isn't
+// set. paymentModel.js is required by ~30 unrelated modules (and by tests
+// that never touch email), so eagerly loading that chain would make the
+// model unrequireable outside a fully-configured environment.
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -295,23 +302,31 @@ paymentSchema.pre('save', async function () {
 
 // Issue #669: Send payment receipt email on SUCCESS transition
 paymentSchema.post('save', async function () {
-  try {
-    // Check if status transitioned to SUCCESS
-    const savedState = this.$__ && this.$__.savedState;
-    const originalStatus = savedState ? savedState.status : null;
-    const newStatus = this.status;
+  // Check if status transitioned to SUCCESS
+  const savedState = this.$__ && this.$__.savedState;
+  const originalStatus = savedState ? savedState.status : null;
+  const newStatus = this.status;
 
-    if (originalStatus !== 'SUCCESS' && newStatus === 'SUCCESS') {
-      // Status transitioned to SUCCESS — queue receipt email
-      const Student = require('../models/studentModel');
-      const student = await Student.findOne({
+  if (originalStatus !== 'SUCCESS' && newStatus === 'SUCCESS') {
+    // Status transitioned to SUCCESS — queue receipt email
+    let student;
+    try {
+      const Student = require('./studentModel');
+      student = await Student.findOne({
         schoolId: this.schoolId,
         studentId: this.studentId,
       });
+    } catch (err) {
+      logger.error({
+        msg: 'Failed to look up student for payment receipt email',
+        paymentId: this._id,
+        error: err.message,
+      });
+    }
 
-      if (student && student.parentEmail) {
-        // Queue email via BullMQ (non-blocking)
-        const emailService = require('./emailService');
+    if (student && student.parentEmail) {
+      try {
+        const emailService = require('../services/emailService');
         // Use cumulative totalPaid for accurate remaining balance (issue #1031)
         const totalPaid = student.totalPaid || 0;
         await emailService.sendPaymentReceipt({
@@ -324,20 +339,29 @@ paymentSchema.post('save', async function () {
           confirmedAt: this.confirmedAt,
           remainingBalance: student.feeAmount - totalPaid,
         });
+      } catch (err) {
+        // Log error but don't fail the save, and don't let it block cache invalidation below
+        logger.error({
+          msg: 'Failed to send payment receipt email',
+          paymentId: this._id,
+          error: err.message,
+        });
       }
+    }
 
-      // Invalidate report cache on new successful payments
+    // Invalidate report cache on new successful payments — independent of the
+    // email dispatch above, so a broken email path can never suppress this.
+    try {
       const reportCacheInvalidator = require('../services/reportCacheInvalidator');
       reportCacheInvalidator.invalidate(this.schoolId);
+    } catch (err) {
+      logger.error({
+        msg: 'Failed to invalidate report cache',
+        paymentId: this._id,
+        schoolId: this.schoolId,
+        error: err.message,
+      });
     }
-  } catch (err) {
-    // Log error but don't fail the save
-    const logger = require('../utils/logger');
-    logger.error({
-      msg: 'Failed to queue payment receipt email',
-      paymentId: this._id,
-      error: err.message,
-    });
   }
 });
 

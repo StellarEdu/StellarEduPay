@@ -14,7 +14,7 @@
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET = 'test-jwt-secret-for-extract-valid-payment-suite-1234567890';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const WALLET = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 const USDC_GOOD = 'GBUSDCGOODISSUERAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';

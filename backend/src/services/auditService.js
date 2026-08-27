@@ -107,9 +107,34 @@ async function logAudit({
 
 const MAX_PAGE_SIZE = 200;
 
+/**
+ * Decode a cursor token or return null if invalid.
+ * Cursor format: base64-encoded JSON { createdAt, _id }
+ */
+function _decodeCursor(cursorToken) {
+  if (!cursorToken) return null;
+  try {
+    const json = Buffer.from(cursorToken, 'base64').toString('utf-8');
+    const obj = JSON.parse(json);
+    return obj.createdAt && obj._id ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Encode a cursor token from an audit log entry.
+ */
+function _encodeCursor(entry) {
+  return Buffer.from(JSON.stringify({
+    createdAt: entry.createdAt,
+    _id: entry._id,
+  })).toString('base64');
+}
+
 async function getAuditLogs(filters = {}) {
   const {
-    schoolId, action, targetType, performedBy, result,
+    schoolId, action, targetType, performedBy, result, search,
     startDate, endDate, cursor, page = 1, limit = 50,
   } = filters;
 
@@ -118,6 +143,7 @@ async function getAuditLogs(filters = {}) {
   if (targetType) baseQuery.targetType = targetType;
   if (performedBy) baseQuery.performedBy = performedBy;
   if (result) baseQuery.result = result;
+  if (search) baseQuery.$text = { $search: search };
   if (startDate || endDate) {
     baseQuery.createdAt = {};
     if (startDate) baseQuery.createdAt.$gte = new Date(startDate);
@@ -125,11 +151,10 @@ async function getAuditLogs(filters = {}) {
   }
 
   const actualLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), MAX_PAGE_SIZE);
-  const actualPage  = Math.max(parseInt(page,  10) || 1, 1);
-  const skip = (actualPage - 1) * actualLimit;
 
   let indexHint;
-  if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
+  if (search)            indexHint = 'details_text';
+  else if (action)       indexHint = { schoolId: 1, action: 1, createdAt: -1 };
   else if (performedBy) indexHint = { schoolId: 1, performedBy: 1, createdAt: -1 };
   else if (targetType)  indexHint = { schoolId: 1, targetType: 1, createdAt: -1 };
   else              indexHint = { schoolId: 1, createdAt: -1 };
@@ -137,7 +162,7 @@ async function getAuditLogs(filters = {}) {
   const [logs, total] = await Promise.all([
     AuditLog.find(baseQuery)
       .hint(indexHint)
-      .sort({ createdAt: -1 })
+      .sort(search ? { score: { $meta: 'textScore' } } : { createdAt: -1 })
       .skip(skip)
       .limit(actualLimit)
       .lean(),
