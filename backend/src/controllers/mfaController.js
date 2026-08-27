@@ -392,6 +392,24 @@ async function verifyAndEnableUserMfa(req, res) {
       severity: 'high',
     });
 
+    // #1356 — REQUIRE_MFA: this request's token may have been a restricted
+    // mfaSetupPending token. Reissue the access-token cookie without that
+    // flag so the just-completed setup takes effect immediately, without
+    // forcing the admin to log in again.
+    if (req.user?.mfaSetupPending) {
+      const jwt = require('jsonwebtoken');
+      const { role, userId: uid, schoolId, roles } = req.user;
+      const accessTTL = parseInt(process.env.JWT_ACCESS_TOKEN_TTL, 10) || 8 * 3600;
+      const newToken = jwt.sign({ role, userId: uid, schoolId, roles }, process.env.JWT_SECRET, { expiresIn: accessTTL });
+      res.cookie('admin_token', newToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: accessTTL * 1000,
+        path: '/',
+      });
+    }
+
     return res.json({ message: 'MFA enabled successfully.' });
   } catch (err) {
     logger.error('[MFA] verifyAndEnableUserMfa error', { error: err.message });

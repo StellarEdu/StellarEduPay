@@ -1,5 +1,15 @@
 # Security
 
+## MFA enforcement (`REQUIRE_MFA`)
+
+By default, TOTP MFA is opt-in per user (`User.mfaEnabled`) or per school (`School.mfaEnabled`) — a compromised admin password alone grants full access unless MFA was actively set up.
+
+Setting `REQUIRE_MFA=true` closes this gap: on login, an admin with no MFA configured (neither their own nor their school's) receives a **restricted** session token instead of full access. `requireSchoolAuth` (`backend/src/middleware/auth.js`) rejects every request from a restricted token except the MFA enrollment endpoints (`POST /api/auth/mfa/user/setup`, `POST /api/auth/mfa/user/verify`) with `403 MFA_SETUP_REQUIRED`, so the frontend must complete enrollment before any protected endpoint becomes reachable. Once `POST /api/auth/mfa/user/verify` succeeds, the restriction is lifted for the current session immediately.
+
+The login response includes `mfaSetupRequired: true` when this restricted session is issued, which the frontend uses to redirect to the MFA setup flow instead of the dashboard.
+
+`REQUIRE_MFA` does not apply to the environment-configured super-admin break-glass account, which is not backed by the `User`/`School` MFA fields.
+
 ## Credential rotation
 
 JWT secrets and the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`) have scripted

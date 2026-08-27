@@ -96,6 +96,10 @@ export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
 
+// MFA enrollment (#1356)
+export const setupUserMfa = () => api.post("/auth/mfa/user/setup");
+export const verifyUserMfa = (data) => api.post("/auth/mfa/user/verify", data);
+
 // Audit logs
 export const getRecentAuditLogs = (limit = 10) =>
   api.get("/audit-logs/recent", { params: { limit } });
