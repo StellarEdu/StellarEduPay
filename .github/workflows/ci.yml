@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      MONGO_URI: mongodb://localhost:27017/stellaredupay_test
+      MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
       JWT_SECRET: ci-test-jwt-secret-not-used-in-production
       SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
     services:
@@ -206,11 +206,17 @@ jobs:
         image: mongo:7
         ports:
           - 27017:27017
+        # Single-node replica set ("rs0") — REQUIRED for multi-document MongoDB
+        # transactions (payment recording, fee batch apply, TransactionManager).
+        # Transactional tests fail against a standalone mongod with "Transaction
+        # numbers are only allowed on a replica set member or mongos".
         options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand({ping:1})'"
+          --replSet rs0
+          --health-cmd "mongosh --quiet --eval 'try { if (rs.status().ok !== 1) { throw new Error(\"rs not initiated\"); } } catch (e) { try { rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"localhost:27017\" }] }); } catch (e2) {} process.exit(1); } if (!db.hello().isWritablePrimary) { process.exit(1); }'"
           --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-timeout 10s
+          --health-retries 12
+          --health-start-period 20s
     steps:
       - uses: actions/checkout@v7
 
@@ -233,11 +239,9 @@ jobs:
       - run: cd frontend && npm ci && cd ..
 
       - name: Backend coverage
-        continue-on-error: true
         run: npm run coverage
 
       - name: Frontend coverage
-        continue-on-error: true
         run: npm run coverage:frontend
 
       - name: Upload backend coverage
