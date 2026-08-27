@@ -4,7 +4,7 @@
 // to enable EventSource (which cannot send custom headers like X-School-ID)
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET = 'test-secret-key';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const jwt = require('jsonwebtoken');
 const { requireSchoolAuth } = require('../backend/src/middleware/auth');

@@ -33,6 +33,7 @@ const https   = require("https");
 const Decimal = require("decimal.js");
 const client = require("prom-client");
 const { getRedisClient, isRedisReady } = require("../config/redisClient");
+const { CircuitBreaker, CB_STATE } = require("../utils/circuitBreaker");
 const logger = require("../utils/logger").child("CurrencyConversion");
 
 // ── Per-currency decimal precision (ISO 4217) ─────────────────────────────────
@@ -158,6 +159,9 @@ let priceFeedAvailable;
 let priceFeedStaleness;
 let priceFeedLastSuccessTimestamp;
 let priceFeedStale;
+let currencyConversionCbTransitions;
+let currencyConversionCbState;
+let currencyConversionCbFailures;
 
 function _initMetrics() {
   if (_metricsInitialized) return;
@@ -199,6 +203,28 @@ function _initMetrics() {
       registers: [registry],
     });
 
+    // Circuit breaker metrics
+    currencyConversionCbTransitions = new client.Counter({
+      name: "currency_conversion_circuit_breaker_transitions_total",
+      help: "Number of circuit-breaker state transitions per price feed provider",
+      labelNames: ["provider", "from_state", "to_state"],
+      registers: [registry],
+    });
+
+    currencyConversionCbState = new client.Gauge({
+      name: "currency_conversion_circuit_breaker_state",
+      help: "Circuit-breaker state per price feed provider: 0=closed 1=open 2=half_open",
+      labelNames: ["provider"],
+      registers: [registry],
+    });
+
+    currencyConversionCbFailures = new client.Gauge({
+      name: "currency_conversion_circuit_breaker_failures",
+      help: "Consecutive failures tracked per price feed provider circuit breaker",
+      labelNames: ["provider"],
+      registers: [registry],
+    });
+
     _metricsInitialized = true;
   } catch (_) {
     // metrics/index not loaded yet — will be initialized lazily on first use
@@ -222,6 +248,25 @@ function _recordLastSuccess(provider) {
   _initMetrics();
   if (priceFeedLastSuccessTimestamp) {
     priceFeedLastSuccessTimestamp.set({ provider }, Math.floor(Date.now() / 1000));
+  }
+}
+
+function _recordCbStateChange(provider, oldState, newState) {
+  _initMetrics();
+  if (currencyConversionCbTransitions) {
+    currencyConversionCbTransitions.inc({ provider, from_state: oldState, to_state: newState });
+  }
+  if (currencyConversionCbState) {
+    const cb = provider === "coingecko" ? _cbCoingecko : _cbCoinbase;
+    if (cb) currencyConversionCbState.set({ provider }, cb.getStateNum());
+  }
+}
+
+function _recordCbFailures(provider) {
+  _initMetrics();
+  if (currencyConversionCbFailures) {
+    const cb = provider === "coingecko" ? _cbCoingecko : _cbCoinbase;
+    if (cb) currencyConversionCbFailures.set({ provider }, cb.getFailures());
   }
 }
 
@@ -285,6 +330,42 @@ class LruMap {
 }
 
 const _localCache = new LruMap(CURRENCY_LRU_MAX_SIZE);
+
+// ── Circuit breakers (per-provider degradation handling) ─────────────────────
+const CB_CONFIG = {
+  failureThreshold: parseInt(process.env.CURRENCY_CB_FAILURE_THRESHOLD || "3", 10),
+  resetTimeoutMs: parseInt(process.env.CURRENCY_CB_RESET_TIMEOUT_MS || "60000", 10),
+  successThreshold: parseInt(process.env.CURRENCY_CB_SUCCESS_THRESHOLD || "2", 10),
+};
+
+let _cbCoingecko;
+let _cbCoinbase;
+
+function _initializeCircuitBreakers() {
+  _cbCoingecko = new CircuitBreaker("coingecko_price_feed", {
+    failureThreshold: CB_CONFIG.failureThreshold,
+    resetTimeoutMs: CB_CONFIG.resetTimeoutMs,
+    successThreshold: CB_CONFIG.successThreshold,
+    onStateChange: (oldState, newState) => {
+      logger.warn("CoinGecko circuit breaker state change", { oldState, newState });
+      try {
+        _recordCbStateChange("coingecko", oldState, newState);
+      } catch (_) {}
+    },
+  });
+
+  _cbCoinbase = new CircuitBreaker("coinbase_exchange_rates", {
+    failureThreshold: CB_CONFIG.failureThreshold,
+    resetTimeoutMs: CB_CONFIG.resetTimeoutMs,
+    successThreshold: CB_CONFIG.successThreshold,
+    onStateChange: (oldState, newState) => {
+      logger.warn("Coinbase circuit breaker state change", { oldState, newState });
+      try {
+        _recordCbStateChange("coinbase", oldState, newState);
+      } catch (_) {}
+    },
+  });
+}
 
 // ── In-flight deduplication ──────────────────────────────────────────────────
 const _inFlight = new Map();
@@ -454,23 +535,36 @@ async function _writeCache(key, entry) {
 // ── Core fetch with provider failover ────────────────────────────────────────
 
 async function _fetchRates(currency) {
+  // Initialize circuit breakers on first call
+  if (!_cbCoingecko) _initializeCircuitBreakers();
+
   // Try CoinGecko first, fall back to Coinbase.
   const providers = [
-    { name: "coingecko",  fetch: () => _fetchFromCoinGecko(currency)  },
-    { name: "coinbase",   fetch: () => _fetchFromCoinbase(currency)   },
+    { name: "coingecko", cb: _cbCoingecko, fetch: () => _fetchFromCoinGecko(currency) },
+    { name: "coinbase", cb: _cbCoinbase, fetch: () => _fetchFromCoinbase(currency) },
   ];
 
-  for (const { name, fetch } of providers) {
+  for (const { name, cb, fetch } of providers) {
+    // Skip provider if circuit breaker is open
+    if (!cb.isAvailable()) {
+      logger.warn("Price feed provider circuit breaker is open, skipping", { provider: name });
+      continue;
+    }
+
     try {
       const rates = await fetch();
       const now = Date.now();
       _recordAvailable(name, true);
       _recordStaleness(name, now);
       _recordLastSuccess(name);
+      cb.recordSuccess();
+      _recordCbFailures(name);
       logger.info("Price feed fetch succeeded", { provider: name, currency });
       return { rates, fetchedAt: now, lastSuccessfulFetch: now, provider: name };
     } catch (err) {
       _recordAvailable(name, false);
+      cb.recordFailure();
+      _recordCbFailures(name);
       logger.warn("Price feed provider failed", { provider: name, currency, error: err.message });
     }
   }
@@ -493,6 +587,20 @@ async function getRates(currency) {
   const cached = await _readCache(key);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached;
+  }
+
+  // Initialize circuit breakers on first call
+  if (!_cbCoingecko) _initializeCircuitBreakers();
+
+  // If both circuit breakers are open, immediately return stale cache rather than
+  // waiting for the network timeout (stale-while-revalidate engagement).
+  const bothCircuitsOpen = !_cbCoingecko.isAvailable() && !_cbCoinbase.isAvailable();
+  if (bothCircuitsOpen && cached) {
+    const staleAge = Math.floor((Date.now() - cached.lastSuccessfulFetch) / 1000);
+    if (Date.now() - cached.lastSuccessfulFetch < PRICE_STALE_THRESHOLD_MS) {
+      logger.warn("Both providers unavailable (CB open), serving stale rate immediately", { currency: key, staleAge });
+      return { ...cached, stale: true, staleAge };
+    }
   }
 
   // Deduplicate concurrent requests.

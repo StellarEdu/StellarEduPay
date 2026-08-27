@@ -12,7 +12,7 @@
  */
 
 process.env.MONGO_URI    = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET   = 'test-secret';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 process.env.SMTP_HOST    = 'smtp.example.com';
 process.env.SMTP_USER    = 'user';
 process.env.SMTP_PASS    = 'pass';

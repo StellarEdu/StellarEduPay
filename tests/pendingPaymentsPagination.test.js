@@ -7,7 +7,7 @@
 // Set required env vars
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-secret';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 // Mock payment model
 let _mockDocs = [];

@@ -4,7 +4,7 @@ const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
 const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession } = require('../controllers/authController');
 const {
-  setupMfa, verifyAndEnableMfa, disableMfa,
+  setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
 } = require('../controllers/mfaController');
 const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
@@ -33,6 +33,7 @@ router.delete('/sessions/:sessionId', requireAdminAuth, handleRevokeSession);
 router.post('/mfa/setup',   requireAdminAuth, setupMfa);
 router.post('/mfa/verify',  requireAdminAuth, verifyAndEnableMfa);
 router.post('/mfa/disable', requireAdminAuth, disableMfa);
+router.post('/mfa/backup-codes/regenerate', requireAdminAuth, regenerateBackupCodes);
 
 // ── User-level TOTP / MFA routes (any authenticated user) ────────────────────
 router.post('/mfa/user/setup',   requireSchoolAuth(), setupUserMfa);

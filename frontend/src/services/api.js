@@ -96,6 +96,12 @@ export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
 
+// Refunds
+export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
+export const approveRefund = (refundId, data) => api.post(`/payments/refunds/${refundId}/approve`, data);
+export const getPaymentRefunds = (txHash) => api.get(`/payments/${txHash}/refunds`);
+export const getSchoolRefunds = (params = {}) => api.get("/payments/refunds/school/list", { params });
+
 // Audit logs
 export const getRecentAuditLogs = (limit = 10) =>
   api.get("/audit-logs/recent", { params: { limit } });

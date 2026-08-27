@@ -190,6 +190,47 @@ services:
       - backend-db
     restart: unless-stopped
 
+  # mongo-verify — disposable MongoDB instance used only to restore-test the
+  # latest nightly backup. Never receives production traffic. See issue #1343.
+  mongo-verify:
+    image: mongo:7
+    networks:
+      - backend-db
+    restart: unless-stopped
+
+  # backup-verify — weekly job that restores the most recent backup archive
+  # into mongo-verify (never into production) and compares document counts
+  # against production, closing the gap where a corrupted backup would
+  # otherwise only be discovered during an actual disaster recovery. See
+  # issue #1343.
+  backup-verify:
+    image: mongo:7
+    entrypoint: >
+      /bin/bash -c '
+        while true; do
+          echo "[backup-verify] $(date -u) — starting weekly backup verification";
+          bash /scripts/verify-latest-backup.sh || echo "[backup-verify] FAILED";
+          sleep 604800;
+        done
+      '
+    environment:
+      - BACKUP_DIR=/backups
+      - PROD_MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:?MONGO_ROOT_USERNAME must be set}:${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD must be set}@mongo:27017/stellaredupay?authSource=admin&replicaSet=rs0
+      - TEMP_MONGO_URI=mongodb://mongo-verify:27017/stellaredupay
+      - BACKUP_NOTIFY_TOKEN=${BACKUP_NOTIFY_TOKEN:-}
+      - BACKEND_INTERNAL_URL=http://backend:5000
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups:ro
+      - ./scripts:/scripts:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-verify:
+        condition: service_started
+    networks:
+      - backend-db
+    restart: unless-stopped
+
 volumes:
   mongo_data:
 

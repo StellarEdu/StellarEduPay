@@ -35,6 +35,14 @@ const reminderLogSchema = new mongoose.Schema(
     },
 
     error: { type: String, default: null },
+
+    channels: {
+      type: [String],
+      enum: ['email', 'sms', 'whatsapp'],
+      default: [],
+    },
+
+    escalationLevel: { type: Number, default: 1 },
   },
   {
     timestamps: true,

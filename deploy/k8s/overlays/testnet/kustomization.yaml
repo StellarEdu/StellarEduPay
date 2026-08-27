@@ -4,8 +4,27 @@ kind: Kustomization
 # Staging / testnet overlay.
 # Apply with: kubectl apply -k deploy/k8s/overlays/testnet
 #
-# Image tags are pinned to an immutable commit SHA from CI.
-# Update newTag when promoting a validated build.
+# Image Promotion Workflow:
+#
+#   1. CI pipeline builds images on merge to main and tags them with commit SHA.
+#      Example: stellaredupay/backend:sha-abc1234
+#
+#   2. Update newTag below to promote the validated build to testnet.
+#      Example: newTag: sha-abc1234
+#
+#   3. Commit and deploy: kubectl apply -k deploy/k8s/overlays/testnet
+#
+#   4. Once tested in testnet, promote the same SHA to mainnet overlay.
+#
+# Private Registry:
+#
+#   If using a private registry, uncomment imagePullSecrets and ensure the
+#   secret exists in the cluster:
+#
+#     kubectl create secret docker-registry regcred \
+#       --docker-server=your.registry.com \
+#       --docker-username=<username> \
+#       --docker-password=<password>
 
 resources:
   - ../../
@@ -15,6 +34,10 @@ images:
     newTag: sha-PLACEHOLDER
   - name: stellaredupay/frontend
     newTag: sha-PLACEHOLDER
+
+# Uncomment for private registries:
+# imagePullSecrets:
+#   - name: regcred
 
 patches:
   - patch: |-

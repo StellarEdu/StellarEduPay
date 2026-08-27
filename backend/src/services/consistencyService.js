@@ -5,17 +5,44 @@ const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const School = require('../models/schoolModel');
 
+const CHAIN_PAGE_SIZE = 200;
+const CHAIN_MAX_PAGES = 50; // hard ceiling so a stuck cursor can't loop forever
+const DEFAULT_CHAIN_LOOKBACK_DAYS = parseInt(process.env.RECONCILIATION_CHAIN_LOOKBACK_DAYS, 10) || 90;
+
 /**
- * Fetch up to 200 transactions for a given wallet address from Horizon.
+ * Fetch transactions for a given wallet address from Horizon, paging with a
+ * cursor (consistent with transactionPollingService) instead of a single
+ * 200-record page. Stops once transactions older than `lookbackDays` are
+ * reached, so large, long-lived wallets don't get scanned back to genesis.
+ *
  * @param {string} walletAddress
+ * @param {{ lookbackDays?: number }} [options] lookbackDays <= 0 disables the window.
  */
-async function fetchChainTransactions(walletAddress) {
-  const result = await server.transactions()
-    .forAccount(walletAddress)
-    .order('desc')
-    .limit(200)
-    .call();
-  return result.records;
+async function fetchChainTransactions(walletAddress, { lookbackDays = DEFAULT_CHAIN_LOOKBACK_DAYS } = {}) {
+  const cutoff = lookbackDays > 0 ? Date.now() - lookbackDays * 24 * 60 * 60 * 1000 : null;
+  const records = [];
+  let cursor = null;
+
+  for (let page = 0; page < CHAIN_MAX_PAGES; page++) {
+    let builder = server.transactions().forAccount(walletAddress).order('desc').limit(CHAIN_PAGE_SIZE);
+    if (cursor) builder = builder.cursor(cursor);
+
+    const result = await builder.call();
+    const batch = result.records || [];
+    if (batch.length === 0) break;
+
+    for (const tx of batch) {
+      if (cutoff && new Date(tx.created_at).getTime() < cutoff) {
+        return records; // reached the lookback boundary — stop paginating
+      }
+      records.push(tx);
+      cursor = tx.paging_token;
+    }
+
+    if (batch.length < CHAIN_PAGE_SIZE) break; // drained
+  }
+
+  return records;
 }
 
 /**

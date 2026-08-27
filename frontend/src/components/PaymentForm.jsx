@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
-import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentPlan } from "../services/api";
+import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
@@ -46,8 +46,9 @@ function InfoRow({ label, children }) {
   );
 }
 
-export default function PaymentForm() {
-  const [studentId, setStudentId]             = useState("");
+export default function PaymentForm({ initialStudentId = "" }) {
+  const [studentId, setStudentId]             = useState(initialStudentId);
+  const [shareCopied, setShareCopied]         = useState(false);
   const [student, setStudent]                 = useState(null);
   const [instructions, setInstructions]       = useState(null);
   const [payments, setPayments]               = useState(null);
@@ -60,6 +61,7 @@ export default function PaymentForm() {
   const [balanceError, setBalanceError]         = useState(false);
   const [disputingTx, setDisputingTx]           = useState(null);
   const [disputedTxs, setDisputedTxs]         = useState(new Set());
+  const [refunds, setRefunds]                 = useState({}); // txHash -> refund
   // #1118 — wallets that cannot send free-text memos can switch the QR code to
   // MEMO_ID or MEMO_HASH; all three decode back to the same payment reference.
   const [memoType, setMemoType]               = useState("MEMO_TEXT");
@@ -115,11 +117,29 @@ export default function PaymentForm() {
         }),
         getPaymentPlan(id, { signal }).catch(() => null),
       ]);
-      if (stuRes.status === 'fulfilled') setStudent(stuRes.value.data);
-      if (instrRes.status === 'fulfilled') setInstructions(instrRes.value.data);
-      if (payRes.status === 'fulfilled') setPayments(payRes.value.data?.payments ?? payRes.value.data ?? []);
-      if (balRes.status === 'fulfilled') setHasDeletedPayments(balRes.value?.data?.hasDeletedPayments === true);
-      if (planRes.status === 'fulfilled' && planRes.value?.data) setPaymentPlan(planRes.value.data);
+      setStudent(stuRes.data);
+      setInstructions(instrRes.data);
+      const paymentsList = payRes.data?.payments ?? payRes.data ?? [];
+      setPayments(paymentsList);
+      setHasDeletedPayments(balRes?.data?.hasDeletedPayments === true);
+      // Fetch refunds for each payment
+      const newRefunds = {};
+      for (const p of paymentsList) {
+        if (p.txHash) {
+          try {
+            const refundsRes = await getPaymentRefunds(p.txHash);
+            const refundList = Array.isArray(refundsRes.data) ? refundsRes.data : refundsRes.data?.refunds || [];
+            if (refundList.length > 0) {
+              newRefunds[p.txHash] = refundList[0]; // Get the most recent refund
+            }
+          } catch (e) {
+            // Silently skip if refund fetch fails for this payment
+          }
+        }
+      }
+      if (Object.keys(newRefunds).length > 0) {
+        setRefunds(newRefunds);
+      }
     } catch (err) {
       // Axios names aborted requests "CanceledError" (axios ≥ 1.x) with code
       // "ERR_CANCELED".  Silently ignore them — a newer request is already
@@ -139,6 +159,23 @@ export default function PaymentForm() {
       }
     }
   }, []);
+
+  // #1344 — a bookmarked/shared /pay/:studentId URL pre-fills the lookup so a
+  // parent doesn't have to retype the student ID on every visit.
+  useEffect(() => {
+    if (initialStudentId?.trim()) lookupStudent(initialStudentId);
+  }, [initialStudentId, lookupStudent]);
+
+  function sharePaymentUrl(id) {
+    return `${window.location.origin}/pay/${encodeURIComponent(id)}`;
+  }
+
+  async function copyShareLink() {
+    if (!student?.studentId) return;
+    await navigator.clipboard.writeText(sharePaymentUrl(student.studentId)).catch(() => {});
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 2000);
+  }
 
   const retryBalance = useCallback(async () => {
     if (!studentId.trim()) return;
@@ -290,32 +327,19 @@ export default function PaymentForm() {
                 </span>
               </InfoRow>
 
-              {/* Payment Plan Info */}
-              {paymentPlan && (
-                <>
-                  <div style={{ marginTop: "0.875rem", paddingTop: "0.875rem", borderTop: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.625rem", textTransform: "uppercase" }}>
-                      Payment Plan
-                    </div>
-                    <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
-                      <strong>Status:</strong> <span style={{ textTransform: "capitalize", color: paymentPlan.status === "active" ? "var(--success)" : "var(--warning)" }}>
-                        {paymentPlan.status}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
-                      <strong>Progress:</strong> {paymentPlan.completedInstallments || 0} of {paymentPlan.installments?.length || 0} installments paid
-                    </div>
-                    <div style={{ fontSize: "0.875rem", marginBottom: "0.625rem" }}>
-                      <strong>Remaining:</strong> {(paymentPlan.remainingBalance || 0).toFixed(2)} XLM
-                    </div>
-                    {paymentPlan.nextDueDate && (
-                      <div style={{ fontSize: "0.875rem", marginBottom: "0.625rem" }}>
-                        <strong>Next Due:</strong> {new Date(paymentPlan.nextDueDate).toLocaleDateString()}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
+              {/* #1344 — bookmarkable/shareable payment link for this student */}
+              <div style={{ marginTop: "0.875rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                <button type="button" onClick={copyShareLink} className="btn btn-sm btn-ghost" style={{ alignSelf: "flex-start", gap: "0.3rem" }}>
+                  {shareCopied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                  {shareCopied ? "Link copied!" : "Share payment link"}
+                </button>
+                <div className="pf-code-row">
+                  <span className="pf-code">{sharePaymentUrl(student.studentId)}</span>
+                </div>
+                <div style={{ background: "#fff", padding: "0.5rem", borderRadius: "8px", alignSelf: "flex-start" }}>
+                  <QRCodeSVG value={sharePaymentUrl(student.studentId)} size={96} />
+                </div>
+              </div>
 
               {/* Wallet address */}
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>
@@ -471,16 +495,31 @@ export default function PaymentForm() {
                 const badge = STATUS_BADGE[st] || STATUS_BADGE.unknown;
                 const canDispute = st === "valid" || st === "overpaid";
                 const alreadyDisputed = disputedTxs.has(p.txHash);
+                const refund = refunds[p.txHash];
+                const refundStatusStyles = {
+                  approval_pending: { cls: "badge badge-warning", label: "Refund: Awaiting Approval" },
+                  pending: { cls: "badge badge-info", label: "Refund: Pending" },
+                  submitted: { cls: "badge badge-primary", label: "Refund: Submitted" },
+                  confirmed: { cls: "badge badge-success", label: "Refund: Confirmed" },
+                  failed: { cls: "badge badge-danger", label: "Refund: Failed" },
+                };
                 return (
                   <div key={p.txHash || i} className="pf-payment-item">
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.4rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.4rem", flexWrap: "wrap", gap: "0.5rem" }}>
                       <strong style={{ fontSize: "0.9rem" }}>
                         {p.amount}{" "}
                         <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
                           {p.assetCode || "XLM"}
                         </span>
                       </strong>
-                      <span className={badge.cls}>{badge.label}</span>
+                      <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
+                        <span className={badge.cls}>{badge.label}</span>
+                        {refund && (
+                          <span className={refundStatusStyles[refund.status]?.cls || "badge badge-neutral"}>
+                            {refundStatusStyles[refund.status]?.label || `Refund: ${refund.status}`}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem", wordBreak: "break-all" }}>
                       {p.txHash}

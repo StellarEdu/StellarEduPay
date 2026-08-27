@@ -1,7 +1,7 @@
 'use strict';
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-process.env.JWT_SECRET = 'test-secret-key-for-route-auth-coverage';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const studentRoutes = require('../backend/src/routes/studentRoutes');
 const feeRoutes = require('../backend/src/routes/feeRoutes');

@@ -75,13 +75,23 @@ async function healthCheck(req, res) {
   let overallStatus = 'healthy';
   let statusCode = 200;
 
+  // If the background poller has had Horizon unreachable for longer than its
+  // own max backoff window, no payments have synced since startup or the
+  // outage began — surface that explicitly rather than letting a healthy DB
+  // mask it. See issue #1340.
+  const POLL_MAX_BACKOFF_MS = parseInt(process.env.POLL_MAX_BACKOFF_MS || '300000', 10);
+  const { getHorizonUnreachableSince } = require('../services/transactionPollingService');
+  const horizonUnreachableSinceMs = getHorizonUnreachableSince();
+  const horizonUnreachableTooLong =
+    horizonUnreachableSinceMs !== null && Date.now() - horizonUnreachableSinceMs > POLL_MAX_BACKOFF_MS;
+
   if (db.healthy !== true) {
     overallStatus = 'unhealthy';
     statusCode = 503;
   } else if (redisConfigured && redisStatus.status !== 'ready') {
     overallStatus = 'degraded';
     statusCode = 200;
-  } else if (stellar.status !== 'ok') {
+  } else if (stellar.status !== 'ok' || horizonUnreachableTooLong) {
     overallStatus = 'degraded';
     statusCode = 200; // Still return 200 since DB is up and cached data can be served
   }
@@ -156,6 +166,9 @@ async function healthCheck(req, res) {
           resetTimeoutMs: CB_RESET_TIMEOUT_MS,
           halfOpenSuccessThreshold: CB_HALF_OPEN_SUCCESS_THRESHOLD,
         },
+        ...(horizonUnreachableSinceMs !== null && {
+          horizonUnreachableSince: new Date(horizonUnreachableSinceMs).toISOString(),
+        }),
       },
       paymentProcessor: {
         queueDepth,
