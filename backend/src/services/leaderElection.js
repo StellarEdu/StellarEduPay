@@ -86,7 +86,33 @@ function _stopAcquire() {
 async function start() {
   if (_running) return;
   _running = true;
+
+  const redisEnabled = Boolean(process.env.REDIS_HOST);
+  const replicaCount = parseInt(process.env.REPLICA_COUNT || '1', 10);
+
+  if (!redisEnabled && replicaCount > 1) {
+    logger.error(
+      '[CRITICAL] Leader election: REDIS_HOST is not configured, but REPLICA_COUNT > 1. ' +
+      'Refusing to start leader election without distributed locks. ' +
+      'In a multi-replica deployment without Redis, every replica will believe it is the leader ' +
+      'and all leader-only schedulers will run N times per cycle, causing duplicate reminders, ' +
+      'duplicate audit logs, race conditions in reconciliation, and other data consistency issues. ' +
+      'Set REDIS_HOST immediately for production deployments with multiple replicas.'
+    );
+    _running = false;
+    throw new Error('Leader election requires Redis when REPLICA_COUNT > 1');
+  }
+
+  if (!redisEnabled && replicaCount > 1) {
+    logger.warn(
+      '[CRITICAL] Leader election starting without Redis in multi-replica mode. ' +
+      'This is a production configuration error. All replicas will think they are the leader.'
+    );
+  }
+
   logger.info('Starting leader election', {
+    redisEnabled,
+    replicaCount,
     lockTtlMs: LEADER_LOCK_TTL_MS,
     renewIntervalMs: LEADER_RENEW_INTERVAL_MS,
     acquireIntervalMs: LEADER_ACQUIRE_INTERVAL_MS,
