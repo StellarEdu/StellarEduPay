@@ -115,3 +115,13 @@ export const deleteFeeAdjustmentRule = (id, schoolId) =>
 // School settings
 export const getSchool = (slug) => api.get(`/schools/${slug}`);
 export const updateSchool = (slug, data) => api.patch(`/schools/${slug}`, data);
+
+// Payment plans
+export const createPaymentPlan = (studentId, data) =>
+  api.post(`/payment-plans/${studentId}`, data);
+export const getPaymentPlan = (studentId) =>
+  api.get(`/payment-plans/${studentId}`);
+export const updateInstallment = (studentId, installmentIndex, data) =>
+  api.patch(`/payment-plans/${studentId}/installment/${installmentIndex}`, data);
+export const cancelPaymentPlan = (studentId) =>
+  api.delete(`/payment-plans/${studentId}`);

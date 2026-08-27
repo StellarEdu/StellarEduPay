@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
-import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance } from "../services/api";
+import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentPlan } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
@@ -51,6 +51,7 @@ export default function PaymentForm() {
   const [student, setStudent]                 = useState(null);
   const [instructions, setInstructions]       = useState(null);
   const [payments, setPayments]               = useState(null);
+  const [paymentPlan, setPaymentPlan]         = useState(null);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [error, setError]                     = useState("");
   const [loading, setLoading]                 = useState(false);
@@ -95,13 +96,14 @@ export default function PaymentForm() {
     setStudent(null);
     setInstructions(null);
     setPayments(null);
+    setPaymentPlan(null);
     setHasDeletedPayments(false);
     setBalanceError(false);
     setLoading(true);
     setPaymentsLoading(true);
     try {
       const signal = controller.signal;
-      const [stuRes, instrRes, payRes, balRes] = await Promise.all([
+      const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
         getStudent(id, { signal }),
         getPaymentInstructions(id, { signal }),
         getStudentPayments(id, { signal }),
@@ -111,11 +113,13 @@ export default function PaymentForm() {
           setBalanceError(true);
           return null;
         }),
+        getPaymentPlan(id, { signal }).catch(() => null),
       ]);
-      setStudent(stuRes.data);
-      setInstructions(instrRes.data);
-      setPayments(payRes.data?.payments ?? payRes.data ?? []);
-      setHasDeletedPayments(balRes?.data?.hasDeletedPayments === true);
+      if (stuRes.status === 'fulfilled') setStudent(stuRes.value.data);
+      if (instrRes.status === 'fulfilled') setInstructions(instrRes.value.data);
+      if (payRes.status === 'fulfilled') setPayments(payRes.value.data?.payments ?? payRes.value.data ?? []);
+      if (balRes.status === 'fulfilled') setHasDeletedPayments(balRes.value?.data?.hasDeletedPayments === true);
+      if (planRes.status === 'fulfilled' && planRes.value?.data) setPaymentPlan(planRes.value.data);
     } catch (err) {
       // Axios names aborted requests "CanceledError" (axios ≥ 1.x) with code
       // "ERR_CANCELED".  Silently ignore them — a newer request is already
@@ -285,6 +289,33 @@ export default function PaymentForm() {
                   {student.feePaid ? "Paid" : "Unpaid"}
                 </span>
               </InfoRow>
+
+              {/* Payment Plan Info */}
+              {paymentPlan && (
+                <>
+                  <div style={{ marginTop: "0.875rem", paddingTop: "0.875rem", borderTop: "1px solid var(--border)" }}>
+                    <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.625rem", textTransform: "uppercase" }}>
+                      Payment Plan
+                    </div>
+                    <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+                      <strong>Status:</strong> <span style={{ textTransform: "capitalize", color: paymentPlan.status === "active" ? "var(--success)" : "var(--warning)" }}>
+                        {paymentPlan.status}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+                      <strong>Progress:</strong> {paymentPlan.completedInstallments || 0} of {paymentPlan.installments?.length || 0} installments paid
+                    </div>
+                    <div style={{ fontSize: "0.875rem", marginBottom: "0.625rem" }}>
+                      <strong>Remaining:</strong> {(paymentPlan.remainingBalance || 0).toFixed(2)} XLM
+                    </div>
+                    {paymentPlan.nextDueDate && (
+                      <div style={{ fontSize: "0.875rem", marginBottom: "0.625rem" }}>
+                        <strong>Next Due:</strong> {new Date(paymentPlan.nextDueDate).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
 
               {/* Wallet address */}
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>
