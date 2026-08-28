@@ -96,7 +96,10 @@ const app = express();
 // Trust the number of proxy hops configured via TRUSTED_PROXY_HOPS (default: 1).
 // This ensures Express derives req.ip from the correct X-Forwarded-For entry
 // rather than trusting client-supplied headers, which would allow rate-limit bypass.
-app.set('trust proxy', parseInt(process.env.TRUSTED_PROXY_HOPS || '1', 10));
+// Reuses config's already-validated value instead of re-parsing process.env
+// directly, so a malformed TRUSTED_PROXY_HOPS fails fast at config load
+// (see config/index.js) instead of silently becoming NaN here.
+app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(cors({
