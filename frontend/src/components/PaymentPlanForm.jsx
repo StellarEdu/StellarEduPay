@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { createPaymentPlan, getPaymentPlan, cancelPaymentPlan } from "../services/api";
 import { IconAlertTriangle, IconCheck, IconX } from "./Icons";
 
 export default function PaymentPlanForm({ student, onClose, onSave }) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState("view"); // "view", "create", or "cancel"
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,11 +17,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
   const [installments, setInstallments] = useState([]);
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    loadPaymentPlan();
-  }, [student?.studentId]);
-
-  async function loadPaymentPlan() {
+  const loadPaymentPlan = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -31,12 +29,16 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
         setPlan(null);
         setMode("create");
       } else {
-        setError("Failed to load payment plan");
+        setError(t("paymentPlan.failedToLoad"));
       }
     } finally {
       setLoading(false);
     }
-  }
+  }, [student?.studentId, t]);
+
+  useEffect(() => {
+    loadPaymentPlan();
+  }, [loadPaymentPlan]);
 
   function generateInstallments(amount, count) {
     const numCount = Math.max(1, Math.min(12, parseInt(count, 10) || 1));
@@ -89,18 +91,18 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
     setSuccess("");
 
     if (!totalAmount || totalAmount <= 0) {
-      setError("Total amount must be greater than 0");
+      setError(t("paymentPlan.totalAmountPositive"));
       return;
     }
 
     if (installments.length === 0) {
-      setError("At least one installment is required");
+      setError(t("paymentPlan.installmentsRequired"));
       return;
     }
 
     const validInstallments = installments.every(inst => inst.amount > 0 && inst.dueDate);
     if (!validInstallments) {
-      setError("All installments must have an amount and due date");
+      setError(t("paymentPlan.installmentsInvalid"));
       return;
     }
 
@@ -113,20 +115,20 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
           dueDate: new Date(inst.dueDate).toISOString(),
         })),
       });
-      setSuccess("Payment plan created successfully!");
+      setSuccess(t("paymentPlan.createdSuccess"));
       setTimeout(() => {
         loadPaymentPlan();
         if (onSave) onSave();
       }, 1000);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to create payment plan");
+      setError(err.response?.data?.error || t("paymentPlan.createFailed"));
     } finally {
       setCreating(false);
     }
   }
 
   async function handleCancelPlan() {
-    if (!window.confirm("Are you sure you want to cancel this payment plan?")) {
+    if (!window.confirm(t("paymentPlan.cancelConfirm"))) {
       return;
     }
 
@@ -136,25 +138,25 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
 
     try {
       await cancelPaymentPlan(student.studentId);
-      setSuccess("Payment plan cancelled successfully!");
+      setSuccess(t("paymentPlan.cancelledSuccess"));
       setTimeout(() => {
         loadPaymentPlan();
         if (onSave) onSave();
       }, 1000);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to cancel payment plan");
+      setError(err.response?.data?.error || t("paymentPlan.cancelFailed"));
     } finally {
       setCreating(false);
     }
   }
 
   if (loading) {
-    return <div style={{ padding: "1rem", textAlign: "center" }}>Loading payment plan...</div>;
+    return <div style={{ padding: "1rem", textAlign: "center" }}>{t("paymentPlan.loading")}</div>;
   }
 
   return (
     <div style={{ marginTop: "2rem", paddingTop: "2rem", borderTop: "1px solid var(--border)" }}>
-      <h3 style={{ marginTop: 0, marginBottom: "1rem" }}>Payment Plan</h3>
+      <h3 style={{ marginTop: 0, marginBottom: "1rem" }}>{t("paymentPlan.title")}</h3>
 
       {error && (
         <div
@@ -204,7 +206,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
               <div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                  Total Amount
+                  {t("paymentPlan.totalAmount")}
                 </div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem" }}>
                   {plan.totalAmount.toFixed(2)} XLM
@@ -212,7 +214,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               </div>
               <div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                  Status
+                  {t("actions.status")}
                 </div>
                 <div style={{
                   fontSize: "1.25rem",
@@ -226,7 +228,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               </div>
               <div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                  Paid / Total
+                  {t("paymentPlan.paidTotal")}
                 </div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem" }}>
                   {plan.totalPaid?.toFixed(2) || 0} / {plan.totalAmount?.toFixed(2) || 0} XLM
@@ -234,7 +236,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               </div>
               <div>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                  Remaining
+                  {t("paymentPlan.remaining")}
                 </div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem", color: "var(--warning)" }}>
                   {plan.remainingBalance?.toFixed(2) || 0} XLM
@@ -243,7 +245,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
             </div>
 
             <div style={{ marginBottom: "1rem" }}>
-              <div style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "0.75rem" }}>Installments</div>
+              <div style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "0.75rem" }}>{t("paymentPlan.installments")}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                 {plan.installments?.map((inst, i) => (
                   <div
@@ -261,22 +263,22 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
                   >
                     <div style={{ fontWeight: 600, color: "var(--text-muted)" }}>#{i + 1}</div>
                     <div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Amount</div>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{t("paymentPlan.amount")}</div>
                       <div style={{ fontWeight: 600 }}>{inst.amount?.toFixed(2) || 0} XLM</div>
                     </div>
                     <div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Due Date</div>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{t("paymentPlan.dueDate")}</div>
                       <div style={{ fontWeight: 600 }}>
                         {inst.dueDate ? new Date(inst.dueDate).toLocaleDateString() : "—"}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Status</div>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{t("actions.status")}</div>
                       <div style={{
                         fontWeight: 600,
                         color: inst.paid ? "var(--success)" : "var(--warning)",
                       }}>
-                        {inst.paid ? "Paid" : "Pending"}
+                        {inst.paid ? t("paymentPlan.paid") : t("paymentPlan.pending")}
                       </div>
                     </div>
                   </div>
@@ -292,7 +294,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               className="btn btn-sm btn-danger"
               style={{ width: "100%" }}
             >
-              Cancel Plan
+              {t("paymentPlan.cancelPlan")}
             </button>
           )}
         </div>
@@ -307,7 +309,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               fontWeight: 600,
               marginBottom: "0.5rem",
             }}>
-              Total Amount (XLM) <span style={{ color: "var(--danger)" }}>*</span>
+              {t("paymentPlan.totalAmountXlm")} <span style={{ color: "var(--danger)" }}>*</span>
             </label>
             <input
               type="number"
@@ -315,7 +317,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               step="0.0000001"
               value={totalAmount}
               onChange={handleAmountChange}
-              placeholder="e.g., 500"
+              placeholder={t("paymentPlan.totalAmountPlaceholder")}
               required
               disabled={creating}
               style={{
@@ -338,7 +340,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               fontWeight: 600,
               marginBottom: "0.5rem",
             }}>
-              Number of Installments <span style={{ color: "var(--danger)" }}>*</span>
+              {t("paymentPlan.installmentCount")} <span style={{ color: "var(--danger)" }}>*</span>
             </label>
             <input
               type="number"
@@ -346,7 +348,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               max="12"
               value={installmentCount}
               onChange={handleInstallmentCountChange}
-              placeholder="e.g., 3"
+              placeholder={t("paymentPlan.installmentCountPlaceholder")}
               required
               disabled={creating}
               style={{
@@ -365,7 +367,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
           {installments.length > 0 && (
             <div style={{ marginBottom: "1.25rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "0.75rem" }}>
-                Installment Amounts & Due Dates
+                {t("paymentPlan.installmentSchedule")}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 {installments.map((inst, i) => (
@@ -382,7 +384,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
                   >
                     <div>
                       <label style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "block" }}>
-                        Amount #{i + 1}
+                        {t("paymentPlan.installmentAmountNumber", { n: i + 1 })}
                       </label>
                       <input
                         type="number"
@@ -407,7 +409,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
                     </div>
                     <div>
                       <label style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "block" }}>
-                        Due Date #{i + 1}
+                        {t("paymentPlan.installmentDueDateNumber", { n: i + 1 })}
                       </label>
                       <input
                         type="date"
@@ -440,7 +442,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
             className="btn btn-primary"
             style={{ width: "100%", marginBottom: "0.5rem" }}
           >
-            {creating ? "Creating..." : "Create Payment Plan"}
+            {creating ? t("paymentPlan.creating") : t("paymentPlan.create")}
           </button>
           <button
             type="button"
@@ -449,7 +451,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
             className="btn btn-ghost"
             style={{ width: "100%" }}
           >
-            Cancel
+            {t("actions.cancel")}
           </button>
         </form>
       )}
@@ -457,7 +459,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
       {mode === "cancel" && plan && (
         <div>
           <p style={{ marginBottom: "1rem", color: "var(--text-muted)" }}>
-            Are you sure you want to cancel this payment plan? This action cannot be undone.
+            {t("paymentPlan.cancelConfirmDetails")}
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
             <button
@@ -465,7 +467,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               disabled={creating}
               className="btn btn-ghost"
             >
-              Back
+              {t("actions.back")}
             </button>
             <button
               onClick={handleCancelPlan}
@@ -473,7 +475,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
               className="btn btn-danger"
               aria-busy={creating}
             >
-              {creating ? "Cancelling..." : "Confirm Cancel"}
+              {creating ? t("paymentPlan.cancelling") : t("paymentPlan.confirmCancel")}
             </button>
           </div>
         </div>

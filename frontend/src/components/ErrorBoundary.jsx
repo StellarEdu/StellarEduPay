@@ -1,6 +1,8 @@
 import { Component } from "react";
+import Link from "next/link";
+import { withTranslation } from "react-i18next";
 
-export default class ErrorBoundary extends Component {
+class ErrorBoundary extends Component {
   state = { hasError: false, error: null };
 
   static getDerivedStateFromError(error) {
@@ -12,6 +14,7 @@ export default class ErrorBoundary extends Component {
   }
 
   render() {
+    const { t } = this.props;
     if (this.state.hasError) {
       return (
         <div style={{
@@ -27,9 +30,9 @@ export default class ErrorBoundary extends Component {
           color: "var(--text, #0f172a)",
         }}>
           <div style={{ fontSize: "3rem" }}>⚠️</div>
-          <h2 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>Something went wrong</h2>
+          <h2 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>{t("errorBoundary.title")}</h2>
           <p style={{ margin: 0, color: "var(--text-muted, #64748b)", maxWidth: "360px" }}>
-            An unexpected error occurred. You can try reloading the page or go back to safety.
+            {t("errorBoundary.body")}
           </p>
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
             <button
@@ -44,7 +47,7 @@ export default class ErrorBoundary extends Component {
                 cursor: "pointer",
               }}
             >
-              Reload page
+              {t("errorBoundary.reload")}
             </button>
             <button
               onClick={() => {
@@ -64,9 +67,9 @@ export default class ErrorBoundary extends Component {
                 cursor: "pointer",
               }}
             >
-              Go back
+              {t("errorBoundary.goBack")}
             </button>
-            <a
+            <Link
               href="/"
               style={{
                 padding: "0.5rem 1.25rem",
@@ -79,8 +82,8 @@ export default class ErrorBoundary extends Component {
                 lineHeight: "1.5",
               }}
             >
-              Go home
-            </a>
+              {t("errorBoundary.goHome")}
+            </Link>
           </div>
         </div>
       );
@@ -88,3 +91,5 @@ export default class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
+
+export default withTranslation()(ErrorBoundary);

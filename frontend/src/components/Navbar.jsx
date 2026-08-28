@@ -1,21 +1,23 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "react-i18next";
 import TestnetBanner from "./TestnetBanner";
 import { useTheme } from "../pages/_app";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
+import { SUPPORTED_LOCALES, LOCALE_NAMES } from "../i18n";
 
 const PUBLIC_LINKS = [
-  { href: "/pay-fees",  label: "Pay Fees" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/reports",   label: "Reports" },
+  { href: "/pay-fees",  i18nKey: "nav.payFees" },
+  { href: "/dashboard", i18nKey: "nav.dashboard" },
+  { href: "/reports",   i18nKey: "nav.reports" },
 ];
 
 const ADMIN_LINKS = [
-  { href: "/fee-adjustments", label: "Fee Rules" },
-  { href: "/audit-logs",      label: "Audit Logs" },
-  { href: "/disputes",        label: "Disputes" },
-  { href: "/webhooks",        label: "Webhooks" },
+  { href: "/fee-adjustments", i18nKey: "nav.feeRules" },
+  { href: "/audit-logs",      i18nKey: "nav.auditLogs" },
+  { href: "/disputes",        i18nKey: "nav.disputes" },
+  { href: "/webhooks",        i18nKey: "nav.webhooks" },
 ];
 
 const SunIcon = () => (
@@ -37,6 +39,7 @@ const MoonIcon = () => (
 export default function Navbar() {
   const { pathname } = useRouter();
   const [open, setOpen] = useState(false);
+  const { t, i18n } = useTranslation();
   const { dark, toggle } = useTheme();
   const { isAdmin, logout } = useAdminAuthContext();
   const links = isAdmin ? [...PUBLIC_LINKS, ...ADMIN_LINKS] : PUBLIC_LINKS;
@@ -155,6 +158,21 @@ export default function Navbar() {
           color: #fff;
           background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
         }
+        .nav-lang {
+          appearance: none;
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 7px;
+          color: rgba(255, 255, 255, 0.8);
+          font: 500 0.8rem/1 inherit;
+          padding: 0.4rem 0.55rem;
+          cursor: pointer;
+          outline: none;
+        }
+        .nav-lang:hover {
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.22);
+        }
         .nav-hamburger {
           display: none;
           align-items: center;
@@ -185,11 +203,12 @@ export default function Navbar() {
         @media (max-width: 720px) {
           .nav-links { display: none; }
           .nav-hamburger { display: flex; }
+          .nav-lang { max-width: 130px; }
         }
       `}</style>
 
       <TestnetBanner />
-      <nav className="nav" aria-label="Main navigation">
+      <nav className="nav" aria-label={t("nav.mainNavAria")}>
         <div className="nav-inner">
           <Link href="/" className="nav-brand">
             <div className="nav-logo">S</div>
@@ -197,35 +216,45 @@ export default function Navbar() {
           </Link>
 
           <div className="nav-links">
-            {links.map(({ href, label }) => (
+            {links.map(({ href, i18nKey }) => (
               <Link
                 key={href}
                 href={href}
                 className={`nav-link${pathname === href ? " active" : ""}`}
                 aria-current={pathname === href ? "page" : undefined}
               >
-                {label}
+                {t(i18nKey)}
               </Link>
             ))}
           </div>
 
           <div className="nav-right">
+            <select
+              className="nav-lang"
+              value={i18n.resolvedLanguage || "en"}
+              onChange={(e) => i18n.changeLanguage(e.target.value)}
+              aria-label={t("nav.language")}
+            >
+              {SUPPORTED_LOCALES.map((lng) => (
+                <option key={lng} value={lng}>{LOCALE_NAMES[lng]}</option>
+              ))}
+            </select>
             <button
               className="nav-theme-btn"
               onClick={toggle}
-              aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={dark ? t("nav.switchToLight") : t("nav.switchToDark")}
             >
               {dark ? <SunIcon /> : <MoonIcon />}
             </button>
             {isAdmin
-              ? <button className="nav-pill" onClick={logout}>Sign out</button>
-              : <Link href="/login" className="nav-pill nav-pill-accent">Admin Login</Link>
+              ? <button className="nav-pill" onClick={logout}>{t("actions.signOut")}</button>
+              : <Link href="/login" className="nav-pill nav-pill-accent">{t("nav.adminLogin")}</Link>
             }
             <button
               className="nav-hamburger"
               onClick={() => setOpen(o => !o)}
               aria-expanded={open}
-              aria-label={open ? "Close menu" : "Open menu"}
+              aria-label={open ? t("nav.closeMenu") : t("nav.openMenu")}
             >
               {open ? "✕" : "☰"}
             </button>
@@ -234,20 +263,20 @@ export default function Navbar() {
       </nav>
 
       <div className={`nav-mobile${open ? " open" : ""}`} aria-hidden={!open}>
-        {links.map(({ href, label }) => (
+        {links.map(({ href, i18nKey }) => (
           <Link
             key={href}
             href={href}
             className={`nav-link${pathname === href ? " active" : ""}`}
             onClick={() => setOpen(false)}
           >
-            {label}
+            {t(i18nKey)}
           </Link>
         ))}
         <div className="nav-mobile-divider" />
         {isAdmin
-          ? <button className="nav-pill" onClick={() => { logout(); setOpen(false); }} style={{ marginTop: "0.25rem", width: "fit-content" }}>Sign out</button>
-          : <Link href="/login" className="nav-pill nav-pill-accent" style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>Admin Login</Link>
+          ? <button className="nav-pill" onClick={() => { logout(); setOpen(false); }} style={{ marginTop: "0.25rem", width: "fit-content" }}>{t("actions.signOut")}</button>
+          : <Link href="/login" className="nav-pill nav-pill-accent" style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>{t("nav.adminLogin")}</Link>
         }
       </div>
     </>

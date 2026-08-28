@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getFeeAdjustmentRules,
   createFeeAdjustmentRule,
@@ -12,11 +13,11 @@ import PageHero from "../components/PageHero";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const RULE_TYPES = [
-  { value: "discount_percentage", label: "Discount %" },
-  { value: "discount_fixed",      label: "Discount (fixed XLM)" },
-  { value: "penalty_percentage",  label: "Penalty %" },
-  { value: "penalty_fixed",       label: "Penalty (fixed XLM)" },
-  { value: "waiver",              label: "Full waiver" },
+  { value: "discount_percentage", labelKey: "feeAdjustments.ruleTypeDiscountPct" },
+  { value: "discount_fixed",      labelKey: "feeAdjustments.ruleTypeDiscountFixed" },
+  { value: "penalty_percentage",  labelKey: "feeAdjustments.ruleTypePenaltyPct" },
+  { value: "penalty_fixed",       labelKey: "feeAdjustments.ruleTypePenaltyFixed" },
+  { value: "waiver",              labelKey: "feeAdjustments.ruleTypeWaiver" },
 ];
 
 const EMPTY_FORM = {
@@ -37,8 +38,9 @@ function isFixedAmountType(type) {
 }
 
 function RuleTypePill({ type }) {
-  const t = RULE_TYPES.find(r => r.value === type);
-  const label = t?.label ?? type;
+  const { t } = useTranslation();
+  const match = RULE_TYPES.find(r => r.value === type);
+  const label = match?.labelKey ? t(match.labelKey) : type;
   const isDiscount = type.startsWith("discount") || type === "waiver";
   return (
     <span
@@ -51,6 +53,7 @@ function RuleTypePill({ type }) {
 }
 
 export default function FeeAdjustments() {
+  const { t } = useTranslation();
   const { schoolId } = useAdminAuthContext();
   const [rules, setRules]           = useState([]);
   const [loading, setLoading]       = useState(true);
@@ -67,9 +70,9 @@ export default function FeeAdjustments() {
     setError(null);
     getFeeAdjustmentRules(schoolId)
       .then(({ data }) => setRules(data))
-      .catch(() => setError("Could not load rules."))
+      .catch(() => setError(t("feeAdjustments.failedToLoad")))
       .finally(() => setLoading(false));
-  }, [schoolId]);
+  }, [schoolId, t]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -116,7 +119,7 @@ export default function FeeAdjustments() {
     } else if (form.type !== "waiver") {
       const pct = Number(form.value);
       if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
-        setFormError("Percentage must be greater than 0 and at most 100");
+        setFormError(t("feeAdjustments.percentRange"));
         return;
       }
     }
@@ -141,7 +144,7 @@ export default function FeeAdjustments() {
       load();
     } catch (err) {
       setFormError(
-        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Save failed."
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("feeAdjustments.saveFailed")
       );
     } finally {
       setSaving(false);
@@ -149,12 +152,12 @@ export default function FeeAdjustments() {
   }
 
   async function handleDeactivate(rule) {
-    if (!confirm(`Deactivate "${rule.name}"?`)) return;
+    if (!confirm(t("feeAdjustments.deactivateConfirm", { name: rule.name }))) return;
     try {
       await deleteFeeAdjustmentRule(rule._id, schoolId);
       load();
     } catch {
-      setError("Could not deactivate rule.");
+      setError(t("feeAdjustments.failedToDeactivate"));
     }
   }
 
@@ -195,17 +198,17 @@ export default function FeeAdjustments() {
 
       <div className="page-wrap">
         <PageHero
-          eyebrow="Configuration"
-          title="Fee Adjustment Rules"
-          subtitle="Discounts, penalties and waivers — applied in ascending priority order (lower number first)."
+          eyebrow={t("feeAdjustments.eyebrow")}
+          title={t("feeAdjustments.title")}
+          subtitle={t("feeAdjustments.subtitle")}
         />
 
         {/* ── Form ─────────────────────────────────────── */}
         <div className="card" style={{ marginBottom: "1.5rem" }}>
           <div className="card-header">
-            <div className="card-title">{editId ? "Edit Rule" : "New Rule"}</div>
+            <div className="card-title">{editId ? t("feeAdjustments.editTitle") : t("feeAdjustments.newTitle")}</div>
             {editId && (
-              <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>Cancel</button>
+              <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>{t("actions.cancel")}</button>
             )}
           </div>
           <div className="card-body">
@@ -218,39 +221,39 @@ export default function FeeAdjustments() {
             {formSuccess && (
               <div role="status" className="alert alert-success" style={{ marginBottom: "1rem" }}>
                 <IconCheck size={15} />
-                <span>Rule saved successfully.</span>
+                <span>{t("feeAdjustments.saved")}</span>
               </div>
             )}
 
             <form onSubmit={handleSubmit}>
               <div className="fa-form-grid">
                 <div className="form-group">
-                  <label className="form-label">Name *</label>
+                  <label className="form-label">{t("feeAdjustments.nameLabel")}</label>
                   <input
                     required
                     className="form-input"
                     value={form.name}
                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                    placeholder="e.g. Early Bird Discount"
+                    placeholder={t("feeAdjustments.namePlaceholder")}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Type *</label>
+                  <label className="form-label">{t("feeAdjustments.typeLabel")}</label>
                   <select
                     className="form-input form-select"
                     value={form.type}
                     onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
                   >
-                    {RULE_TYPES.map(t => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
+                    {RULE_TYPES.map(rt => (
+                      <option key={rt.value} value={rt.value}>{t(rt.labelKey)}</option>
                     ))}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label className="form-label">
-                    Value{form.type === "waiver" ? " (N/A)" : " *"}
+                    {t("feeAdjustments.valueLabel")}{form.type === "waiver" ? t("feeAdjustments.valueNa") : " *"}
                   </label>
                   {/*
                     Fixed values are XLM amounts, so they step by one stroop —
@@ -268,12 +271,12 @@ export default function FeeAdjustments() {
                     className="form-input"
                     value={form.value}
                     onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
-                    placeholder={form.type.includes("percentage") ? "e.g. 10" : "e.g. 50"}
+                    placeholder={form.type.includes("percentage") ? t("feeAdjustments.percentPlaceholder") : t("feeAdjustments.amountPlaceholder")}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Priority</label>
+                  <label className="form-label">{t("feeAdjustments.priorityLabel")}</label>
                   <input
                     type="number"
                     min="0"
@@ -281,16 +284,16 @@ export default function FeeAdjustments() {
                     value={form.priority}
                     onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}
                   />
-                  <p className="fa-priority-hint">Lower number = applied first (default: 10)</p>
+                  <p className="fa-priority-hint">{t("feeAdjustments.priorityHint")}</p>
                 </div>
 
                 <div className="form-group full">
-                  <label className="form-label">Description</label>
+                  <label className="form-label">{t("feeAdjustments.descriptionLabel")}</label>
                   <input
                     className="form-input"
                     value={form.description}
                     onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                    placeholder="Optional — visible to admins only"
+                    placeholder={t("feeAdjustments.descriptionPlaceholder")}
                   />
                 </div>
 
@@ -302,7 +305,7 @@ export default function FeeAdjustments() {
                         checked={form.isActive}
                         onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))}
                       />
-                      Rule is active
+                      {t("feeAdjustments.activeLabel")}
                     </label>
                   </div>
                 )}
@@ -310,11 +313,11 @@ export default function FeeAdjustments() {
 
               <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem" }}>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? "Saving…" : editId ? "Update Rule" : "Create Rule"}
+                  {saving ? t("feeAdjustments.saving") : editId ? t("feeAdjustments.update") : t("feeAdjustments.create")}
                 </button>
                 {editId && (
                   <button type="button" className="btn btn-ghost" onClick={cancelEdit}>
-                    Cancel
+                    {t("actions.cancel")}
                   </button>
                 )}
               </div>
@@ -332,9 +335,9 @@ export default function FeeAdjustments() {
 
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Rules</div>
+            <div className="card-title">{t("feeAdjustments.rulesTitle")}</div>
             <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-              {rules.length} rule{rules.length !== 1 ? "s" : ""}
+              {t("feeAdjustments.count", { count: rules.length })}
             </span>
           </div>
 
@@ -343,8 +346,8 @@ export default function FeeAdjustments() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Priority</th><th>Name</th><th>Type</th><th>Value</th>
-                    <th>Status</th><th></th>
+                    <th>{t("feeAdjustments.colPriority")}</th><th>{t("feeAdjustments.colName")}</th><th>{t("feeAdjustments.colType")}</th><th>{t("feeAdjustments.colValue")}</th>
+                    <th>{t("feeAdjustments.colStatus")}</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -360,20 +363,20 @@ export default function FeeAdjustments() {
             </div>
           ) : rules.length === 0 ? (
             <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
-              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>No rules yet</p>
-              <p style={{ fontSize: "0.8125rem" }}>Create a rule above to get started.</p>
+              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("feeAdjustments.emptyTitle")}</p>
+              <p style={{ fontSize: "0.8125rem" }}>{t("feeAdjustments.emptyHint")}</p>
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th scope="col">Priority</th>
-                    <th scope="col">Name</th>
-                    <th scope="col">Type</th>
-                    <th scope="col">Value</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" style={{ textAlign: "right" }}>Actions</th>
+                    <th scope="col">{t("feeAdjustments.colPriority")}</th>
+                    <th scope="col">{t("feeAdjustments.colName")}</th>
+                    <th scope="col">{t("feeAdjustments.colType")}</th>
+                    <th scope="col">{t("feeAdjustments.colValue")}</th>
+                    <th scope="col">{t("feeAdjustments.colStatus")}</th>
+                    <th scope="col" style={{ textAlign: "right" }}>{t("feeAdjustments.colActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -409,7 +412,7 @@ export default function FeeAdjustments() {
                       </td>
                       <td>
                         <span className={`badge ${rule.isActive ? "badge-success" : "badge-neutral"}`}>
-                          {rule.isActive ? "Active" : "Inactive"}
+                          {rule.isActive ? t("feeAdjustments.active") : t("feeAdjustments.inactive")}
                         </span>
                       </td>
                       <td>
@@ -418,14 +421,14 @@ export default function FeeAdjustments() {
                             className="btn btn-sm btn-ghost"
                             onClick={() => startEdit(rule)}
                           >
-                            Edit
+                            {t("actions.edit")}
                           </button>
                           {rule.isActive && (
                             <button
                               className="btn btn-sm btn-danger"
                               onClick={() => handleDeactivate(rule)}
                             >
-                              Deactivate
+                              {t("feeAdjustments.deactivate")}
                             </button>
                           )}
                         </div>

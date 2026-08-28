@@ -4,25 +4,27 @@ import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck, IconChevronLeft, IconChevronRight } from "../components/Icons";
 import PageHero from "../components/PageHero";
 import RequireAdmin from "../components/RequireAdmin";
+import { useTranslation } from "react-i18next";
 
 const STATUS_META = {
-  approval_pending: { cls: "badge-warning",  label: "Awaiting Approval", color: "var(--warning)" },
-  pending:          { cls: "badge-info",     label: "Pending",           color: "var(--info)" },
-  submitted:        { cls: "badge-primary",  label: "Submitted",         color: "var(--primary)" },
-  confirmed:        { cls: "badge-success",  label: "Confirmed",         color: "var(--success)" },
-  failed:           { cls: "badge-danger",   label: "Failed",            color: "var(--danger)" },
+  approval_pending: { cls: "badge-warning",  labelKey: "status.refund.approval_pending", color: "var(--warning)" },
+  pending:          { cls: "badge-info",     labelKey: "status.refund.pending",          color: "var(--info)" },
+  submitted:        { cls: "badge-primary",  labelKey: "status.refund.submitted",        color: "var(--primary)" },
+  confirmed:        { cls: "badge-success",  labelKey: "status.refund.confirmed",        color: "var(--success)" },
+  failed:           { cls: "badge-danger",   labelKey: "status.refund.failed",           color: "var(--danger)" },
 };
 
 function StatusBadge({ status }) {
   const meta = STATUS_META[status] || { cls: "badge-neutral", label: status };
   return (
     <span className={`badge ${meta.cls}`} style={{ textTransform: "none" }}>
-      {meta.label}
+      {meta.labelKey ? t(meta.labelKey) : status}
     </span>
   );
 }
 
 function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
+  const { t } = useTranslation();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [note, setNote] = useState("");
@@ -39,7 +41,7 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
       await approveRefund(refund._id, { note });
       onApproved();
     } catch (err) {
-      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to approve refund.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("refunds.failedToApprove"));
     } finally {
       setSubmitting(false);
     }
@@ -56,10 +58,10 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
         color: "var(--text-muted)",
       }}>
         {refund.initiatedBy === user?.email
-          ? "You initiated this refund. Another admin must approve it."
+          ? t("refunds.youInitiated")
           : refund.status !== "approval_pending"
-          ? `Cannot approve refund in ${refund.status} status.`
-          : "Not authorized to approve."}
+          ? t("refunds.cannotApproveStatus", { status: refund.status })
+          : t("refunds.notAuthorized")}
       </div>
     );
   }
@@ -94,12 +96,12 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
           letterSpacing: "0.06em",
           marginBottom: "0.375rem",
         }}>
-          Approval Note (optional)
+          {t("refunds.approvalNoteLabel")}
         </label>
         <textarea
           value={note}
           onChange={e => setNote(e.target.value)}
-          placeholder="Enter reason for approval (e.g., 'Verified duplicate payment')"
+          placeholder={t("refunds.reasonPlaceholder")}
           style={{
             width: "100%",
             padding: "0.5rem 0.75rem",
@@ -133,7 +135,7 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
             fontWeight: 500,
           }}
         >
-          Cancel
+          {t("actions.cancel")}
         </button>
         <button
           type="submit"
@@ -154,7 +156,7 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
           }}
         >
           <IconCheck size={16} />
-          {submitting ? "Approving..." : "Approve Refund"}
+          {submitting ? t("refunds.approving") : t("refunds.approveRefund")}
         </button>
       </div>
     </form>
@@ -162,6 +164,7 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
 }
 
 function RefundCard({ refund, user, onApproved }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -183,8 +186,8 @@ function RefundCard({ refund, user, onApproved }) {
           <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <StatusBadge status={refund.status} />
             <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-              {refund.status === "approval_pending" && `Initiated by ${refund.initiatedBy}`}
-              {refund.status !== "approval_pending" && refund.approvedAt && `Approved by ${refund.approvedBy}`}
+              {refund.status === "approval_pending" && t("refunds.initiatedBy", { name: refund.initiatedBy })}
+              {refund.status !== "approval_pending" && refund.approvedAt && t("refunds.approvedBy", { name: refund.approvedBy })}
             </span>
           </div>
 
@@ -195,25 +198,25 @@ function RefundCard({ refund, user, onApproved }) {
             fontSize: "0.8125rem",
           }}>
             <div>
-              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>Student ID</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("refunds.studentId")}</div>
               <div style={{ fontWeight: 600, fontFamily: "monospace", fontSize: "0.75rem" }}>
                 {refund.studentId}
               </div>
             </div>
             <div>
-              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>Amount</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("refunds.amount")}</div>
               <div style={{ fontWeight: 600 }}>
                 {typeof refund.amount === "number" ? `$${refund.amount.toFixed(2)}` : refund.amount}
               </div>
             </div>
             <div>
-              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>Reason</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("refunds.reason")}</div>
               <div style={{ fontSize: "0.75rem", fontStyle: "italic" }}>
                 {refund.reason || "—"}
               </div>
             </div>
             <div>
-              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>Transaction</div>
+              <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("refunds.transaction")}</div>
               <div style={{ fontFamily: "monospace", fontSize: "0.75rem", wordBreak: "break-all" }}>
                 {refund.originalTxHash?.slice(0, 16)}...
               </div>
@@ -250,6 +253,7 @@ function RefundCard({ refund, user, onApproved }) {
 }
 
 function Refunds() {
+  const { t } = useTranslation();
   const [refunds, setRefunds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -266,10 +270,6 @@ function Refunds() {
     setUser(userData);
   }, []);
 
-  useEffect(() => {
-    fetchRefunds();
-  }, [page, statusFilter]);
-
   const fetchRefunds = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -284,9 +284,13 @@ function Refunds() {
         setPages(data.pages || 1);
         setTotal(data.total || 0);
       })
-      .catch(() => setError("Failed to load refunds."))
+      .catch(() => setError(t("refunds.failedToLoad")))
       .finally(() => setLoading(false));
-  }, [page, statusFilter]);
+  }, [page, statusFilter, t]);
+
+  useEffect(() => {
+    fetchRefunds();
+  }, [fetchRefunds]);
 
   const handleApprovalSuccess = () => {
     fetchRefunds();
@@ -297,8 +301,8 @@ function Refunds() {
   return (
     <RequireAdmin>
       <PageHero
-        title="Refund Management"
-        subtitle="Process and track refund requests"
+        title={t("refunds.title")}
+        subtitle={t("refunds.subtitle")}
       />
 
       {pendingCount > 0 && (
@@ -316,10 +320,10 @@ function Refunds() {
           <IconAlertTriangle size={20} style={{ marginTop: "0.125rem", flexShrink: 0 }} />
           <div>
             <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
-              {pendingCount} refund{pendingCount !== 1 ? "s" : ""} awaiting approval
+              {t("refunds.awaitingApproval", { count: pendingCount })}
             </div>
             <div style={{ fontSize: "0.8125rem", opacity: 0.9 }}>
-              Two-operator approval required. Approver must be different from initiator.
+              {t("refunds.twoOperator")}
             </div>
           </div>
         </div>
@@ -327,11 +331,11 @@ function Refunds() {
 
       <div style={{ marginBottom: "1.5rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
         {[
-          { value: "approval_pending", label: "Awaiting Approval" },
-          { value: "pending", label: "Pending" },
-          { value: "confirmed", label: "Confirmed" },
-          { value: "failed", label: "Failed" },
-          { value: "all", label: "All" },
+          { value: "approval_pending", labelKey: "status.refund.approval_pending" },
+          { value: "pending", labelKey: "status.refund.pending" },
+          { value: "confirmed", labelKey: "status.refund.confirmed" },
+          { value: "failed", labelKey: "status.refund.failed" },
+          { value: "all", labelKey: "refunds.filterAll" },
         ].map(opt => (
           <button
             key={opt.value}
@@ -351,7 +355,7 @@ function Refunds() {
               transition: "all 0.12s",
             }}
           >
-            {opt.label}
+            {t(opt.labelKey)}
           </button>
         ))}
       </div>
@@ -370,13 +374,13 @@ function Refunds() {
 
       {loading && (
         <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
-          Loading refunds...
+          {t("actions.loading")}
         </div>
       )}
 
       {!loading && refunds.length === 0 && (
         <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
-          No refunds found for the selected status.
+          {t("refunds.emptyStatus")}
         </div>
       )}
 
@@ -403,7 +407,7 @@ function Refunds() {
               borderTop: "1px solid var(--border)",
             }}>
               <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, total)} of {total}
+                {t("refunds.showingRange", { start: (page - 1) * PAGE_SIZE + 1, end: Math.min(page * PAGE_SIZE, total), total })}
               </div>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
@@ -424,7 +428,7 @@ function Refunds() {
                   <IconChevronLeft size={16} />
                 </button>
                 <span style={{ fontSize: "0.8125rem", padding: "0.5rem 0.75rem" }}>
-                  Page {page} of {pages}
+                  {t("refunds.pageOf", { page, total: pages })}
                 </span>
                 <button
                   onClick={() => setPage(p => Math.min(pages, p + 1))}

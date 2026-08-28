@@ -6,9 +6,10 @@ import {
 } from "../components/Icons";
 import PageHero from "../components/PageHero";
 import RequireAdmin from "../components/RequireAdmin";
+import { useTranslation } from "react-i18next";
 
-function formatTimestamp(isoString) {
-  if (!isoString) return "N/A";
+function formatTimestamp(isoString, t) {
+  if (!isoString) return t("auditLogs.notAvailable");
   return new Date(isoString).toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -16,27 +17,28 @@ function formatTimestamp(isoString) {
 }
 
 const ACTION_LABELS = {
-  student_create:       "Student Created",
-  student_update:       "Student Updated",
-  student_delete:       "Student Deleted",
-  student_bulk_import:  "Bulk Import",
-  payment_manual_sync:  "Manual Sync",
-  payment_finalize:     "Payment Finalized",
-  fee_create:           "Fee Created",
-  fee_update:           "Fee Updated",
-  fee_delete:           "Fee Deleted",
-  school_create:        "School Created",
-  school_update:        "School Updated",
-  school_deactivate:    "School Deactivated",
+  student_create:       "auditLogs.event.student_create",
+  student_update:       "auditLogs.event.student_update",
+  student_delete:       "auditLogs.event.student_delete",
+  student_bulk_import:  "auditLogs.event.student_bulk_import",
+  payment_manual_sync:  "auditLogs.event.payment_manual_sync",
+  payment_finalize:     "auditLogs.event.payment_finalize",
+  fee_create:           "auditLogs.event.fee_create",
+  fee_update:           "auditLogs.event.fee_update",
+  fee_delete:           "auditLogs.event.fee_delete",
+  school_create:        "auditLogs.event.school_create",
+  school_update:        "auditLogs.event.school_update",
+  school_deactivate:    "auditLogs.event.school_deactivate",
 };
 
-function getActionLabel(action) {
-  return ACTION_LABELS[action] || action;
+function getActionLabel(action, t) {
+  return ACTION_LABELS[action] ? t(ACTION_LABELS[action]) : action;
 }
 
 const ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }));
 
 function AuditLogsContent() {
+  const { t } = useTranslation();
   const [logs, setLogs]               = useState([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
@@ -101,7 +103,7 @@ function AuditLogsContent() {
         setNextCursor(data.nextCursor);
       })
       .catch((err) => {
-        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to load audit logs.");
+        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("auditLogs.failedToLoad"));
       })
       .finally(() => {
         if (isLoadMore) {
@@ -204,13 +206,13 @@ function AuditLogsContent() {
 
       <div className="page-wrap-wide">
         <PageHero
-          eyebrow="Compliance"
-          title="Audit Logs"
-          subtitle="A complete, immutable trail of every administrative action across the platform."
+          eyebrow={t("auditLogs.eyebrow")}
+          title={t("auditLogs.title")}
+          subtitle={t("auditLogs.subtitle")}
         />
         {!loading && total !== null && (
           <p style={{ textAlign: "center", fontSize: "0.8125rem", color: "var(--text-muted)", marginTop: "-1.25rem", marginBottom: "1.5rem" }}>
-            Showing {logs.length.toLocaleString()} of {total.toLocaleString()} entries
+            {t("auditLogs.showingEntries", { shown: logs.length.toLocaleString(), total: total.toLocaleString() })}
           </p>
         )}
 
@@ -218,27 +220,27 @@ function AuditLogsContent() {
           {/* Filters */}
           <div className="al-filters">
             <div>
-              <label className="al-filter-label">Action</label>
+              <label className="al-filter-label">{t("auditLogs.filterActionLabel")}</label>
               <select
                 value={actionFilter}
                 onChange={e => setActionFilter(e.target.value)}
                 className="al-filter-input"
               >
-                <option value="">All Actions</option>
+                <option value="">{t("auditLogs.allActions")}</option>
                 {ACTION_OPTIONS.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                  <option key={o.value} value={o.value}>{t(o.label)}</option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="al-filter-label">Target Type</label>
+              <label className="al-filter-label">{t("auditLogs.filterTargetTypeLabel")}</label>
               <select
                 value={targetTypeFilter}
                 onChange={e => setTargetTypeFilter(e.target.value)}
                 className="al-filter-input"
               >
-                <option value="">All Types</option>
+                <option value="">{t("auditLogs.allTypes")}</option>
                 {["student","payment","fee","school"].map(t => (
                   <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
                 ))}
@@ -246,43 +248,43 @@ function AuditLogsContent() {
             </div>
 
             <div>
-              <label className="al-filter-label">Result</label>
+              <label className="al-filter-label">{t("auditLogs.filterResultLabel")}</label>
               <select
                 value={resultFilter}
                 onChange={e => setResultFilter(e.target.value)}
                 className="al-filter-input"
-                aria-label="Filter by result"
+                aria-label={t("auditLogs.filterByResult")}
               >
-                <option value="">All Results</option>
-                <option value="success">Success</option>
-                <option value="failure">Failure</option>
+                <option value="">{t("auditLogs.allResults")}</option>
+                <option value="success">{t("auditLogs.resultSuccess")}</option>
+                <option value="failure">{t("auditLogs.resultFailure")}</option>
               </select>
             </div>
 
             <div>
-              <label className="al-filter-label">Actor ID</label>
+              <label className="al-filter-label">{t("auditLogs.filterActorIdLabel")}</label>
               <input
                 type="text"
                 value={actorIdInput}
                 onChange={e => setActorIdInput(e.target.value)}
-                placeholder="Performed by..."
+                placeholder={t("auditLogs.actorPlaceholder")}
                 className="al-filter-input"
               />
             </div>
 
             <div>
-              <label className="al-filter-label">Search</label>
+              <label className="al-filter-label">{t("auditLogs.filterSearchLabel")}</label>
               <input
                 type="text"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
-                placeholder="Search details..."
+                placeholder={t("auditLogs.searchPlaceholder")}
                 className="al-filter-input"
               />
             </div>
 
             <div>
-              <label className="al-filter-label">From</label>
+              <label className="al-filter-label">{t("auditLogs.filterFromLabel")}</label>
               <input
                 type="date"
                 value={startDate}
@@ -292,7 +294,7 @@ function AuditLogsContent() {
             </div>
 
             <div>
-              <label className="al-filter-label">To</label>
+              <label className="al-filter-label">{t("auditLogs.filterToLabel")}</label>
               <input
                 type="date"
                 value={endDate}
@@ -318,8 +320,8 @@ function AuditLogsContent() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Timestamp</th><th>Action</th><th>Performed By</th>
-                    <th>Target</th><th>Result</th><th>Details</th>
+                    <th>{t("auditLogs.colTimestamp")}</th><th>{t("auditLogs.colAction")}</th><th>{t("auditLogs.colPerformedBy")}</th>
+                    <th>{t("auditLogs.colTarget")}</th><th>{t("auditLogs.colResult")}</th><th>{t("auditLogs.colDetails")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -335,20 +337,20 @@ function AuditLogsContent() {
             </div>
           ) : logs.length === 0 ? (
             <div className="al-empty">
-              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>No audit logs found</p>
-              <p style={{ fontSize: "0.8125rem" }}>Try adjusting your filters.</p>
+              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("auditLogs.noLogsFound")}</p>
+              <p style={{ fontSize: "0.8125rem" }}>{t("auditLogs.emptyFilters")}</p>
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th scope="col">Timestamp</th>
-                    <th scope="col">Action</th>
-                    <th scope="col">Performed By</th>
-                    <th scope="col">Target</th>
-                    <th scope="col">Result</th>
-                    <th scope="col">Details</th>
+                    <th scope="col">{t("auditLogs.colTimestamp")}</th>
+                    <th scope="col">{t("auditLogs.colAction")}</th>
+                    <th scope="col">{t("auditLogs.colPerformedBy")}</th>
+                    <th scope="col">{t("auditLogs.colTarget")}</th>
+                    <th scope="col">{t("auditLogs.colResult")}</th>
+                    <th scope="col">{t("auditLogs.colDetails")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -357,9 +359,9 @@ function AuditLogsContent() {
                     return (
                       <tr key={log._id}>
                         <td style={{ whiteSpace: "nowrap", fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                          {formatTimestamp(log.createdAt)}
+                          {formatTimestamp(log.createdAt, t)}
                         </td>
-                        <td style={{ fontWeight: 500, fontSize: "0.875rem" }}>{getActionLabel(log.action)}</td>
+                        <td style={{ fontWeight: 500, fontSize: "0.875rem" }}>{getActionLabel(log.action, t)}</td>
                         <td style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>{log.performedBy}</td>
                         <td>
                           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.25rem" }}>
@@ -370,7 +372,7 @@ function AuditLogsContent() {
                         <td>
                           <span className={`badge ${log.result === "success" ? "badge-success" : "badge-danger"}`}>
                             {log.result === "success" ? <IconCheck size={10} /> : <IconAlertTriangle size={10} />}
-                            {log.result}
+                            {log.result === "success" ? t("auditLogs.resultSuccess") : t("auditLogs.resultFailure")}
                           </span>
                         </td>
                         <td>
@@ -385,7 +387,7 @@ function AuditLogsContent() {
                                 onClick={() => setExpandedId(isExpanded ? null : log._id)}
                                 aria-expanded={isExpanded}
                               >
-                                {isExpanded ? "Hide" : "View"}
+                                {isExpanded ? t("actions.hide") : t("actions.view")}
                               </button>
                               {isExpanded && (
                                 <pre className="al-detail-pre">
@@ -416,21 +418,21 @@ function AuditLogsContent() {
                     // Reset to first page with current filters
                     fetchLogs(null);
                   }}
-                  aria-label="Previous page"
+                  aria-label={t("actions.previousPage")}
                   style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
                   disabled={loadingMore}
                 >
-                  <IconChevronLeft size={15} /> Back
+                  <IconChevronLeft size={15} /> {t("actions.back")}
                 </button>
               )}
               <button
                 className="page-btn"
                 onClick={() => fetchLogs(nextCursor)}
-                aria-label="Next page"
+                aria-label={t("actions.nextPage")}
                 style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
                 disabled={loadingMore}
               >
-                {loadingMore ? "Loading..." : "Load More"} <IconChevronRight size={15} />
+                {loadingMore ? t("actions.loading") : t("actions.loadMore")} <IconChevronRight size={15} />
               </button>
             </div>
           )}

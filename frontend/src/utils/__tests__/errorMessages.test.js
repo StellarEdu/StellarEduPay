@@ -1,4 +1,4 @@
-import ERROR_MESSAGES, { getErrorMessage } from "../../utils/errorMessages";
+import ERROR_MESSAGES, { getErrorMessage, tr } from "../../utils/errorMessages";
 import { parseStellarError } from "../../utils/stellarErrors";
 
 describe("errorMessages — issue #612", () => {
@@ -59,6 +59,14 @@ describe("errorMessages — issue #612", () => {
   it("exports a non-empty ERROR_MESSAGES object", () => {
     expect(typeof ERROR_MESSAGES).toBe("object");
     expect(Object.keys(ERROR_MESSAGES).length).toBeGreaterThan(0);
+  });
+
+  it("tr() falls back to the English fallback when the i18n key is missing", () => {
+    // Translation infra (issue #1420): when a key is absent from all locales,
+    // i18next returns the key itself; tr() must return the English fallback.
+    expect(tr("errors.NOT_A_REAL_CODE", "Custom fallback message")).toBe(
+      "Custom fallback message"
+    );
   });
 });
 
