@@ -109,5 +109,15 @@ export const createFeeAdjustmentRule = (data, schoolId) =>
   api.post("/fee-adjustments", data, { headers: { "X-School-ID": schoolId } });
 export const updateFeeAdjustmentRule = (id, data, schoolId) =>
   api.put(`/fee-adjustments/${id}`, data, { headers: { "X-School-ID": schoolId } });
-export const deleteFeeAdjustmentRule = (id, schoolId) =>
-  api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId } });
+export const deleteFeeAdjustmentRule = (id, schoolId, reason) =>
+  api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId }, data: { reason } });
+export const getFeeAdjustmentAffectedCount = (id, schoolId) =>
+  api.get(`/fee-adjustments/${id}/affected-count`, { headers: { "X-School-ID": schoolId } });
+
+// Source validation rules (sender allowlisting)
+export const getSourceValidationRules = (schoolId) =>
+  api.get("/source-rules", { headers: { "X-School-ID": schoolId } });
+export const createSourceValidationRule = (data, schoolId) =>
+  api.post("/source-rules", data, { headers: { "X-School-ID": schoolId } });
+export const deleteSourceValidationRule = (id, schoolId) =>
+  api.delete(`/source-rules/${id}`, { headers: { "X-School-ID": schoolId } });

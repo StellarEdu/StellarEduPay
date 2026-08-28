@@ -15,6 +15,7 @@ const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
 const { fireWebhook, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
+const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
 
@@ -156,6 +157,11 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
   payment.$locals.adminOverride = true;
   payment.status = targetPaymentStatus;
   await payment.save();
+
+  // #1353 — Keep the student's totalPaid/feePaid in sync with the dispute
+  // outcome: DISPUTED payments must not count toward totalPaid, and moving
+  // back to SUCCESS (dispute rejected) must restore it.
+  await updateStudentBalance(schoolId, payment.studentId);
 
   logger.info('Payment status synced after dispute transition', {
     schoolId, txHash, disputeStatus: newDisputeStatus, previousStatus, paymentStatus: targetPaymentStatus,

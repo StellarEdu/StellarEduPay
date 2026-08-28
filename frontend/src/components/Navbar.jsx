@@ -12,9 +12,10 @@ const PUBLIC_LINKS = [
 ];
 
 const ADMIN_LINKS = [
-  { href: "/fee-adjustments", label: "Fee Rules" },
-  { href: "/audit-logs",      label: "Audit Logs" },
-  { href: "/disputes",        label: "Disputes" },
+  { href: "/fee-adjustments",        label: "Fee Rules" },
+  { href: "/source-validation-rules", label: "Source Rules" },
+  { href: "/audit-logs",             label: "Audit Logs" },
+  { href: "/disputes",               label: "Disputes" },
 ];
 
 const SunIcon = () => (

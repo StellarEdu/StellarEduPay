@@ -130,9 +130,49 @@ async function updateRule(req, res, next) {
   }
 }
 
+// GET /api/fee-adjustments/:id/affected-count
+// Number of currently active students matching the rule's cohort conditions,
+// shown in the deletion confirmation prompt so admins can see the blast radius.
+async function getAffectedCount(req, res, next) {
+  try {
+    const rule = await FeeAdjustmentRule.findOne({ _id: req.params.id, schoolId: req.schoolId }).lean();
+    if (!rule) {
+      const err = new Error('Fee adjustment rule not found');
+      err.code = 'NOT_FOUND';
+      err.status = 404;
+      return next(err);
+    }
+
+    const affectedCount = await countAffectedStudents(req.schoolId, rule);
+    res.json({ affectedCount });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function countAffectedStudents(schoolId, rule) {
+  const studentFilter = { schoolId, deletedAt: null };
+  const conditions = rule.conditions || {};
+  if (conditions.studentClass && conditions.studentClass.length > 0) {
+    studentFilter.class = { $in: conditions.studentClass };
+  }
+  if (conditions.academicYear) {
+    studentFilter.academicYear = conditions.academicYear;
+  }
+  return Student.countDocuments(studentFilter);
+}
+
 // DELETE /api/fee-adjustments/:id  — soft delete (deactivate)
 async function deleteRule(req, res, next) {
   try {
+    const reasonTrimmed = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reasonTrimmed) {
+      const err = new Error('A reason is required to deactivate a fee adjustment rule');
+      err.code = 'VALIDATION_ERROR';
+      err.status = 400;
+      return next(err);
+    }
+
     const rule = await FeeAdjustmentRule.findOneAndUpdate(
       { _id: req.params.id, schoolId: req.schoolId },
       { isActive: false },
@@ -146,10 +186,12 @@ async function deleteRule(req, res, next) {
       return next(err);
     }
 
+    const affectedCount = await countAffectedStudents(req.schoolId, rule);
+
     await audit(req, 'fee_adjustment_rule_delete', String(rule._id), {
-      name: rule.name, type: rule.type, value: rule.value,
+      name: rule.name, type: rule.type, value: rule.value, reason: reasonTrimmed, affectedCount,
     });
-    res.json({ message: `Rule "${rule.name}" deactivated` });
+    res.json({ message: `Rule "${rule.name}" deactivated`, affectedCount });
   } catch (err) {
     next(err);
   }
@@ -436,4 +478,4 @@ async function applyRule(req, res, next) {
   }
 }
 
-module.exports = { createRule, listRules, updateRule, deleteRule, dryRunRule, applyRule };
+module.exports = { createRule, listRules, updateRule, deleteRule, getAffectedCount, dryRunRule, applyRule };
