@@ -37,6 +37,7 @@ const {
   getQueueJobStatus,
   getStuckPayments,
   updatePaymentStatus,
+  bulkUpdatePaymentStatus,
   reviewSuspiciousPayment,
   streamPaymentEvents,
   initiatePaymentRefund,
@@ -207,6 +208,9 @@ router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(), getStuden
 router.post("/:paymentId/lock", requireSchoolAuth(), lockPaymentForUpdate);
 router.post("/:paymentId/unlock", requireSchoolAuth(), unlockPayment);
 
+// Registered BEFORE "/:txHash/status" on purpose: Express matches in order, so
+// the parameterised route would otherwise capture "bulk" as a txHash.
+router.patch("/bulk/status", requireAdminAuth, auditContext, bulkUpdatePaymentStatus);
 router.patch("/:txHash/status", requireAdminAuth, auditContext, updatePaymentStatus);
 router.patch("/:txHash/suspicion-review", requireAdminAuth, auditContext, reviewSuspiciousPayment);
 router.patch("/:txHash/correct-placeholder", requireAdminAuth, auditContext, correctPlaceholderPayment);
