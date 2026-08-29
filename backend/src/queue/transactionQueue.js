@@ -27,10 +27,42 @@ const { Queue, Worker } = require('bullmq');
 const PendingVerification = require('../models/pendingVerificationModel');
 const logger = require('../utils/logger');
 const { resolveCorrelationId } = require('../utils/correlationId');
-const { getRedisClient } = require('../config/redisClient');
+const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { transactionQueueProcessingDurationSeconds, transactionQueueFailedTotal } = require('../metrics');
 
 const QUEUE_NAME = 'transaction-processing';
+
+// Retry/backoff tuning for recoverPendingJobsWithRetry() — see #1381.
+const RECOVERY_MAX_RETRIES = parseInt(process.env.JOB_RECOVERY_MAX_RETRIES, 10) || 5;
+const RECOVERY_BASE_DELAY_MS = parseInt(process.env.JOB_RECOVERY_BASE_DELAY_MS, 10) || 2000;
+const RECOVERY_MAX_DELAY_MS = parseInt(process.env.JOB_RECOVERY_MAX_DELAY_MS, 10) || 30000;
+
+/**
+ * Last-known state of pending-job recovery, surfaced by /health (#1381) so a
+ * stuck recovery (Redis unavailable past the retry budget) is a visible,
+ * alertable signal rather than a silent log line.
+ *
+ * status: 'not_run' | 'ok' | 'degraded' | 'disabled'
+ *   'ok'       — the most recent attempt reached BullMQ successfully.
+ *   'degraded' — Redis was not ready when startup recovery gave up; the
+ *                periodic jobRecoveryScheduler will keep retrying.
+ *   'disabled' — Redis is not configured; MongoDB is the only durability layer.
+ */
+let recoveryStatus = {
+  status: 'not_run',
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastError: null,
+  recovered: 0,
+};
+
+function getRecoveryStatus() {
+  return { ...recoveryStatus };
+}
+
+function _sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const connection = getRedisClient();
  let transactionQueue = null;
@@ -235,6 +267,71 @@ async function recoverPendingJobs() {
 }
 
 /**
+ * Startup-safe wrapper around recoverPendingJobs() (#1381).
+ *
+ * If Redis is unavailable when this runs, waiting immediately and giving up
+ * strands every job that survived a restart in MongoDB with status=pending
+ * until the next full process restart. Instead this retries with exponential
+ * backoff, waiting for Redis to become ready before attempting recovery.
+ *
+ * If Redis never becomes ready within the retry budget, recovery is marked
+ * 'degraded' rather than failing the whole startup — recoverPendingJobs() will
+ * be retried again by the periodic jobRecoveryScheduler (leader-only) as soon
+ * as Redis reconnects, so jobs are not permanently stuck.
+ *
+ * @param {{maxRetries?: number, baseDelayMs?: number, maxDelayMs?: number}} [options]
+ * @returns {Promise<number>} number of jobs recovered (0 if Redis never became ready)
+ */
+async function recoverPendingJobsWithRetry(options = {}) {
+  const maxRetries = options.maxRetries ?? RECOVERY_MAX_RETRIES;
+  const baseDelayMs = options.baseDelayMs ?? RECOVERY_BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? RECOVERY_MAX_DELAY_MS;
+
+  recoveryStatus.lastAttemptAt = new Date().toISOString();
+
+  if (!transactionQueue) {
+    recoveryStatus.status = 'disabled';
+    logger.warn('[TransactionQueue] Skipping recovery — BullMQ unavailable (Redis not configured)');
+    return 0;
+  }
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (isRedisReady()) break;
+    if (attempt === maxRetries) {
+      recoveryStatus.status = 'degraded';
+      recoveryStatus.lastError = 'Redis did not become ready within the retry budget';
+      logger.error(
+        '[TransactionQueue] Startup job recovery gave up waiting for Redis — pending jobs ' +
+        'remain in MongoDB; the periodic recovery scheduler will retry once Redis is available',
+        { attempts: attempt + 1 }
+      );
+      return 0;
+    }
+    const delay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+    logger.warn('[TransactionQueue] Redis not ready for job recovery, retrying with backoff', {
+      attempt: attempt + 1,
+      maxRetries,
+      delayMs: delay,
+    });
+    await _sleep(delay);
+  }
+
+  try {
+    const recovered = await recoverPendingJobs();
+    recoveryStatus.status = 'ok';
+    recoveryStatus.lastSuccessAt = new Date().toISOString();
+    recoveryStatus.lastError = null;
+    recoveryStatus.recovered = recovered;
+    return recovered;
+  } catch (err) {
+    recoveryStatus.status = 'degraded';
+    recoveryStatus.lastError = err.message;
+    logger.error('[TransactionQueue] Job recovery failed after Redis became ready', { error: err.message });
+    return 0;
+  }
+}
+
+/**
  * Get the current status of a queued transaction job.
  * @param {string} txHash
  */
@@ -416,6 +513,8 @@ module.exports = {
    startTransactionWorker,
    closeQueue,
    recoverPendingJobs,
+   recoverPendingJobsWithRetry,
+   getRecoveryStatus,
    markResolved,
    markDead,
    markInterrupted,

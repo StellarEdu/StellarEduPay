@@ -3,6 +3,12 @@
 /**
  * Coordinated cross-school Horizon request budget (#1124).
  *
+ * Full operator-facing documentation — including a table of every env var that
+ * affects polling behaviour and a worked example of how the budget is
+ * allocated as the number of active schools grows — lives in
+ * docs/horizon-rate-limits.md (#1383). This header covers the rationale and
+ * mechanisms; that doc covers how to tune and observe them in production.
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE SCALING CEILING THIS EXISTS TO REMOVE
  * ─────────────────────────────────────────────────────────────────────────────

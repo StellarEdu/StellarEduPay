@@ -163,13 +163,20 @@ strategies; they are not a substitute for a live load test.
 
 ## Configuration
 
+Every environment variable that affects polling behaviour — not just the budget
+system itself — is listed below, since tuning one without the others is a
+common source of surprises (e.g. raising `SYNC_MAX_PAGES_PER_POLL` does nothing
+if the cross-school budget is already the binding constraint).
+
 | Env var | Default | Meaning |
 |---|---:|---|
+| `SYNC_INTERVAL_MS` (falls back to `POLL_INTERVAL_MS`, then 60000) | 60000 | Poll cycle interval. Also resizes the per-cycle budget — see the worked example below |
 | `HORIZON_RATE_LIMIT_PER_HOUR` | 3600 | Horizon's allowance for our key. Raise on a paid/self-hosted instance |
 | `HORIZON_POLL_BUDGET_SAFETY_FACTOR` | 0.6 | Fraction of the limit polling may use; the rest is reserved for user-facing calls |
 | `HORIZON_POLL_REPLICA_COUNT` | 1 | Replicas sharing the allowance. **Set this to your replica count** |
 | `HORIZON_POLL_MIN_BUDGET` | 4 | Floor, so misconfiguration cannot wedge polling |
-| `SYNC_MAX_CONCURRENT_SCHOOLS` | 4 | Max schools polled simultaneously |
+| `SYNC_MAX_PAGES_PER_POLL` | 50 | Per-school cap on pages drained in one cycle, independent of the shared budget. Bounds how much of the shared budget one very active school can consume in a single cycle, while letting a fresh school's backfill span multiple cycles |
+| `SYNC_MAX_CONCURRENT_SCHOOLS` | 4 | Max schools polled simultaneously. Bounds burstiness of the requests the budget already caps in total — it does not raise or lower the budget itself |
 | `HORIZON_POLL_RECENT_ACTIVITY_WINDOW_MS` | 3600000 | Window over which recent activity boosts priority |
 
 > **Multi-replica warning.** The budget is per-process. Leaving
@@ -177,6 +184,49 @@ strategies; they are not a substitute for a live load test.
 > rate is N× the intended budget. The per-school distributed lock still prevents
 > two replicas syncing the *same* school, so this is a rate-limit concern rather
 > than a correctness one — but it will reintroduce 429s.
+
+### Worked example: how the budget is allocated as fleet size grows
+
+The key thing to internalise: **the per-cycle budget does not depend on how
+many schools are active.** It is fixed by `HORIZON_RATE_LIMIT_PER_HOUR`,
+`HORIZON_POLL_BUDGET_SAFETY_FACTOR`, `HORIZON_POLL_REPLICA_COUNT` and the poll
+interval alone (`computeCycleBudget()` in `horizonPollBudget.js`). What changes
+as the fleet grows is not the budget — it's how many cycles it takes to get
+through everyone, and therefore how stale a quiet school's data can get.
+
+With defaults (`HORIZON_RATE_LIMIT_PER_HOUR=3600`,
+`HORIZON_POLL_BUDGET_SAFETY_FACTOR=0.6`, `HORIZON_POLL_REPLICA_COUNT=1`, and
+neither `SYNC_INTERVAL_MS` nor `POLL_INTERVAL_MS` set — a 60-second interval):
+
+```
+budget per cycle = (3600 / 3600000) req/ms × 60000 ms × 0.6 = 36 requests/cycle
+```
+
+That `36` is constant regardless of fleet size. Now hold demand at a simple
+baseline — every active school needs exactly one Horizon page this cycle (no
+pending payments, no recent-activity boost, so priority reduces to the aging
+term) — and see how many cycles it takes the aging mechanism to rotate through
+the whole fleet at least once:
+
+| Active schools | Demand vs. 36-token budget | Schools polled cycle 1 | Cycles to rotate through all schools once | Approx. worst-case staleness (`(cycles − 1) × 60s`) |
+|---:|---|---:|---:|---:|
+| 20 | 20 ≤ 36 — fits entirely | 20 | 1 | 0s (never deferred) |
+| 50 | 50 > 36 — 14 deferred | 36 | 2 | ~60s |
+| 100 | 100 > 36 | 36 | 3 | ~120s |
+| 200 | 200 > 36 | 36 | 6 | ~300s (5 min) |
+| 500 | 500 > 36 | 36 | 14 | ~780s (13 min) |
+
+This is a simplified illustration, not the empirical SLA — it assumes uniform
+one-page demand and ignores the pending-payment and recent-activity priority
+boosts that, in practice, poll the schools operators actually care about first.
+For the fuller, load-model-derived numbers (which do include those signals),
+see the [Measured behaviour and the SLA](#measured-behaviour-and-the-sla)
+section above. The point of this table is narrower: it shows *why* deferral and
+staleness — not 429s — are the first symptom of an undersized budget, and why
+the fix is one of the four levers in
+[Operational guidance](#operational-guidance) below rather than raising
+`SYNC_MAX_PAGES_PER_POLL` (which only bounds a single school's per-cycle
+share, not the fleet-wide total).
 
 ## Observability
 

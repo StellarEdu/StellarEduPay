@@ -8,6 +8,7 @@ const { getCachedRates } = require('../services/currencyConversionService');
 const { getAuditHealth } = require('../services/auditService');
 const { getRedisStatus } = require('../config/redisClient');
 const { checkLiveness, WORKER_NAMES } = require('../services/workerHeartbeat');
+const { getRecoveryStatus } = require('../queue/transactionQueue');
 const logger = require('../utils/logger');
 const { isReady: isShutdownReady } = require('../services/shutdownManager');
 
@@ -120,6 +121,15 @@ async function healthCheck(req, res) {
     overallStatus = 'degraded';
   }
 
+  // Pending-job recovery degraded (#1381): Redis wasn't ready within the
+  // startup retry budget, so jobs that survived a restart are still sitting in
+  // MongoDB. Not unhealthy — the periodic jobRecoveryScheduler will drain them
+  // as soon as Redis reconnects — but worth surfacing so on-call can see it.
+  const jobRecovery = getRecoveryStatus();
+  if (jobRecovery.status === 'degraded' && overallStatus === 'healthy') {
+    overallStatus = 'degraded';
+  }
+
   // Worker liveness check — any stale/not_started worker triggers 503 so
   // orchestrators can restart the pod. "starting" is healthy (within grace).
   const workerLiveness = checkLiveness();
@@ -207,6 +217,7 @@ async function healthCheck(req, res) {
         rates: priceFeedStatus,
       },
       auditLog: getAuditHealth(),
+      jobRecovery,
       workers: {
         healthy: workerLiveness.allHealthy,
         detail: workerLiveness.workers,
