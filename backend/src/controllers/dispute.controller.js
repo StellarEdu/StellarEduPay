@@ -18,6 +18,11 @@ const { fireWebhook, notifyDisputeCreated, notifyDisputeResolved } = require('..
 const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
+const {
+  recordDisputeRaised,
+  recordDisputeResolved,
+  refreshOpenDisputeGauge,
+} = require('../metrics/disputeMetrics');
 
 // ── State machine (#895) ─────────────────────────────────────────────────────
 //
@@ -254,6 +259,15 @@ async function flagDispute(req, res, next) {
     // Notify (best-effort)
     await _notifyDisputeChange(schoolId, 'dispute.created', dispute);
 
+    // Metrics (#1375). Recorded after the write succeeded, and never allowed to
+    // fail the request — a scrape value is not worth a 500 to the caller.
+    try {
+      recordDisputeRaised(schoolId);
+      await refreshOpenDisputeGauge();
+    } catch (metricsErr) {
+      logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
+    }
+
     res.status(201).json(dispute);
   } catch (err) { next(err); }
 }
@@ -410,6 +424,16 @@ async function resolveDispute(req, res, next) {
     // #894 — Emit SSE + webhook (best-effort)
     const eventName = newStatus === 'open' ? 'dispute.reopened' : `dispute.${newStatus}`;
     await _notifyDisputeChange(schoolId, eventName, dispute);
+
+    // Metrics (#1375). Resolution duration and the SLA breach are only recorded
+    // on a terminal status; a reopen just moves the gauges. Never allowed to
+    // fail the request.
+    try {
+      if (isTerminal) recordDisputeResolved(dispute);
+      await refreshOpenDisputeGauge();
+    } catch (metricsErr) {
+      logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
+    }
 
     res.json(dispute);
   } catch (err) { next(err); }
