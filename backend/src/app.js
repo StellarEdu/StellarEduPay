@@ -56,6 +56,7 @@ const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./s
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
+const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
 const { close: closeReportCacheInvalidator } = require('./services/reportCacheInvalidator');
 const { closeQueue } = require('./queue/transactionQueue');
@@ -254,10 +255,15 @@ connectDatabase().then(async () => {
     logger.error('Stuck payment reconciliation failed on startup', { error: err.message });
   }
 
-  // Recover any pending/processing BullMQ jobs that survived a restart in MongoDB
-  const { recoverPendingJobs } = require('./queue/transactionQueue');
+  // Recover any pending/processing BullMQ jobs that survived a restart in MongoDB.
+  // Retries with exponential backoff while waiting for Redis to become ready
+  // (#1381) instead of giving up on the first connection error — a Redis outage
+  // at boot would otherwise strand those jobs in MongoDB until the next restart.
+  // If Redis never comes up within the retry budget, the leader-only
+  // jobRecoveryScheduler below keeps retrying once it does.
+  const { recoverPendingJobsWithRetry } = require('./queue/transactionQueue');
   try {
-    await recoverPendingJobs();
+    await recoverPendingJobsWithRetry();
   } catch (err) {
     logger.error('Transaction queue recovery failed on startup', { error: err.message });
   }
@@ -280,6 +286,7 @@ connectDatabase().then(async () => {
     startWebhookRetryScheduler();
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
+    startJobRecoveryScheduler();
   };
 
   const stopLeaderSchedulers = () => {
@@ -294,6 +301,7 @@ connectDatabase().then(async () => {
     stopWebhookRetryScheduler();
     stopReconciliationReportScheduler();
     stopMetricsRollupScheduler();
+    stopJobRecoveryScheduler();
   };
 
   leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);

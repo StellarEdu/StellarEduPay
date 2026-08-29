@@ -12,9 +12,51 @@ The login response includes `mfaSetupRequired: true` when this restricted sessio
 
 ## Credential rotation
 
-JWT secrets and the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`) have scripted
-rotation — see `scripts/rotate-jwt-secret.js` and `scripts/rotate-signer-master-key.js`, and
-the "Key Rotation" section of `docs/operator-runbooks.md` for when and how to run them.
+JWT secrets, the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`), and the webhook
+secret encryption key (`WEBHOOK_SECRET_ENCRYPTION_KEY`) have scripted rotation — see
+`scripts/rotate-jwt-secret.js`, `scripts/rotate-signer-master-key.js`, and
+`scripts/rotate-webhook-encryption-key.js`, and the "Key Rotation" section of
+`docs/operator-runbooks.md` for when and how to run them.
+
+### Webhook secret encryption key rotation
+
+`backend/src/services/webhookSecretEncryption.js` encrypts every school's `webhookSecret` at
+rest (AES-256-GCM) using a key derived from `WEBHOOK_SECRET_ENCRYPTION_KEY`. Rotating that key
+without re-encrypting the stored secrets would make every existing secret undecryptable with
+the new key, breaking outbound webhook signing for every school (#1380). Rotation is scripted
+and supports a dual-key grace period so there is no cutover window where deliveries fail.
+
+**Procedure:**
+
+1. Generate a new key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+2. Set `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` to the **current** key (the one already
+   protecting stored secrets) and `WEBHOOK_SECRET_ENCRYPTION_KEY` to the **new** key, both in
+   the deployment's secret store.
+3. Run the migration script against the target database, first as a dry run:
+   ```bash
+   WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS=<current key> WEBHOOK_SECRET_ENCRYPTION_KEY=<new key> \
+     node scripts/rotate-webhook-encryption-key.js
+   ```
+   Review the per-school report, then re-run with `--apply` to persist the re-encrypted
+   values:
+   ```bash
+   WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS=<current key> WEBHOOK_SECRET_ENCRYPTION_KEY=<new key> \
+     node scripts/rotate-webhook-encryption-key.js --apply
+   ```
+4. Redeploy the API and worker instances with both env vars set. While
+   `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` is present, `decryptWebhookSecret()` transparently
+   falls back to it whenever the new key fails an auth-tag check — this covers any secret the
+   migration script hasn't reached yet and any instance still finishing a rolling deploy, so
+   webhook deliveries are never interrupted mid-rotation.
+5. Once the rollout is complete and step 3's `--apply` run reports zero failures, drop
+   `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` from the deployment and redeploy again to close the
+   grace period.
+6. Verify a live webhook delivery signs correctly, then record the rotation time and operator
+   in the incident log per the general rotation order in `docs/operator-runbooks.md`.
+
+Skipping step 2 (or dropping the previous key before step 3 completes) reproduces the original
+failure mode: any secret the script hasn't re-encrypted yet becomes unreadable, and signing
+outbound webhooks for that school silently breaks.
 
 ## Content Security Policy (CSP)
 

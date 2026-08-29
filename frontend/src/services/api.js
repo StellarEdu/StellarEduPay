@@ -34,6 +34,19 @@ function redirectToLogin() {
   if (typeof window === "undefined") return;
   const { pathname, search } = window.location;
   if (pathname === "/login") return; // already there — avoid a redirect loop
+
+  // The refresh failed, so the session is over — clear the client-side auth
+  // state (the HttpOnly access/refresh cookies are already invalid and can
+  // only be cleared server-side, but this app data must not survive into the
+  // next login as stale context; see useAdminAuth's logout()).
+  try {
+    localStorage.removeItem("schoolId");
+    localStorage.removeItem("userId");
+  } catch {
+    // localStorage unavailable (private browsing, disabled storage) — the
+    // hard redirect below still ends the session from the app's perspective.
+  }
+
   const returnTo = encodeURIComponent(`${pathname}${search}`);
   window.location.href = `/login?returnTo=${returnTo}`;
 }
