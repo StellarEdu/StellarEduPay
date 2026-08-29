@@ -7,6 +7,7 @@ const {
   listRules,
   updateRule,
   deleteRule,
+  getAffectedCount,
   dryRunRule,
   applyRule,
 } = require('../controllers/feeAdjustmentController');
@@ -21,6 +22,9 @@ router.post('/',      requireAdminAuth, auditContext, createRule);
 router.get('/',       listRules);
 router.put('/:id',    requireAdminAuth, auditContext, updateRule);
 router.delete('/:id', requireAdminAuth, auditContext, deleteRule);
+
+// #1355 — affected-student count shown in the delete confirmation modal
+router.get('/:id/affected-count', requireAdminAuth, getAffectedCount);
 
 // ── #901 Dry-run preview ─────────────────────────────────────────────────────
 // POST /api/fee-adjustments/dry-run

@@ -4,6 +4,7 @@ import {
   createFeeAdjustmentRule,
   updateFeeAdjustmentRule,
   deleteFeeAdjustmentRule,
+  getFeeAdjustmentAffectedCount,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { validateStellarAmount } from "../utils/stellarAmount";
@@ -80,6 +81,11 @@ export default function FeeAdjustments() {
   const [saving, setSaving]         = useState(false);
   const [formError, setFormError]   = useState(null);
   const [formSuccess, setFormSuccess] = useState(false);
+  const [deleteTarget, setDeleteTarget]     = useState(null); // rule pending confirmation
+  const [affectedCount, setAffectedCount]   = useState(null);
+  const [deleteReason, setDeleteReason]     = useState("");
+  const [deleteError, setDeleteError]       = useState(null);
+  const [deleting, setDeleting]             = useState(false);
 
   const load = useCallback(() => {
     if (!schoolId) return; // Don't load until we have the authenticated school context
@@ -169,13 +175,40 @@ export default function FeeAdjustments() {
     }
   }
 
-  async function handleDeactivate(rule) {
-    if (!confirm(`Deactivate "${rule.name}"?`)) return;
+  function handleDeactivate(rule) {
+    setDeleteTarget(rule);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+    getFeeAdjustmentAffectedCount(rule._id, schoolId)
+      .then(({ data }) => setAffectedCount(data.affectedCount))
+      .catch(() => setAffectedCount(null));
+  }
+
+  function cancelDeactivate() {
+    setDeleteTarget(null);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+  }
+
+  async function confirmDeactivate() {
+    if (!deleteReason.trim()) {
+      setDeleteError("A reason is required to deactivate this rule.");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await deleteFeeAdjustmentRule(rule._id, schoolId);
+      await deleteFeeAdjustmentRule(deleteTarget._id, schoolId, deleteReason.trim());
+      cancelDeactivate();
       load();
-    } catch {
-      setError("Could not deactivate rule.");
+    } catch (err) {
+      setDeleteError(
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Could not deactivate rule."
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -516,6 +549,63 @@ export default function FeeAdjustments() {
             </div>
           )}
         </div>
+
+        {deleteTarget && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fa-delete-title"
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+              display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+            }}
+          >
+            <div className="card" style={{ maxWidth: 440, width: "90%" }}>
+              <div className="card-header">
+                <div className="card-title" id="fa-delete-title">Deactivate rule?</div>
+              </div>
+              <div className="card-body">
+                <p style={{ marginBottom: "0.75rem" }}>
+                  This will deactivate <strong>&quot;{deleteTarget.name}&quot;</strong>. It will
+                  no longer be applied to future payment verifications.
+                </p>
+                <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
+                  {affectedCount === null
+                    ? "Checking how many students this rule currently applies to…"
+                    : `This rule currently applies to ${affectedCount} student${affectedCount !== 1 ? "s" : ""}.`}
+                </p>
+
+                {deleteError && (
+                  <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
+                    <IconAlertTriangle size={15} />
+                    <span>{deleteError}</span>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="fa-delete-reason">Reason *</label>
+                  <input
+                    id="fa-delete-reason"
+                    className="form-input"
+                    value={deleteReason}
+                    onChange={e => setDeleteReason(e.target.value)}
+                    placeholder="Why is this rule being deactivated?"
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button className="btn btn-ghost" onClick={cancelDeactivate} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-danger" onClick={confirmDeactivate} disabled={deleting}>
+                    {deleting ? "Deactivating…" : "Deactivate Rule"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
