@@ -40,7 +40,11 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC' 
     { $match: match },
     {
       $group: {
-        _id: { $dateToString: { format: '%Y-%m-%d', date: '$confirmedAt', timezone } },
+        // #1362 — confirmedAt may be null for payments recorded but not yet
+        // confirmed (e.g. recorded via sync before the horizon confirmation).
+        // Fall back to updatedAt so these payments are bucketed to a real date
+        // rather than grouped under a null key and sorted before all real dates.
+        _id: { $dateToString: { format: '%Y-%m-%d', date: { $ifNull: ['$confirmedAt', '$updatedAt'] }, timezone } },
         totalAmount:   { $sum: '$amount' },
         paymentCount:  { $sum: 1 },
         validCount:    { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'valid'] }, 1, 0] } },
