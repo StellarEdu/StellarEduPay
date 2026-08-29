@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/router";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
+import { useTranslation } from "react-i18next";
 
 /**
  * RequireAdmin
@@ -30,6 +31,7 @@ import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 export default function RequireAdmin({ children }) {
   const router = useRouter();
   const { isAdmin, checked } = useAdminAuthContext();
+  const { t } = useTranslation();
 
   useEffect(() => {
     // Only act once the /auth/me round-trip has completed.
@@ -51,7 +53,7 @@ export default function RequireAdmin({ children }) {
         aria-live="polite"
         data-testid="require-admin-gate"
       >
-        {checked ? "Redirecting to sign in…" : "Checking access…"}
+        {checked ? t("auth.redirecting") : t("auth.checking")}
       </div>
     );
   }

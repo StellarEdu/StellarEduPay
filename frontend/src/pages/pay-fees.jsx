@@ -3,20 +3,23 @@ import PaymentForm from "../components/PaymentForm";
 import VerifyPayment from "../components/VerifyPayment";
 import SseDegradedBanner from "../components/SseDegradedBanner";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
-
-const STEPS = [
-  { n: "1", title: "Enter Student ID", desc: "Look up your student's details and payment status." },
-  { n: "2", title: "Send via Stellar", desc: "Use any Stellar wallet — scan QR or copy address + memo." },
-  { n: "3", title: "Instant confirmation", desc: "Your payment is recorded on-chain in seconds." },
-];
+import { useTranslation } from "react-i18next";
 
 export default function PayFees() {
+  const { t } = useTranslation();
+
+  const STEPS = [
+    { n: "1", title: t("payFees.step1Title"), desc: t("payFees.step1Desc") },
+    { n: "2", title: t("payFees.step2Title"), desc: t("payFees.step2Desc") },
+    { n: "3", title: t("payFees.step3Title"), desc: t("payFees.step3Desc") },
+  ];
+
   // Surface degraded/reconnecting/failed banner (Issues #1054, #1078).
   const { degraded, connectionStatus } = usePaymentEvents();
 
   return (
     <>
-      <Head><title>Pay Fees | StellarEduPay</title></Head>
+      <Head><title>{t("nav.payFees")} | {t("app.name")}</title></Head>
       <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} />
 
       <div className="payfees-page">
@@ -24,10 +27,10 @@ export default function PayFees() {
         <div className="payfees-header">
           <span className="payfees-badge">
             <span className="payfees-badge-dot" />
-            Live on Stellar
+            {t("payFees.liveOnStellar")}
           </span>
-          <h1>Pay School Fees</h1>
-          <p>Enter your student ID to get Stellar blockchain payment instructions. Payments confirm in 3–5 seconds.</p>
+          <h1>{t("payFees.heroTitle")}</h1>
+          <p>{t("payFees.heroDesc")}</p>
         </div>
 
         {/* How it works — inline steps */}

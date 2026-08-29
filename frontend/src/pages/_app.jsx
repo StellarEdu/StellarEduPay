@@ -7,6 +7,7 @@ import Navbar from "../components/Navbar";
 import AppLayout from "../components/AppLayout";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { AdminAuthProvider } from "../hooks/AdminAuthContext";
+import i18n, { SUPPORTED_LOCALES } from "../i18n";
 
 export const ThemeContext = createContext({ dark: false, toggle: () => {} });
 export const useTheme = () => useContext(ThemeContext);
@@ -68,3 +69,22 @@ export default function MyApp({ Component, pageProps }) {
     </AdminAuthProvider>
   );
 }
+
+MyApp.getInitialProps = async ({ Component, ctx }) => {
+  const pageProps = await (Component.getInitialProps
+    ? Component.getInitialProps(ctx)
+    : {});
+
+  const acceptLang = ctx.req?.headers?.["accept-language"] || "";
+  const primary = acceptLang
+    .split(",")[0]
+    .trim()
+    .split(";")[0]
+    .split("-")[0]
+    .toLowerCase();
+  if (primary && SUPPORTED_LOCALES.includes(primary)) {
+    i18n.changeLanguage(primary);
+  }
+
+  return { pageProps };
+};

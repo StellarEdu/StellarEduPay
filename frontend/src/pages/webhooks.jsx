@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import RequireAdmin from "../components/RequireAdmin";
 import PageHero from "../components/PageHero";
 import { IconAlertTriangle, IconCheck, IconX, IconPlus, IconRefresh } from "../components/Icons";
+import { useTranslation } from "react-i18next";
 
 async function apiCall(method, path, body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -14,25 +15,26 @@ async function apiCall(method, path, body = null) {
   return res.json();
 }
 
-function timeAgo(iso) {
-  if (!iso) return "Never";
+function timeAgo(iso, t) {
+  if (!iso) return t("time.never");
   const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
-  if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("time.justNow");
+  if (mins < 60) return t("time.minutesAgo", { mins });
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return t("time.hoursAgo", { hrs });
   return new Date(iso).toLocaleDateString();
 }
 
 const EVENT_OPTIONS = [
-  { value: 'payment.confirmed', label: 'Payment Confirmed' },
-  { value: 'payment.failed', label: 'Payment Failed' },
-  { value: 'dispute.created', label: 'Dispute Created' },
-  { value: 'dispute.resolved', label: 'Dispute Resolved' },
-  { value: 'payment.test', label: 'Test Event' },
+  { value: 'payment.confirmed', labelKey: 'webhooks.event.payment.confirmed' },
+  { value: 'payment.failed', labelKey: 'webhooks.event.payment.failed' },
+  { value: 'dispute.created', labelKey: 'webhooks.event.dispute.created' },
+  { value: 'dispute.resolved', labelKey: 'webhooks.event.dispute.resolved' },
+  { value: 'payment.test', labelKey: 'webhooks.event.payment.test' },
 ];
 
 function WebhooksPage() {
+  const { t } = useTranslation();
   const [endpoints, setEndpoints] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -94,8 +96,8 @@ function WebhooksPage() {
     setSubmitting(true);
 
     try {
-      if (!formData.url) throw new Error('URL is required');
-      if (formData.subscribedEvents.length === 0) throw new Error('Select at least one event');
+      if (!formData.url) throw new Error(t('webhooks.urlRequired'));
+      if (formData.subscribedEvents.length === 0) throw new Error(t('webhooks.selectAtLeastOne'));
 
       const payload = { ...formData };
       const path = formMode === 'create'
@@ -114,7 +116,7 @@ function WebhooksPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this webhook endpoint?')) return;
+    if (!window.confirm(t('webhooks.deleteConfirm'))) return;
     try {
       await apiCall('DELETE', `/webhook-endpoints/${id}`);
       await fetchEndpoints();
@@ -161,7 +163,7 @@ function WebhooksPage() {
   return (
     <RequireAdmin>
       <div className="page">
-        <PageHero title="Webhook Endpoints" subtitle="Configure and manage webhook integrations" />
+        <PageHero title={t("webhooks.title")} subtitle={t("webhooks.subtitle")} />
 
         {error && (
           <div className="alert alert-danger">
@@ -172,27 +174,27 @@ function WebhooksPage() {
         <div className="card">
           <div className="card-header">
             <div className="d-flex justify-content-between align-items-center">
-              <h5>Endpoints</h5>
+              <h5>{t("webhooks.endpointsHeader")}</h5>
               <button className="btn btn-primary" onClick={handleNew}>
-                <IconPlus /> New Endpoint
+                <IconPlus /> {t("webhooks.newEndpointBtn")}
               </button>
             </div>
           </div>
           <div className="card-body">
             {loading ? (
-              <div className="text-center p-4">Loading webhooks...</div>
+              <div className="text-center p-4">{t("webhooks.loading")}</div>
             ) : endpoints.length === 0 ? (
-              <div className="text-center p-4">No webhook endpoints configured</div>
+              <div className="text-center p-4">{t("webhooks.empty")}</div>
             ) : (
               <div className="table-responsive">
                 <table className="table table-sm">
                   <thead>
                     <tr>
-                      <th>URL</th>
-                      <th>Events</th>
-                      <th>Status</th>
-                      <th>Last Delivery</th>
-                      <th>Actions</th>
+                      <th>{t("webhooks.colUrl")}</th>
+                      <th>{t("webhooks.colEvents")}</th>
+                      <th>{t("webhooks.colStatus")}</th>
+                      <th>{t("webhooks.colLastDelivery")}</th>
+                      <th>{t("webhooks.colActions")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -202,15 +204,15 @@ function WebhooksPage() {
                           {ep.url.substring(0, 40)}...
                         </td>
                         <td>
-                          <small>{(ep.subscribedEvents || []).length} events</small>
+                          <small>{t("webhooks.eventsCount", { count: (ep.subscribedEvents || []).length })}</small>
                         </td>
                         <td>
                           <span className={`badge ${ep.isActive ? 'badge-success' : 'badge-secondary'}`}>
-                            {ep.isActive ? 'Active' : 'Inactive'}
+                            {ep.isActive ? t("status.webhook.active") : t("status.webhook.inactive")}
                           </span>
                         </td>
                         <td>
-                          <small>{timeAgo(ep.lastDeliveredAt || ep.createdAt)}</small>
+                          <small>{timeAgo(ep.lastDeliveredAt || ep.createdAt, t)}</small>
                         </td>
                         <td>
                           <div className="btn-group btn-group-sm">
@@ -218,7 +220,7 @@ function WebhooksPage() {
                               className="btn btn-outline-secondary"
                               onClick={() => handleTest(ep._id)}
                               disabled={testingId === ep._id}
-                              title="Send test event"
+                              title={t("webhooks.sendTestEvent")}
                             >
                               <IconRefresh />
                             </button>
@@ -226,7 +228,7 @@ function WebhooksPage() {
                               className="btn btn-outline-secondary"
                               onClick={() => handleEdit(ep)}
                             >
-                              Edit
+                              {t("actions.edit")}
                             </button>
                             <button
                               className="btn btn-outline-danger"
@@ -239,7 +241,7 @@ function WebhooksPage() {
                             <div className="mt-2">
                               {testResults[ep._id].success ? (
                                 <div className="alert alert-success alert-sm mb-0">
-                                  <IconCheck /> Test sent successfully
+                                  <IconCheck /> {t("webhooks.testSuccess")}
                                 </div>
                               ) : (
                                 <div className="alert alert-danger alert-sm mb-0">
@@ -261,26 +263,26 @@ function WebhooksPage() {
         {showForm && (
           <div className="card mt-4">
             <div className="card-header">
-              <h5>{formMode === 'create' ? 'New Webhook Endpoint' : 'Edit Webhook Endpoint'}</h5>
+              <h5>{formMode === 'create' ? t("webhooks.newEndpoint") : t("webhooks.editEndpoint")}</h5>
             </div>
             <div className="card-body">
               {formError && <div className="alert alert-danger">{formError}</div>}
               <form onSubmit={handleSubmit}>
                 <div className="mb-3">
-                  <label className="form-label">Webhook URL *</label>
+                  <label className="form-label">{t("webhooks.urlLabel")}</label>
                   <input
                     type="url"
                     className="form-control"
                     value={formData.url}
                     onChange={e => setFormData({ ...formData, url: e.target.value })}
-                    placeholder="https://example.com/webhook"
+                    placeholder={t("webhooks.urlPlaceholder")}
                     required
                   />
-                  <small className="form-text text-muted">Must be HTTPS from a public domain</small>
+                  <small className="form-text text-muted">{t("webhooks.urlHint")}</small>
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label">Subscribe to Events *</label>
+                  <label className="form-label">{t("webhooks.eventsLabel")}</label>
                   <div>
                     {EVENT_OPTIONS.map(opt => (
                       <div key={opt.value} className="form-check">
@@ -292,7 +294,7 @@ function WebhooksPage() {
                           onChange={() => handleEventToggle(opt.value)}
                         />
                         <label className="form-check-label" htmlFor={`event-${opt.value}`}>
-                          {opt.label}
+                          {t(opt.labelKey)}
                         </label>
                       </div>
                     ))}
@@ -300,13 +302,13 @@ function WebhooksPage() {
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label">Description</label>
+                  <label className="form-label">{t("webhooks.descriptionLabel")}</label>
                   <input
                     type="text"
                     className="form-control"
                     value={formData.description}
                     onChange={e => setFormData({ ...formData, description: e.target.value })}
-                    placeholder="e.g., Notify accounting system of payments"
+                    placeholder={t("webhooks.descriptionPlaceholder")}
                   />
                 </div>
 
@@ -319,7 +321,7 @@ function WebhooksPage() {
                     onChange={e => setFormData({ ...formData, isActive: e.target.checked })}
                   />
                   <label className="form-check-label" htmlFor="isActive">
-                    Active
+                    {t("webhooks.activeLabel")}
                   </label>
                 </div>
 
@@ -329,14 +331,14 @@ function WebhooksPage() {
                     className="btn btn-primary"
                     disabled={submitting}
                   >
-                    {submitting ? 'Saving...' : 'Save'}
+                    {submitting ? t("webhooks.saving") : t("webhooks.save")}
                   </button>
                   <button
                     type="button"
                     className="btn btn-secondary"
                     onClick={() => setShowForm(false)}
                   >
-                    Cancel
+                    {t("actions.cancel")}
                   </button>
                 </div>
               </form>

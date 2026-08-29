@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import { useAdminAuthContext } from '../hooks/AdminAuthContext';
 import { getErrorMessage } from '../utils/errorMessages';
 import api from '../services/api';
+import { useTranslation } from 'react-i18next';
 
 // Only honour same-origin, absolute internal paths as a post-login destination.
 // Anything else (external URLs, protocol-relative "//evil.com", missing) falls
@@ -17,6 +18,7 @@ function safeReturnTo(returnTo) {
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAdminAuthContext();
+  const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -41,7 +43,7 @@ export default function LoginPage() {
         setError(getErrorMessage(code, error));
       } else {
         // Network failure, timeout, or no response at all
-        setError('Network error. Please try again.');
+        setError(t('auth.networkError'));
       }
     } finally {
       setLoading(false);
@@ -50,7 +52,7 @@ export default function LoginPage() {
 
   return (
     <>
-      <Head><title>Admin Login — StellarEduPay</title></Head>
+      <Head><title>{t("auth.title")} — {t("app.name")}</title></Head>
       <style>{`
         .login-page {
           min-height: calc(100vh - 60px);
@@ -184,12 +186,12 @@ export default function LoginPage() {
       <div className="login-page">
         <div className="login-card">
           <div className="login-icon">🔐</div>
-          <h1>Admin Login</h1>
-          <p className="login-sub">Sign in to manage students, fees, and payments.</p>
+          <h1>{t("auth.title")}</h1>
+          <p className="login-sub">{t("auth.subtitle")}</p>
 
           <form onSubmit={handleSubmit}>
             <div className="login-field">
-              <label className="login-label" htmlFor="username">Username</label>
+              <label className="login-label" htmlFor="username">{t("auth.username")}</label>
               <input
                 id="username"
                 className="login-input"
@@ -199,13 +201,13 @@ export default function LoginPage() {
                 required
                 autoComplete="username"
                 autoFocus
-                placeholder="admin"
+                placeholder={t("auth.usernamePlaceholder")}
                 disabled={loading}
               />
             </div>
 
             <div className="login-field">
-              <label className="login-label" htmlFor="password">Password</label>
+              <label className="login-label" htmlFor="password">{t("auth.password")}</label>
               <input
                 id="password"
                 className="login-input"
@@ -214,7 +216,7 @@ export default function LoginPage() {
                 onChange={e => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
-                placeholder="••••••••"
+                placeholder={t("auth.passwordPlaceholder")}
                 disabled={loading}
               />
             </div>
@@ -228,12 +230,12 @@ export default function LoginPage() {
             <button className="login-btn" type="submit" disabled={loading} aria-busy={loading}>
               <span className="login-btn-inner">
                 {loading && <span className="login-spinner" aria-hidden="true" />}
-                {loading ? 'Signing in…' : 'Sign in →'}
+                {loading ? t("auth.signingIn") : t("auth.signIn")}
               </span>
             </button>
           </form>
 
-          <p className="login-footer">StellarEduPay · Admin Portal</p>
+          <p className="login-footer">{t("auth.footer")}</p>
         </div>
       </div>
     </>

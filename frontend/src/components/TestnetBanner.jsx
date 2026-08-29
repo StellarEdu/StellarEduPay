@@ -1,4 +1,7 @@
+import { useTranslation } from "react-i18next";
+
 export default function TestnetBanner() {
+  const { t } = useTranslation();
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK === "testnet";
   if (!isTestnet) return null;
 
@@ -28,7 +31,7 @@ export default function TestnetBanner() {
         boxShadow: "0 0 0 3px rgba(251,191,36,0.3)",
         animation: "navBlink 2s ease-in-out infinite",
       }} />
-      TESTNET — Do not send real funds
+      {t("components.testnetBanner")}
       <style>{`@keyframes navBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
     </div>
   );

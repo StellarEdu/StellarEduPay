@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "react-i18next";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 import RequireAdmin from "./RequireAdmin";
 import {
@@ -15,9 +16,9 @@ import {
 } from "./Icons";
 
 const PUBLIC_NAV = [
-  { href: "/dashboard",      label: "Dashboard",  Icon: IconDashboard },
-  { href: "/pay-fees",       label: "Pay Fees",   Icon: IconCreditCard },
-  { href: "/reports",        label: "Reports",    Icon: IconBarChart },
+  { href: "/dashboard",      i18nKey: "nav.dashboard",  Icon: IconDashboard },
+  { href: "/pay-fees",       i18nKey: "nav.payFees",   Icon: IconCreditCard },
+  { href: "/reports",        i18nKey: "nav.reports",   Icon: IconBarChart },
 ];
 
 const ADMIN_NAV = [
@@ -31,14 +32,15 @@ const ADMIN_NAV = [
 
 function AppLayoutInner({ children }) {
   const { pathname } = useRouter();
+  const { t } = useTranslation();
   const { isAdmin } = useAdminAuthContext();
 
   return (
     <div className="app-layout">
-      <aside className="app-sidebar" aria-label="Sidebar navigation">
+      <aside className="app-sidebar" aria-label={t("nav.sidebarAria")}>
         <div>
-          <div className="app-sidebar-section">Navigation</div>
-          {PUBLIC_NAV.map(({ href, label, Icon }) => (
+          <div className="app-sidebar-section">{t("nav.section")}</div>
+          {PUBLIC_NAV.map(({ href, i18nKey, Icon }) => (
             <Link
               key={href}
               href={href}
@@ -48,14 +50,14 @@ function AppLayoutInner({ children }) {
               <span className="app-sidebar-icon">
                 <Icon size={15} />
               </span>
-              {label}
+              {t(i18nKey)}
             </Link>
           ))}
 
           {isAdmin && (
             <>
-              <div className="app-sidebar-section">Admin</div>
-              {ADMIN_NAV.map(({ href, label, Icon }) => (
+              <div className="app-sidebar-section">{t("nav.adminSection")}</div>
+              {ADMIN_NAV.map(({ href, i18nKey, Icon }) => (
                 <Link
                   key={href}
                   href={href}
@@ -65,7 +67,7 @@ function AppLayoutInner({ children }) {
                   <span className="app-sidebar-icon">
                     <Icon size={15} />
                   </span>
-                  {label}
+                  {t(i18nKey)}
                 </Link>
               ))}
             </>

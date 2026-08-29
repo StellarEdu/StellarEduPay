@@ -6,8 +6,10 @@ import {
   IconCheck, IconTrendingUp, IconClock, IconX,
 } from "./Icons";
 import PageHero, { StatCard } from "./PageHero";
+import { useTranslation } from "react-i18next";
 
 export default function ReportDownload() {
+  const { t } = useTranslation();
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate]     = useState("");
   const [className, setClassName] = useState("");
@@ -66,7 +68,7 @@ export default function ReportDownload() {
     } catch (err) {
       setError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
-        "Failed to generate report."
+        t("reports.failedGenerate")
       );
     } finally {
       setLoading(false);
@@ -87,7 +89,7 @@ export default function ReportDownload() {
       const response = await fetch(url, {
         credentials: "include",
       });
-      if (!response.ok) throw new Error("Failed to download CSV");
+      if (!response.ok) throw new Error(t("reports.downloadError"));
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const filename =
@@ -102,41 +104,41 @@ export default function ReportDownload() {
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
-      setError("Failed to download CSV: " + (err.message || "Unknown error"));
+      setError(t("reports.failedCsvPrefix") + (err.message || t("reports.failedCsvUnknown")));
     } finally {
       setCsvLoading(false);
     }
   }
 
   const TABLE_COLS = [
-    { key: "date",               label: "Date" },
-    { key: "totalAmount",        label: "Amount (XLM)" },
-    { key: "paymentCount",       label: "Payments" },
-    { key: "validCount",         label: "Valid",      color: "var(--success-text)" },
-    { key: "overpaidCount",      label: "Overpaid",   color: "var(--warning-text)" },
-    { key: "underpaidCount",     label: "Underpaid",  color: "var(--danger-text)" },
-    { key: "uniqueStudentCount", label: "Students" },
+    { key: "date",               label: "reports.colDate" },
+    { key: "totalAmount",        label: "reports.colAmountXlm" },
+    { key: "paymentCount",       label: "reports.colPayments" },
+    { key: "validCount",         label: "status.validation.valid", color: "var(--success-text)" },
+    { key: "overpaidCount",      label: "status.validation.overpaid", color: "var(--warning-text)" },
+    { key: "underpaidCount",     label: "status.validation.underpaid", color: "var(--danger-text)" },
+    { key: "uniqueStudentCount", label: "reports.colStudents" },
   ];
 
   return (
     <div className="page-wrap">
       <PageHero
-        eyebrow="Analytics"
-        title="Payment Reports"
-        subtitle="Generate an on-chain payment summary and daily breakdown for any date range."
+        eyebrow={t("reports.eyebrow")}
+        title={t("reports.title")}
+        subtitle={t("reports.subtitle")}
       />
 
       {/* Filter form */}
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <div className="card-header">
           <div className="card-title" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <IconCalendar size={16} /> Filters & Options
+            <IconCalendar size={16} /> {t("reports.filtersTitle")}
           </div>
         </div>
         <div className="card-body">
           <form onSubmit={handleGenerate} style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Start Date</label>
+              <label className="form-label">{t("reports.startDate")}</label>
               <input
                 type="date"
                 className="form-input"
@@ -146,7 +148,7 @@ export default function ReportDownload() {
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">End Date</label>
+              <label className="form-label">{t("reports.endDate")}</label>
               <input
                 type="date"
                 className="form-input"
@@ -156,45 +158,45 @@ export default function ReportDownload() {
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Class (Optional)</label>
+              <label className="form-label">{t("reports.classOptional")}</label>
               <input
                 type="text"
                 className="form-input"
                 style={{ width: "auto" }}
-                placeholder="e.g. Class A"
+                placeholder={t("reports.classPlaceholder")}
                 value={className}
                 onChange={e => setClassName(e.target.value)}
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Student ID (Optional)</label>
+              <label className="form-label">{t("reports.studentIdOptional")}</label>
               <input
                 type="text"
                 className="form-input"
                 style={{ width: "auto" }}
-                placeholder="e.g. STU-001"
+                placeholder={t("reports.studentIdPlaceholder")}
                 value={studentId}
                 onChange={e => setStudentId(e.target.value)}
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Payment Status (Optional)</label>
+              <label className="form-label">{t("reports.paymentStatusOptional")}</label>
               <select
                 className="form-input"
                 style={{ width: "auto" }}
                 value={paymentStatus}
                 onChange={e => setPaymentStatus(e.target.value)}
               >
-                <option value="">All</option>
-                <option value="valid">Valid</option>
-                <option value="overpaid">Overpaid</option>
-                <option value="underpaid">Underpaid</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="pending">Pending</option>
+                <option value="">{t("reports.all")}</option>
+                <option value="valid">{t("status.validation.valid")}</option>
+                <option value="overpaid">{t("status.validation.overpaid")}</option>
+                <option value="underpaid">{t("status.validation.underpaid")}</option>
+                <option value="confirmed">{t("status.payment.CONFIRMED")}</option>
+                <option value="pending">{t("status.payment.PENDING")}</option>
               </select>
             </div>
             <button type="submit" disabled={loading} className="btn btn-primary" style={{ alignSelf: "flex-end" }}>
-              {loading ? "Generating…" : "Generate Report"}
+              {loading ? t("reports.generating") : t("reports.generateReport")}
             </button>
             {(startDate || endDate || className || studentId || paymentStatus) && !loading && (
               <button
@@ -203,7 +205,7 @@ export default function ReportDownload() {
                 style={{ alignSelf: "flex-end" }}
                 onClick={() => { setStartDate(""); setEndDate(""); setClassName(""); setStudentId(""); setPaymentStatus(""); setReport(null); }}
               >
-                Clear All
+                {t("reports.clearAll")}
               </button>
             )}
           </form>
@@ -229,10 +231,10 @@ export default function ReportDownload() {
             gap: "0.5rem",
           }}>
             <p style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-              Period: <strong>{report.period.startDate || "all time"}</strong>
+              {t("reports.period")} <strong>{report.period.startDate || t("reports.allTime")}</strong>
               {" → "}
-              <strong>{report.period.endDate || "all time"}</strong>
-              &nbsp;·&nbsp;Generated {new Date(report.generatedAt).toLocaleString()}
+              <strong>{report.period.endDate || t("reports.allTime")}</strong>
+              &nbsp;·&nbsp;{t("reports.generatedAt", { date: new Date(report.generatedAt).toLocaleString() })}
             </p>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <button
@@ -251,11 +253,11 @@ export default function ReportDownload() {
                       borderRadius: "50%",
                       animation: "spin 0.8s linear infinite",
                     }} />
-                    <span>Downloading…</span>
+                    <span>{t("reports.downloading")}</span>
                   </>
                 ) : (
                   <>
-                    <IconDownload size={14} /> Download CSV
+                    <IconDownload size={14} /> {t("reports.downloadCsv")}
                   </>
                 )}
               </button>
@@ -265,7 +267,7 @@ export default function ReportDownload() {
                   className="btn btn-ghost btn-sm"
                   style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}
                 >
-                  <IconClock size={14} /> History ({reportHistory.length})
+                  <IconClock size={14} /> {t("reports.history", { count: reportHistory.length })}
                 </button>
               )}
             </div>
@@ -274,16 +276,16 @@ export default function ReportDownload() {
           {showHistory && reportHistory.length > 0 && (
             <div className="card" style={{ marginBottom: "1.5rem" }}>
               <div className="card-header">
-                <div className="card-title">Previously Generated Reports</div>
+                <div className="card-title">{t("reports.historyTitle")}</div>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table" style={{ fontSize: "0.875rem" }}>
                   <thead>
                     <tr>
-                      <th>Generated</th>
-                      <th>Total Amount</th>
-                      <th>Payments</th>
-                      <th>Filters</th>
+                      <th>{t("reports.colGenerated")}</th>
+                      <th>{t("reports.colTotal")}</th>
+                      <th>{t("reports.colPayments")}</th>
+                      <th>{t("reports.colFilters")}</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -300,7 +302,7 @@ export default function ReportDownload() {
                             ? Object.entries(entry.params)
                               .map(([k, v]) => `${k}: ${v}`)
                               .join(", ")
-                            : "None"}
+                            : t("reports.none")}
                         </td>
                         <td>
                           <button
@@ -314,7 +316,7 @@ export default function ReportDownload() {
                             className="btn btn-ghost btn-sm"
                             style={{ padding: "0.25rem 0.5rem" }}
                           >
-                            Rerun
+                            {t("reports.rerun")}
                           </button>
                         </td>
                       </tr>
@@ -333,31 +335,31 @@ export default function ReportDownload() {
 
           {/* Summary stats */}
           <div className="stat-grid" style={{ marginBottom: "1.5rem" }}>
-            <StatCard label="Total Collected" value={report.summary.totalAmount} sub="XLM" Icon={IconTrendingUp} color="violet" />
-            <StatCard label="Total Payments"  value={report.summary.paymentCount}                            Icon={IconBarChart}  color="cyan" />
-            <StatCard label="Valid"           value={report.summary.validCount}                              Icon={IconCheck}     color="green" />
-            <StatCard label="Overpaid"        value={report.summary.overpaidCount}                           Icon={IconAlertTriangle} color="amber" />
-            <StatCard label="Underpaid"       value={report.summary.underpaidCount}                          Icon={IconAlertTriangle} color="rose" />
-            <StatCard label="Paid Students"   value={report.summary.fullyPaidStudentCount}                   Icon={IconCheck}     color="indigo" />
+            <StatCard label={t("reports.statTotalCollected")} value={report.summary.totalAmount} sub="XLM" Icon={IconTrendingUp} color="violet" />
+            <StatCard label={t("reports.statTotalPayments")}  value={report.summary.paymentCount}                            Icon={IconBarChart}  color="cyan" />
+            <StatCard label={t("status.validation.valid")}           value={report.summary.validCount}                              Icon={IconCheck}     color="green" />
+            <StatCard label={t("status.validation.overpaid")}        value={report.summary.overpaidCount}                           Icon={IconAlertTriangle} color="amber" />
+            <StatCard label={t("status.validation.underpaid")}       value={report.summary.underpaidCount}                          Icon={IconAlertTriangle} color="rose" />
+            <StatCard label={t("reports.statPaidStudents")}   value={report.summary.fullyPaidStudentCount}                   Icon={IconCheck}     color="indigo" />
           </div>
 
           {/* By-class breakdown (if available) */}
           {report.byClass && report.byClass.length > 0 && (
             <div className="card" style={{ marginBottom: "1.5rem" }}>
               <div className="card-header">
-                <div className="card-title">By Class</div>
+                <div className="card-title">{t("reports.byClass")}</div>
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table" style={{ fontSize: "0.875rem" }}>
                   <thead>
                     <tr>
-                      <th>Class</th>
-                      <th>Total (XLM)</th>
-                      <th>Payments</th>
-                      <th>Valid</th>
-                      <th>Overpaid</th>
-                      <th>Underpaid</th>
-                      <th>Students</th>
+                      <th>{t("reports.colClass")}</th>
+                      <th>{t("reports.colTotalXlm")}</th>
+                      <th>{t("reports.colPayments")}</th>
+                      <th>{t("status.validation.valid")}</th>
+                      <th>{t("status.validation.overpaid")}</th>
+                      <th>{t("status.validation.underpaid")}</th>
+                      <th>{t("reports.colStudents")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -382,9 +384,9 @@ export default function ReportDownload() {
           {report.byDate.length > 0 ? (
             <div className="card">
               <div className="card-header">
-                <div className="card-title">Daily Breakdown</div>
+                <div className="card-title">{t("reports.dailyBreakdown")}</div>
                 <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                  {report.byDate.length} days
+                  {t("reports.days", { count: report.byDate.length })}
                 </span>
               </div>
               <div style={{ overflowX: "auto" }}>
@@ -392,7 +394,7 @@ export default function ReportDownload() {
                   <thead>
                     <tr>
                       {TABLE_COLS.map(col => (
-                        <th key={col.key} scope="col">{col.label}</th>
+                        <th key={col.key} scope="col">{t(col.label)}</th>
                       ))}
                     </tr>
                   </thead>
@@ -414,7 +416,7 @@ export default function ReportDownload() {
             </div>
           ) : (
             <div style={{ textAlign: "center", padding: "3rem", color: "var(--text-muted)" }}>
-              <p style={{ fontWeight: 500 }}>No payments in this period</p>
+              <p style={{ fontWeight: 500 }}>{t("reports.noPaymentsInPeriod")}</p>
             </div>
           )}
         </>
