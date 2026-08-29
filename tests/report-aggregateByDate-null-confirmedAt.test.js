@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 jest.mock('mongoose', () => ({
   connect: jest.fn().mockResolvedValue(true),
   Schema: class {
-    constructor() { this.index = jest.fn(); }
+    constructor() { this.index = jest.fn(); this.plugin = jest.fn(); }
   },
   model: jest.fn().mockReturnValue({}),
 }));
@@ -26,7 +26,12 @@ jest.mock('../backend/src/models/paymentModel', () => ({
 jest.mock('../backend/src/models/studentModel', () => ({
   aggregate:      (...a) => mockStudentAggregate(...a),
   countDocuments: (...a) => mockStudentCountDocuments(...a),
+  activeFilter:   jest.fn(() => ({})),
 }));
+
+// feeStructureModel is imported by reportService but not used in aggregateByDate —
+// mock it to avoid schema plugin registration errors in the test environment.
+jest.mock('../backend/src/models/feeStructureModel', () => ({}));
 
 const reportService = require('../backend/src/services/reportService');
 
@@ -95,9 +100,17 @@ describe('Report Service aggregateByDate (#674)', () => {
       const aggregatePipeline = mockPaymentAggregate.mock.calls[0][0];
       const groupStage = aggregatePipeline.find((stage) => stage.$group);
 
-      // Verify the $group stage uses $dateToString with fallback logic
+      // #1362 — Verify the $group _id uses $ifNull to fall back to $updatedAt
+      // when $confirmedAt is null, preventing payments from being bucketed under null.
       expect(groupStage).toBeDefined();
-      expect(groupStage.$group._id).toBeDefined();
+      const groupId = groupStage.$group._id;
+      expect(groupId).toBeDefined();
+      // _id must be a $dateToString expression with $ifNull inside
+      expect(groupId).toMatchObject({
+        $dateToString: expect.objectContaining({
+          date: { $ifNull: ['$confirmedAt', '$updatedAt'] },
+        }),
+      });
     });
 
     it('should match total payment count in date reports with summary report', async () => {

@@ -2,6 +2,10 @@
 /**
  * Tests for issue #1094 — docker-compose.yml must not expose MongoDB on the
  * host by default and must not provide functional default credentials.
+ *
+ * Extended by issue #1363 — mongod must start with explicit --auth so any
+ * container in the network is denied unauthenticated access regardless of
+ * whether the --keyFile flag is also present.
  */
 
 const fs = require('fs');
@@ -82,5 +86,30 @@ describe('#1094 docker-compose.yml MongoDB security', () => {
     const lines = raw.split('\n').filter((l) => !l.trim().startsWith('#'));
     const withDefaultRoot = lines.filter((l) => /ROOT_USERNAME:-root/.test(l));
     expect(withDefaultRoot).toHaveLength(0);
+  });
+
+  // ── #1363 — explicit --auth flag ──────────────────────────────────────────
+  // --keyFile implicitly enables auth but is easy to misread or accidentally
+  // omit. Requiring --auth to be present explicitly in the entrypoint makes
+  // the security intent unambiguous and catches accidental removal of either
+  // flag during future edits.
+
+  test('#1363 mongod entrypoint includes --auth flag explicitly', () => {
+    // The entrypoint is an array or a string; normalise to one string for search.
+    const entrypoint = mongo.entrypoint;
+    const entrypointStr = Array.isArray(entrypoint)
+      ? entrypoint.join(' ')
+      : String(entrypoint || '');
+
+    expect(entrypointStr).toMatch(/--auth/);
+  });
+
+  test('#1363 mongod entrypoint includes --keyFile for intra-cluster authentication', () => {
+    const entrypoint = mongo.entrypoint;
+    const entrypointStr = Array.isArray(entrypoint)
+      ? entrypoint.join(' ')
+      : String(entrypoint || '');
+
+    expect(entrypointStr).toMatch(/--keyFile/);
   });
 });
