@@ -3,6 +3,7 @@
 const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
+const { POOL_CONFIG } = require('../config/database');
 
 /**
  * Get the data version for cache key generation.
@@ -66,7 +67,10 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC' 
       },
     },
     { $sort: { date: 1 } },
-  ], { hint: { schoolId: 1, status: 1, confirmedAt: -1 } });
+  ], {
+    hint: { schoolId: 1, status: 1, confirmedAt: -1 },
+    maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS,
+  });
 
   return rows;
 }
@@ -157,7 +161,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       },
     },
     { $sort: { className: 1 } },
-  ]);
+  ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS });
 
   // Calculate dateRangeDays to indicate actual range returned
   let dateRangeDays = null;
@@ -285,7 +289,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
     MonthlyMetrics.aggregate([
       { $match: { schoolId } },
       { $group: { _id: null, totalCollected: { $sum: '$totalAmount' }, count: { $sum: '$paymentCount' } } },
-    ]),
+    ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
 
     // Today from daily rollup (O(1) point-read)
     DailyMetrics.findOne({ schoolId, period: todayKey }).lean(),
@@ -315,7 +319,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
         },
       },
       { $sort: { class: 1 } },
-    ]),
+    ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
 
     // 5 most recent successful payments (small bounded query, always fast)
     Payment.find({ schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null })
@@ -327,7 +331,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
     Student.aggregate([
       { $match: Student.activeFilter({ schoolId }) },
       { $group: { _id: null, totalExpected: { $sum: '$feeAmount' }, totalPaid: { $sum: '$totalPaid' } } },
-    ]),
+    ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
   ]);
 
   const collected = allTimeRollup[0] || { totalCollected: 0, count: 0 };
