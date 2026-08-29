@@ -5,6 +5,7 @@ import {
   createFeeAdjustmentRule,
   updateFeeAdjustmentRule,
   deleteFeeAdjustmentRule,
+  getFeeAdjustmentAffectedCount,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { validateStellarAmount } from "../utils/stellarAmount";
@@ -20,11 +21,18 @@ const RULE_TYPES = [
   { value: "waiver",              labelKey: "feeAdjustments.ruleTypeWaiver" },
 ];
 
+const CONFLICT_POLICIES = [
+  { value: "stack",             label: "Stack (apply all matching rules)" },
+  { value: "first_only",        label: "First only (highest priority wins)" },
+  { value: "best_for_student",  label: "Best for student (largest discount wins)" },
+];
+
 const EMPTY_FORM = {
   name: "",
   type: "discount_percentage",
   value: "",
   priority: 10,
+  conflictResolutionPolicy: "stack",
   description: "",
   isActive: true,
 };
@@ -52,6 +60,19 @@ function RuleTypePill({ type }) {
   );
 }
 
+function ConflictPolicyPill({ policy }) {
+  const p = CONFLICT_POLICIES.find(c => c.value === (policy || "stack"));
+  return (
+    <span
+      className="badge badge-neutral"
+      style={{ fontSize: "0.7rem", textTransform: "none" }}
+      title="Only takes effect when this is the highest-priority rule matching a given student alongside other matching rules"
+    >
+      {p ? p.label.split(" (")[0] : (policy || "stack")}
+    </span>
+  );
+}
+
 export default function FeeAdjustments() {
   const { t } = useTranslation();
   const { schoolId } = useAdminAuthContext();
@@ -63,6 +84,11 @@ export default function FeeAdjustments() {
   const [saving, setSaving]         = useState(false);
   const [formError, setFormError]   = useState(null);
   const [formSuccess, setFormSuccess] = useState(false);
+  const [deleteTarget, setDeleteTarget]     = useState(null); // rule pending confirmation
+  const [affectedCount, setAffectedCount]   = useState(null);
+  const [deleteReason, setDeleteReason]     = useState("");
+  const [deleteError, setDeleteError]       = useState(null);
+  const [deleting, setDeleting]             = useState(false);
 
   const load = useCallback(() => {
     if (!schoolId) return; // Don't load until we have the authenticated school context
@@ -83,6 +109,7 @@ export default function FeeAdjustments() {
       type: rule.type,
       value: rule.value,
       priority: rule.priority ?? 10,
+      conflictResolutionPolicy: rule.conflictResolutionPolicy || "stack",
       description: rule.description || "",
       isActive: rule.isActive,
     });
@@ -151,13 +178,40 @@ export default function FeeAdjustments() {
     }
   }
 
-  async function handleDeactivate(rule) {
-    if (!confirm(t("feeAdjustments.deactivateConfirm", { name: rule.name }))) return;
+  function handleDeactivate(rule) {
+    setDeleteTarget(rule);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+    getFeeAdjustmentAffectedCount(rule._id, schoolId)
+      .then(({ data }) => setAffectedCount(data.affectedCount))
+      .catch(() => setAffectedCount(null));
+  }
+
+  function cancelDeactivate() {
+    setDeleteTarget(null);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+  }
+
+  async function confirmDeactivate() {
+    if (!deleteReason.trim()) {
+      setDeleteError("A reason is required to deactivate this rule.");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await deleteFeeAdjustmentRule(rule._id, schoolId);
+      await deleteFeeAdjustmentRule(deleteTarget._id, schoolId, deleteReason.trim());
+      cancelDeactivate();
       load();
-    } catch {
-      setError(t("feeAdjustments.failedToDeactivate"));
+    } catch (err) {
+      setDeleteError(
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Could not deactivate rule."
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -287,6 +341,23 @@ export default function FeeAdjustments() {
                   <p className="fa-priority-hint">{t("feeAdjustments.priorityHint")}</p>
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label">When rules overlap</label>
+                  <select
+                    className="form-input form-select"
+                    value={form.conflictResolutionPolicy}
+                    onChange={e => setForm(f => ({ ...f, conflictResolutionPolicy: e.target.value }))}
+                  >
+                    {CONFLICT_POLICIES.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                  <p className="fa-priority-hint">
+                    Only matters if this ends up the highest-priority rule matching a
+                    student alongside others — see "How overlapping rules resolve" below.
+                  </p>
+                </div>
+
                 <div className="form-group full">
                   <label className="form-label">{t("feeAdjustments.descriptionLabel")}</label>
                   <input
@@ -325,6 +396,45 @@ export default function FeeAdjustments() {
           </div>
         </div>
 
+        {/* ── How overlapping rules resolve ───────────── */}
+        <div className="card" style={{ marginBottom: "1.5rem" }}>
+          <div className="card-header">
+            <div className="card-title">How overlapping rules resolve</div>
+          </div>
+          <div className="card-body" style={{ fontSize: "0.85rem", lineHeight: 1.6 }}>
+            <p style={{ marginTop: 0 }}>
+              When more than one active rule matches the same student, they run in{" "}
+              <strong>ascending priority order — lowest number first</strong> (ties broken
+              alphabetically by name). Each rule adjusts the fee <em>left by the rule before
+              it</em>, not the original fee — so for percentage rules, priority order changes
+              the final amount.
+            </p>
+            <p>
+              What happens to the rest of the matches is set by the{" "}
+              <strong>"When rules overlap"</strong> field on whichever matching rule has the
+              lowest priority number:
+            </p>
+            <ul style={{ margin: "0.25rem 0 0.75rem", paddingLeft: "1.25rem" }}>
+              <li><strong>Stack</strong> — every matching rule applies, in priority order.</li>
+              <li><strong>First only</strong> — only that top rule applies; other matches are ignored.</li>
+              <li><strong>Best for student</strong> — among matching <em>discounts</em>, only the one
+                that saves the most applies; matching <em>penalties</em> always stack regardless.</li>
+            </ul>
+            <p style={{
+              margin: 0, padding: "0.6rem 0.75rem", borderRadius: 6,
+              background: "var(--bg-subtle, var(--bg))", border: "1px solid var(--border)",
+            }}>
+              <strong>Example:</strong> a ₦10,000 fee with a 15% scholarship (priority 5) and a
+              flat ₦800 late surcharge (priority 20), policy "Stack": the scholarship runs
+              first (10,000 → 8,500), then the surcharge adds on top of that (8,500 → final{" "}
+              <strong>₦9,300</strong>). Swap the two priorities instead and the surcharge would
+              apply to the full 10,000 first (→ 10,800), then the 15% would come off that
+              larger number (→ final <strong>₦9,180</strong>) — a different final fee from the
+              exact same two rules and values, purely from priority order.
+            </p>
+          </div>
+        </div>
+
         {/* ── Rules Table ────────────────────────────── */}
         {error && (
           <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
@@ -346,14 +456,14 @@ export default function FeeAdjustments() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>{t("feeAdjustments.colPriority")}</th><th>{t("feeAdjustments.colName")}</th><th>{t("feeAdjustments.colType")}</th><th>{t("feeAdjustments.colValue")}</th>
-                    <th>{t("feeAdjustments.colStatus")}</th><th></th>
+                    <th>Priority</th><th>Name</th><th>Type</th><th>Value</th>
+                    <th>When overlapping</th><th>Status</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {Array.from({ length: 4 }).map((_, i) => (
                     <tr key={i}>
-                      {[30,140,120,50,60,80].map((w, j) => (
+                      {[30,140,120,50,90,60,80].map((w, j) => (
                         <td key={j}><div className="skeleton" style={{ height: 12, width: w }} /></td>
                       ))}
                     </tr>
@@ -371,12 +481,13 @@ export default function FeeAdjustments() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th scope="col">{t("feeAdjustments.colPriority")}</th>
-                    <th scope="col">{t("feeAdjustments.colName")}</th>
-                    <th scope="col">{t("feeAdjustments.colType")}</th>
-                    <th scope="col">{t("feeAdjustments.colValue")}</th>
-                    <th scope="col">{t("feeAdjustments.colStatus")}</th>
-                    <th scope="col" style={{ textAlign: "right" }}>{t("feeAdjustments.colActions")}</th>
+                    <th scope="col">Priority</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Value</th>
+                    <th scope="col">When overlapping</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" style={{ textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -410,6 +521,7 @@ export default function FeeAdjustments() {
                       <td style={{ fontVariantNumeric: "tabular-nums" }}>
                         {rule.type === "waiver" ? "—" : rule.value}
                       </td>
+                      <td><ConflictPolicyPill policy={rule.conflictResolutionPolicy} /></td>
                       <td>
                         <span className={`badge ${rule.isActive ? "badge-success" : "badge-neutral"}`}>
                           {rule.isActive ? t("feeAdjustments.active") : t("feeAdjustments.inactive")}
@@ -440,6 +552,63 @@ export default function FeeAdjustments() {
             </div>
           )}
         </div>
+
+        {deleteTarget && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fa-delete-title"
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+              display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+            }}
+          >
+            <div className="card" style={{ maxWidth: 440, width: "90%" }}>
+              <div className="card-header">
+                <div className="card-title" id="fa-delete-title">Deactivate rule?</div>
+              </div>
+              <div className="card-body">
+                <p style={{ marginBottom: "0.75rem" }}>
+                  This will deactivate <strong>&quot;{deleteTarget.name}&quot;</strong>. It will
+                  no longer be applied to future payment verifications.
+                </p>
+                <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
+                  {affectedCount === null
+                    ? "Checking how many students this rule currently applies to…"
+                    : `This rule currently applies to ${affectedCount} student${affectedCount !== 1 ? "s" : ""}.`}
+                </p>
+
+                {deleteError && (
+                  <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
+                    <IconAlertTriangle size={15} />
+                    <span>{deleteError}</span>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="fa-delete-reason">Reason *</label>
+                  <input
+                    id="fa-delete-reason"
+                    className="form-input"
+                    value={deleteReason}
+                    onChange={e => setDeleteReason(e.target.value)}
+                    placeholder="Why is this rule being deactivated?"
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button className="btn btn-ghost" onClick={cancelDeactivate} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-danger" onClick={confirmDeactivate} disabled={deleting}>
+                    {deleting ? "Deactivating…" : "Deactivate Rule"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

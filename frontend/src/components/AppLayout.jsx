@@ -12,6 +12,7 @@ import {
   IconFileText,
   IconMessageCircle,
   IconDollarSign,
+  IconShield,
 } from "./Icons";
 
 const PUBLIC_NAV = [
@@ -21,11 +22,12 @@ const PUBLIC_NAV = [
 ];
 
 const ADMIN_NAV = [
-  { href: "/fees",            i18nKey: "nav.fees",        Icon: IconDollarSign },
-  { href: "/fee-adjustments", i18nKey: "nav.feeRules",   Icon: IconLayers },
-  { href: "/fees",            i18nKey: "nav.fees",        Icon: IconCreditCard },
-  { href: "/audit-logs",      i18nKey: "nav.auditLogs",  Icon: IconFileText },
-  { href: "/disputes",        i18nKey: "nav.disputes",    Icon: IconMessageCircle },
+  { href: "/fees",                    label: "Fees",          Icon: IconDollarSign },
+  { href: "/fee-adjustments",         label: "Fee Rules",     Icon: IconLayers },
+  { href: "/source-validation-rules", label: "Source Rules",  Icon: IconShield },
+  { href: "/fees",                    label: "Fees",          Icon: IconCreditCard },
+  { href: "/audit-logs",              label: "Audit Logs",    Icon: IconFileText },
+  { href: "/disputes",                label: "Disputes",      Icon: IconMessageCircle },
 ];
 
 function AppLayoutInner({ children }) {

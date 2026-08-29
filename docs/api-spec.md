@@ -1420,6 +1420,18 @@ If the priorities were reversed the result would differ (50 added first, then 10
 
 A `waiver` rule immediately sets the fee to 0 and stops further processing.
 
+### Conflict Resolution
+
+When more than one active rule matches the same student, the `conflictResolutionPolicy` on the **highest-priority matching rule** (lowest `priority` number) decides what happens to the rest of the matches:
+
+| Policy | Behavior |
+|--------|----------|
+| `stack` (default) | All matching rules apply, in priority order. |
+| `first_only` | Only the highest-priority match applies; the rest are skipped. |
+| `best_for_student` | Among matching discount rules, only the one with the largest reduction applies; matching penalty rules always stack regardless. |
+
+See [Fee Adjustment Rule Engine](./architecture.md#fee-adjustment-rule-engine) in the architecture doc for a full worked example.
+
 ---
 
 #### POST /api/fee-adjustments
@@ -1451,6 +1463,7 @@ Create a new fee adjustment rule for the school.
 | `value` | ✅ | Non-negative number (percentage or fixed amount) |
 | `conditions` | No | Object with optional `studentClass[]`, `academicYear`, `paymentBefore`, `paymentAfter`, `minAmount`, `maxAmount` |
 | `priority` | No | Lower number = applied first (default: 10) |
+| `conflictResolutionPolicy` | No | One of `stack` (default), `first_only`, `best_for_student` — see [Conflict Resolution](#conflict-resolution) |
 | `description` | No | Human-readable description |
 
 **Response `201`:**
@@ -1464,6 +1477,7 @@ Create a new fee adjustment rule for the school.
   "value": 10,
   "conditions": { "studentClass": ["JSS1", "JSS2"], "paymentBefore": "2026-09-01T00:00:00.000Z" },
   "priority": 5,
+  "conflictResolutionPolicy": "stack",
   "isActive": true,
   "description": "10% discount for early payment",
   "createdAt": "2026-04-23T15:00:00.000Z",
@@ -1500,6 +1514,7 @@ List all fee adjustment rules for the school (active and inactive).
     "value": 10,
     "conditions": {},
     "priority": 5,
+    "conflictResolutionPolicy": "stack",
     "isActive": true,
     "description": "10% discount for early payment"
   }

@@ -27,6 +27,7 @@ kind: Kustomization
 
 resources:
   - backend-deployment.yaml
+  - backend-hpa.yaml
   - backend-pdb.yaml
   - backend-networkpolicy.yaml
   - backend-service.yaml

@@ -138,3 +138,6 @@ kubectl rollout undo deployment/frontend
 Because the previous ReplicaSet still references the old immutable tag, undo restores that exact image (not whatever :latest points at).
 MongoDB
 deploy/k8s/mongodb-statefulset.yaml runs a single replica (replicas: 1) with no --replSet. This is intentional for the in-cluster baseline; multi-document transactions require a replica set or an external managed MongoDB (e.g. Atlas).
+
+Backend auto-scaling
+deploy/k8s/backend-hpa.yaml defines a HorizontalPodAutoscaler for the backend Deployment: it scales between 2 and 10 replicas, targeting 70% average CPU utilization across pods. This handles end-of-term fee-collection peaks without manual `kubectl scale`. The Deployment's `replicas: 2` field is only the starting point once the HPA is applied — the HPA takes over adjusting replica count from there. Tune `minReplicas`/`maxReplicas`/`averageUtilization` in that file if peak load patterns change.

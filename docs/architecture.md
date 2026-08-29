@@ -20,6 +20,7 @@ StellarEduPay is a three-tier application: a Next.js frontend, a Node.js/Express
 - [Queue Durability](#queue-durability)
 - [Multi-School Tenancy](#multi-school-tenancy)
 - [Error Handling and Resilience](#error-handling-and-resilience)
+- [Fee Adjustment Rule Engine](#fee-adjustment-rule-engine)
 
 ---
 
@@ -671,6 +672,86 @@ perform the addition in exact Decimal128 space instead.
 
 `parseFloat(x.toFixed(7))` must not reappear anywhere on this path — it is a
 reliable marker of float money arithmetic creeping back in.
+
+---
+
+## Fee Adjustment Rule Engine
+
+School admins create discount/penalty/waiver rules on the **Fee Adjustment
+Rules** admin page. When more than one rule matches the same student and
+payment, the order rules run in — and what happens when they disagree — is
+not visible from the UI alone, so it's documented here in full.
+
+**Live path:** admin page (`frontend/src/pages/fee-adjustments.jsx`) →
+`POST/PUT /api/fee-adjustments` → `feeAdjustmentController.js` →
+`FeeAdjustmentRule` Mongo model → `feeAdjustmentService.js`, which is what
+actually computes the fee used at payment time. See the doc comments atop
+`feeAdjustmentRuleModel.js` and `feeAdjustmentService.js` for the
+implementation-level detail this section summarizes.
+
+> **Not the live path:** `backend/src/services/feeAdjustmentEngine.js`
+> (`DynamicFeeAdjustmentEngine`) is a separate, self-contained engine with its
+> own hardcoded rule set. It is exercised only by
+> `tests/feeAdjustment.test.js` and `tests/feeAdjustmentEngine-interactions.test.js`
+> — nothing under `backend/src/controllers` or `backend/src/routes` calls it, so
+> it has no effect on any real fee. It also sorts priority in the **opposite**
+> direction (highest number first) from the live engine below and always
+> stacks every match. Its own header comment documents its behavior in detail
+> so it isn't mistaken for the production rules.
+
+### Rule application order
+
+Rules are sorted **ascending by `priority`** — the **lowest number runs
+first** — with ties broken by `name` ascending, so evaluation order is always
+fully deterministic (`feeAdjustmentService._fetchSortedRules`). Each rule
+operates on the fee amount **left by the previous rule**, not the original
+base amount, so for percentage rules the order changes the numeric result.
+
+### Conflict resolution strategy
+
+Only rules whose `conditions` match the student/payment context are
+considered. The `conflictResolutionPolicy` on the **first matching rule** (by
+priority) governs how the rest of the matches are handled:
+
+| Policy | Behavior |
+|---|---|
+| `stack` (default) | All matching rules apply in priority order, each on the fee left by the one before it. |
+| `first_only` | Only the highest-priority match applies; every other match is skipped. |
+| `best_for_student` | Among matching **discount** rules, only the one with the largest reduction applies; matching **penalty** rules always stack regardless of this policy. |
+
+A `waiver` rule sets the fee to 0 and stops processing immediately,
+regardless of policy. The final fee is always clamped to 0 (never negative).
+
+### Worked example: a percentage scholarship vs. an absolute surcharge
+
+Base fee: **₦10,000**. Two active rules match the same student:
+
+| Priority | Name | Type | Value |
+|---|---|---|---|
+| 5 | Sibling Scholarship | `discount_percentage` | 15 |
+| 20 | Late Registration Surcharge | `penalty_fixed` | 800 |
+
+**Policy `stack` (default, set on the priority-5 rule):**
+1. Priority 5 runs first — 15% off 10,000 → **8,500**
+2. Priority 20 runs next — flat +800 on the fee it inherited → **9,300**
+
+Final fee: **₦9,300**. If the priorities were reversed (surcharge at 5,
+scholarship at 20), the surcharge would apply to 10,000 first (→ 10,800) and
+the 15% discount would then apply to that larger number (→ 9,180) — a
+different final fee from the exact same two rules and values, purely because
+of priority order. This is why priority (not creation order) is what admins
+must set deliberately when rules are meant to interact.
+
+**Same two rules, policy `first_only` instead** (set on the priority-5 rule):
+only the Sibling Scholarship applies — final fee **₦8,500**. The surcharge is
+evaluated, matches, but is skipped because a higher-priority rule already
+applied.
+
+**Same two rules, policy `best_for_student`:** the surcharge is a penalty, so
+it always stacks; the scholarship is the only matching discount, so it also
+applies. Result is identical to `stack` here (**₦9,300**) — this policy only
+changes behavior once *more than one discount* matches at once, by keeping
+the single best one instead of stacking all of them.
 
 ---
 

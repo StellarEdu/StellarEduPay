@@ -19,6 +19,11 @@ const APP_LAYOUT_ROUTES = [
   "/fee-adjustments",
   "/audit-logs",
   "/disputes",
+  "/source-validation-rules",
+  "/audit-logs",
+  "/fee-adjustments",
+  "/fees",
+  "/reports",
 ];
 
 export default function MyApp({ Component, pageProps }) {

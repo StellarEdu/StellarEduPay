@@ -15,6 +15,7 @@
  * for the full rationale and how to configure a deny-by-default posture.
  */
 
+const StellarSdk = require('@stellar/stellar-sdk');
 const SourceValidationRule = require('../models/sourceValidationRuleModel');
 const { logAudit } = require('../services/auditService');
 
@@ -65,6 +66,12 @@ async function createRule(req, res, next) {
       } catch {
         return res.status(400).json({ error: 'value is not a valid regular expression.', code: 'VALIDATION_ERROR' });
       }
+    }
+
+    // #1354 — blacklist/whitelist entries store a sender's Stellar public key,
+    // so validate it with the Stellar SDK before saving.
+    if (['blacklist', 'whitelist'].includes(type) && !StellarSdk.StrKey.isValidEd25519PublicKey(value)) {
+      return res.status(400).json({ error: 'value must be a valid Stellar public key (starts with "G").', code: 'VALIDATION_ERROR' });
     }
 
     // Duplicate check is scoped to this school only
