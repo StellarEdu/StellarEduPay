@@ -96,6 +96,12 @@ export const getDisputeById = (id) => api.get(`/disputes/${id}`);
 export const resolveDispute = (id, data) =>
   api.patch(`/disputes/${id}/resolve`, data);
 
+// Refunds
+export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
+export const approveRefund = (refundId, data) => api.post(`/payments/refunds/${refundId}/approve`, data);
+export const getPaymentRefunds = (txHash) => api.get(`/payments/${txHash}/refunds`);
+export const getSchoolRefunds = (params = {}) => api.get("/payments/refunds/school/list", { params });
+
 // Audit logs
 export const getRecentAuditLogs = (limit = 10) =>
   api.get("/audit-logs/recent", { params: { limit } });
@@ -109,15 +115,19 @@ export const createFeeAdjustmentRule = (data, schoolId) =>
   api.post("/fee-adjustments", data, { headers: { "X-School-ID": schoolId } });
 export const updateFeeAdjustmentRule = (id, data, schoolId) =>
   api.put(`/fee-adjustments/${id}`, data, { headers: { "X-School-ID": schoolId } });
-export const deleteFeeAdjustmentRule = (id, schoolId, reason) =>
-  api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId }, data: { reason } });
-export const getFeeAdjustmentAffectedCount = (id, schoolId) =>
-  api.get(`/fee-adjustments/${id}/affected-count`, { headers: { "X-School-ID": schoolId } });
+export const deleteFeeAdjustmentRule = (id, schoolId) =>
+  api.delete(`/fee-adjustments/${id}`, { headers: { "X-School-ID": schoolId } });
 
-// Source validation rules (sender allowlisting)
-export const getSourceValidationRules = (schoolId) =>
-  api.get("/source-rules", { headers: { "X-School-ID": schoolId } });
-export const createSourceValidationRule = (data, schoolId) =>
-  api.post("/source-rules", data, { headers: { "X-School-ID": schoolId } });
-export const deleteSourceValidationRule = (id, schoolId) =>
-  api.delete(`/source-rules/${id}`, { headers: { "X-School-ID": schoolId } });
+// School settings
+export const getSchool = (slug) => api.get(`/schools/${slug}`);
+export const updateSchool = (slug, data) => api.patch(`/schools/${slug}`, data);
+
+// Payment plans
+export const createPaymentPlan = (studentId, data) =>
+  api.post(`/payment-plans/${studentId}`, data);
+export const getPaymentPlan = (studentId) =>
+  api.get(`/payment-plans/${studentId}`);
+export const updateInstallment = (studentId, installmentIndex, data) =>
+  api.patch(`/payment-plans/${studentId}/installment/${installmentIndex}`, data);
+export const cancelPaymentPlan = (studentId) =>
+  api.delete(`/payment-plans/${studentId}`);

@@ -6,10 +6,34 @@ kind: Kustomization
 #
 #   kubectl apply -k deploy/k8s/overlays/mainnet   # production
 #   kubectl apply -k deploy/k8s/overlays/testnet   # staging / testnet
+#
+# Image Tags and Private Registry:
+#
+#   Image tags are set to "placeholder" in the base manifests to prevent
+#   accidental use. Use Kustomize overlays to override image tags with
+#   immutable commit SHAs from your CI pipeline:
+#
+#     images:
+#       - name: stellaredupay/backend
+#         newTag: sha-abc1234
+#
+#   For private registries, add imagePullSecrets to the overlay:
+#
+#     imagePullSecrets:
+#       - name: regcred
+#
+#   (Create the secret with: kubectl create secret docker-registry regcred \
+#    --docker-server=<registry> --docker-username=<user> --docker-password=<pass>)
 
 resources:
   - backend-deployment.yaml
   - backend-hpa.yaml
   - backend-pdb.yaml
   - backend-networkpolicy.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
   - redis.yaml
+  - mongodb-statefulset.yaml
+  - configmap.yaml
+  - ingress.yaml

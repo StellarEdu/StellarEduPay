@@ -2,13 +2,15 @@ Dear Parent/Guardian,
 
 We have received your school fee payment for {{studentName}}. Thank you.
 
-  Amount Paid       : {{amount}}
+{{#if schoolName}}  School            : {{schoolName}}
+{{/if}}  Amount Paid       : {{amount}}
   Transaction Hash  : {{txHash}}
   Confirmed At      : {{confirmedAt}}
 {{#if remainingBalance}}  Remaining Balance : {{remainingBalance}}
+{{/if}}{{#if schoolAddress}}  School Address    : {{schoolAddress}}
 {{/if}}
 This receipt confirms the payment was recorded on the Stellar network. Keep it
 for your records.
 
 Thank you,
-StellarEduPay
+{{schoolName}} Administration

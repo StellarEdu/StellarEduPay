@@ -4,8 +4,25 @@ kind: Kustomization
 # Production / mainnet overlay.
 # Apply with: kubectl apply -k deploy/k8s/overlays/mainnet
 #
-# Image tags are pinned to an immutable commit SHA. Promoting from
-# testnet to mainnet is a one-line newTag change — reviewable in git.
+# Image Promotion Workflow:
+#
+#   1. SHAs are validated in testnet first (see overlays/testnet/kustomization.yaml).
+#
+#   2. Once validated, promote the same SHA to mainnet by updating newTag below.
+#      Promoting from testnet to mainnet is a one-line newTag change — reviewable in git.
+#      Example: newTag: sha-abc1234  (same SHA from testnet)
+#
+#   3. Commit and deploy: kubectl apply -k deploy/k8s/overlays/mainnet
+#
+# Private Registry:
+#
+#   If using a private registry, uncomment imagePullSecrets and ensure the
+#   secret exists in the cluster:
+#
+#     kubectl create secret docker-registry regcred \
+#       --docker-server=your.registry.com \
+#       --docker-username=<username> \
+#       --docker-password=<password>
 
 resources:
   - ../../
@@ -15,6 +32,10 @@ images:
     newTag: sha-PLACEHOLDER
   - name: stellaredupay/frontend
     newTag: sha-PLACEHOLDER
+
+# Uncomment for private registries:
+# imagePullSecrets:
+#   - name: regcred
 
 patches:
   - patch: |-

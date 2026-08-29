@@ -3,7 +3,7 @@
 // Set env vars BEFORE requiring app
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-secret-key-for-authentication-tests';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
@@ -86,6 +86,86 @@ jest.mock('../backend/src/services/retryService', () => ({
 const app = require('../backend/src/app');
 const cache = require('../backend/src/cache');
 
+const PUBLIC_ROUTE_ALLOWLIST = new Set([
+  'GET /health',
+  'GET /health/live',
+  'GET /health/ready',
+  'GET /metrics',
+  'POST /api/auth/login',
+  'POST /api/auth/refresh',
+  'POST /api/auth/logout',
+  'POST /api/payments/intent',
+  'POST /api/payments/submit',
+  'POST /api/payments/verify',
+  'GET /api/payments/verify/:txHash',
+  'GET /api/payments/instructions/:studentId',
+  'GET /api/payments/receipt/:txHash',
+  'GET /api/payments/verify/:receiptId',
+  'GET /api/students/public/:studentId',
+  'GET /api/reminders/unsubscribe',
+  'POST /api/email-provider-webhook/callback',
+  'POST /api/email/webhooks/:provider',
+  'GET /api/docs.json',
+]);
+
+function routePathFromLayer(layer, prefix = '') {
+  if (layer.route) {
+    return `${prefix}${layer.route.path}`;
+  }
+
+  if (layer.name !== 'router' || !layer.handle?.stack) {
+    return null;
+  }
+
+  if (layer.regexp?.fast_slash) {
+    return prefix;
+  }
+
+  const mountPath = layer.regexp.source
+    .replace(/^\^\\/, '')
+    .replace(/\\\//g, '/')
+    .replace(/\/\?\(\?=\/\|\$\)$/, '');
+  return `${prefix}${mountPath}`;
+}
+
+function collectRegisteredRoutes(router, prefix = '') {
+  const stack = router.stack || router._router?.stack || [];
+  return stack.flatMap((layer) => {
+    if (layer.route) {
+      const path = routePathFromLayer(layer, prefix);
+      return Object.keys(layer.route.methods)
+        .filter((method) => layer.route.methods[method])
+        .map((method) => ({ method: method.toUpperCase(), path }));
+    }
+
+    if (layer.name === 'router' && layer.handle?.stack) {
+      const nestedPrefix = routePathFromLayer(layer, prefix);
+      return collectRegisteredRoutes(layer.handle, nestedPrefix || prefix);
+    }
+
+    return [];
+  });
+}
+
+function sampleRoutePath(path) {
+  return path.replace(/:([^/]+)/g, (_, parameter) => {
+    const samples = {
+      studentId: 'STU001',
+      schoolId: 'school-a',
+      className: 'Grade%205A',
+      txHash: 'abc123def456',
+      receiptId: 'receipt-001',
+      paymentId: 'payment-001',
+      sessionId: 'session-001',
+      provider: 'test',
+      email: 'test%40example.com',
+      state: 'pending',
+    };
+
+    return samples[parameter] || 'test-value';
+  });
+}
+
 describe('Authentication on Protected Endpoints (#562)', () => {
   const validAdminToken = jwt.sign({ role: 'admin', email: 'admin@test.com' }, process.env.JWT_SECRET);
   const invalidToken = 'invalid.token.here';
@@ -96,8 +176,36 @@ describe('Authentication on Protected Endpoints (#562)', () => {
     // The auth middleware blocks an IP after 5 failed attempts (in-memory cache).
     // Since every test here fires unauthenticated requests from the same IP, clear
     // the fail-count / block state between tests so blocks don't bleed across cases.
-    cache.delByPrefix('fail_count:');
-    cache.delByPrefix('blocked_ip:');
+    cache.delByPrefix('ip_auth_fail:');
+    cache.delByPrefix('ip_blocked:');
+  });
+
+  describe('Complete registered-route coverage', () => {
+    test('requires authentication on every non-public registered route', async () => {
+      const routes = collectRegisteredRoutes(app._router)
+        .filter(({ method, path }) => !PUBLIC_ROUTE_ALLOWLIST.has(`${method} ${path}`));
+      const uniqueRoutes = [...new Map(
+        routes.map((route) => [`${route.method} ${route.path}`, route])
+      ).values()];
+
+      expect(uniqueRoutes.length).toBeGreaterThan(0);
+
+      const failures = [];
+      for (const [index, { method, path }] of uniqueRoutes.entries()) {
+        cache.delByPrefix('ip_auth_fail:');
+        cache.delByPrefix('ip_blocked:');
+
+        const response = await request(app)[method.toLowerCase()](sampleRoutePath(path))
+          .set('X-School-ID', 'school-a')
+          .set('X-Forwarded-For', `10.0.${Math.floor(index / 250)}.${(index % 250) + 1}`)
+          .timeout({ response: 1000, deadline: 1500 });
+        if (response.status !== 401) {
+          failures.push(`${method} ${path} returned ${response.status}`);
+        }
+      }
+
+      expect(failures).toEqual([]);
+    }, 30000);
   });
 
   describe('Student Endpoints', () => {

@@ -14,6 +14,7 @@ rule_files:
   - "alerts/horizon_failover.yml"
   - "alerts/queue_backpressure.yml"
   - "alerts/backup.yml"
+  - "alerts/transaction_queue.yml"
 
 scrape_configs:
   - job_name: stellaredupay

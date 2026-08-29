@@ -2,7 +2,7 @@
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
 process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-process.env.JWT_SECRET = 'test-jwt-secret-multi-asset';
+process.env.JWT_SECRET = 'test-jwt-secret-1234567890abcdef';
 
 const request = require('supertest');
 

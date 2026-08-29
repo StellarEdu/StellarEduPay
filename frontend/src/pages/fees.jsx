@@ -4,13 +4,14 @@ import {
   createFeeStructure,
   deleteFeeStructure,
   getStudents,
+  getSchool,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck, IconDollarSign } from "../components/Icons";
 import PageHero from "../components/PageHero";
 
-// ── Classes offered (matches dashboard filter list) ───────────────────────────
-const CLASS_OPTIONS = ["JSS1", "JSS2", "JSS3", "SS1", "SS2", "SS3"];
+// ── Default class options (used as fallback if school config not available) ──
+const DEFAULT_CLASS_OPTIONS = ["JSS1", "JSS2", "JSS3", "SS1", "SS2", "SS3"];
 
 const EMPTY_FORM = {
   className: "",
@@ -83,6 +84,7 @@ function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel })
 
 export default function FeesPage() {
   const [fees, setFees]             = useState([]);
+  const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
 
@@ -100,6 +102,7 @@ export default function FeesPage() {
 
   useEffect(() => {
     loadFees();
+    loadSchoolClassOptions();
   }, []);
 
   // Auto-focus success message for screen readers
@@ -118,6 +121,24 @@ export default function FeesPage() {
       .then(({ data }) => setFees(data))
       .catch(() => setError("Could not load fee structures."))
       .finally(() => setLoading(false));
+  }
+
+  function loadSchoolClassOptions() {
+    // Get school slug from user's school ID stored in localStorage
+    const schoolId = typeof window !== 'undefined' ? localStorage.getItem('schoolId') : null;
+    if (!schoolId) return;
+
+    // Use school ID as slug (or fetch from session if available)
+    // The API will use X-School-ID header from interceptor, so we pass a placeholder
+    getSchool(schoolId)
+      .then(({ data }) => {
+        if (data.classOptions && Array.isArray(data.classOptions) && data.classOptions.length > 0) {
+          setClassOptions(data.classOptions);
+        }
+      })
+      .catch(() => {
+        // On error, silently fall back to defaults
+      });
   }
 
   // ── Create form handlers ──────────────────────────────────────────────────
@@ -268,7 +289,7 @@ export default function FeesPage() {
                   aria-required="true"
                 >
                   <option value="">Select class…</option>
-                  {CLASS_OPTIONS.map((c) => (
+                  {classOptions.map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>

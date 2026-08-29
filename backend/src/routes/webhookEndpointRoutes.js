@@ -8,6 +8,7 @@ const {
   getEndpoint,
   updateEndpoint,
   deleteEndpoint,
+  sendTestEvent,
 } = require('../controllers/webhookEndpointsController');
 const { requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
@@ -20,5 +21,6 @@ router.get('/',      listEndpoints);
 router.get('/:id',   getEndpoint);
 router.put('/:id',   auditContext, updateEndpoint);
 router.delete('/:id', auditContext, deleteEndpoint);
+router.post('/:id/test', auditContext, sendTestEvent);
 
 module.exports = router;

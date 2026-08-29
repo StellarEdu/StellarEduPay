@@ -9,15 +9,18 @@ StellarEduPay is a three-tier application: a Next.js frontend, a Node.js/Express
 - [High-Level Overview](#high-level-overview)
 - [Component Diagram](#component-diagram)
 - [Data Flow: Payment Initiation to Confirmation](#data-flow-payment-initiation-to-confirmation)
+- [Payment Confirmation State Machine](#payment-confirmation-state-machine)
 - [Backend Services](#backend-services)
 - [Controllers](#controllers)
 - [Middleware](#middleware)
 - [MongoDB Schema Relationships](#mongodb-schema-relationships)
 - [Replica Set Requirement](#replica-set-requirement)
+- [Kubernetes Deployment](#kubernetes-deployment)
 - [Background Workers](#background-workers)
 - [Queue Durability](#queue-durability)
 - [Multi-School Tenancy](#multi-school-tenancy)
 - [Error Handling and Resilience](#error-handling-and-resilience)
+- [Fee Adjustment Rule Engine](#fee-adjustment-rule-engine)
 
 ---
 
@@ -185,6 +188,40 @@ Admin creates fee  →  Admin registers student  →  Parent gets instructions
 
 ---
 
+## Payment Confirmation State Machine
+
+Implemented in [`backend/src/services/paymentConfirmationStateMachine.js`](../backend/src/services/paymentConfirmationStateMachine.js) (issue #747). Payments move through five ranked states derived from Stellar ledger depth; transitions are monotonic (never regress) and idempotent under re-polling.
+
+```mermaid
+stateDiagram-v2
+    [*] --> detected
+
+    detected --> pending: 1..(CONFIRMATION_THRESHOLD-1) ledgers closed
+    detected --> confirmed: depth >= CONFIRMATION_THRESHOLD (fast-forward)
+    detected --> finalized: depth >= FINALIZATION_THRESHOLD (fast-forward)
+    detected --> failed: flagged suspicious
+
+    pending --> confirmed: depth >= CONFIRMATION_THRESHOLD
+    pending --> finalized: depth >= FINALIZATION_THRESHOLD (fast-forward)
+    pending --> failed: flagged suspicious
+
+    confirmed --> finalized: depth >= FINALIZATION_THRESHOLD
+    confirmed --> failed: flagged suspicious
+
+    finalized --> [*]
+    failed --> [*]
+```
+
+- **detected** — tx observed on Horizon, 0 ledgers closed since. Earliest possible state.
+- **pending** — awaiting enough ledger depth to be safe against a typical Horizon failover/replay.
+- **confirmed** — safe to treat as real money for balance/UI purposes.
+- **finalized** — practically irreversible; terminal.
+- **failed** — memo collision, fraud signal, or other invalid-payment escape; terminal, reachable from any non-terminal state.
+
+Forward jumps that skip intermediate states are allowed (e.g. a payment first observed already past `CONFIRMATION_THRESHOLD` goes straight from `detected` to `confirmed`). `finalized` and `failed` have no outgoing transitions, and re-computing a target state that doesn't outrank the current state is a no-op — see `resolveNextState()` and the transition table (`CONFIRMATION_STATE_TRANSITIONS`) for the enforced source of truth.
+
+---
+
 ## Backend Services
 
 ### `stellarService.js`
@@ -330,6 +367,17 @@ School
 
 ---
 
+## Concurrency Mechanism: Redis Distributed Locks (not MongoDB Transactions)
+
+StellarEduPay's concurrency primitive for financial operations is **Redis-backed distributed locking**, not MongoDB multi-document transactions.
+
+- **Lock service**: `backend/src/services/distributedLock.js` provides Redis-backed locks with `studentBalanceLockKey`.
+- **Call sites**: `stellarService.js`, `paymentController.js`, `underpaidReconciliationService.js` use distributed locks to serialize access to shared resources (e.g. a student's balance during concurrent payments).
+
+**Rationale:** Distributed locks are simpler to reason about than MongoDB transactions, are not affected by replica set configuration, and work across both MongoDB and external state (Stellar blockchain). They scale better under contention because lock holders are individually bounded and timeouts prevent indefinite hangs.
+
+**Not in use:** `backend/src/services/transactionManager.js` was added in commit 43f18e0 as a MongoDB-transaction implementation but was never adopted. It remains unreferenced in the codebase (`grep -r transactionManager backend/src --include='*.js' | grep -v transactionManager.js` yields no results). The module contains latent defects (invalid aggregation operators in non-pipeline updates, unscoped upserts creating tenant-less documents with NaN balances, stale reads between multi-step updates) that would corrupt financial state if adopted. It was deleted in this change.
+
 ## Replica Set Requirement
 
 MongoDB **multi-document transactions require a replica set (or a sharded cluster)**. This is an infrastructure requirement, not an application-code concern: against a standalone `mongod`, every attempt to start a transaction fails with
@@ -340,12 +388,11 @@ MongoServerError: Transaction numbers are only allowed on a replica set member o
 
 and no change to application code can fix it — the database must run with `--replSet` and be initiated once with `rs.initiate()`.
 
-StellarEduPay uses multi-document transactions on its core write paths, so this requirement applies to every environment that runs the backend:
+StellarEduPay configures MongoDB to support transactions on all environments, though transactions are not currently used on core write paths (which rely on distributed locks instead):
 
 - `transactionPollingService.processTransaction` — records the Payment and updates the Student balance atomically
 - `stellarService.verifyTransaction` — same pair of writes for manually verified payments
 - `feeController` and `feeAdjustmentController` batch apply — multi-document fee updates
-- `transactionManager.js` (`withTransaction`, `safeDebit`, `safeCredit`, `atomicTransfer`)
 
 ### How each environment complies
 
@@ -357,6 +404,110 @@ StellarEduPay uses multi-document transactions on its core write paths, so this 
 | Local development | Run `mongod --replSet rs0` and call `rs.initiate()` once (see README "Prerequisites"). |
 
 > **Note**: MongoDB Atlas deployments are replica sets by default and need no extra configuration. A standalone `mongod` is sufficient ONLY where no code path opens a session — which is nowhere in this backend.
+
+---
+
+## Kubernetes Deployment
+
+StellarEduPay is deployed on Kubernetes using manifests in `deploy/k8s/`, which can be applied directly or overlaid with Kustomize for environment-specific configuration.
+
+### Image Configuration
+
+The base manifests reference placeholder image tags: `stellaredupay/backend:placeholder` and `stellaredupay/frontend:placeholder`. These **must** be overridden in production.
+
+**CI Image Promotion:**
+1. The CI pipeline (`docker-build` job) tags images with a commit SHA on every merge to main: `stellaredupay/backend:sha-<commit>` and `stellaredupay/frontend:sha-<commit>`.
+2. Use Kustomize image overrides in environment-specific overlays to plumb the SHA tag into deployments automatically.
+
+**Example Kustomization (testnet overlay):**
+```yaml
+# deploy/k8s/overlays/testnet/kustomization.yaml
+images:
+  - name: stellaredupay/backend
+    newTag: sha-abc1234  # Updated by your CD pipeline
+  - name: stellaredupay/frontend
+    newTag: sha-abc1234
+```
+
+**Private Registry with imagePullSecrets:**
+
+If your registry requires authentication, create a Kubernetes secret and reference it:
+```bash
+kubectl create secret docker-registry regcred \
+  --docker-server=your.registry.com \
+  --docker-username=<username> \
+  --docker-password=<password> \
+  --docker-email=<email>
+```
+
+Then add to your overlay's `kustomization.yaml`:
+```yaml
+imagePullSecrets:
+  - name: regcred
+```
+
+### TLS / HTTPS Configuration
+
+The ingress manifest (`deploy/k8s/ingress.yaml`) includes automatic TLS termination using cert-manager and Let's Encrypt. **Prerequisites:**
+
+1. **Install cert-manager** in your cluster:
+   ```bash
+   helm repo add jetstack https://charts.jetstack.io
+   helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace \
+     --set installCRDs=true
+   ```
+
+2. **Create a ClusterIssuer** for Let's Encrypt (create a file like `letsencrypt-issuer.yaml`):
+   ```yaml
+   apiVersion: cert-manager.io/v1
+   kind: ClusterIssuer
+   metadata:
+     name: letsencrypt-prod
+   spec:
+     acme:
+       server: https://acme-v02.api.letsencrypt.org/directory
+       email: ops@example.com  # Replace with a real email
+       privateKeySecretRef:
+         name: letsencrypt-prod
+       solvers:
+         - http01:
+             ingress:
+               class: nginx
+   ```
+
+3. **Update the ingress domain:** Replace `YOUR_DOMAIN_HERE` in `deploy/k8s/ingress.yaml` with your actual domain (e.g., `stellaredupay.example.com`):
+   ```yaml
+   spec:
+     tls:
+       - hosts:
+           - stellaredupay.example.com  # Your domain
+         secretName: stellaredupay-tls
+     rules:
+       - host: stellaredupay.example.com  # Match the TLS host
+         http:
+           paths: [...]
+   ```
+
+4. **Deploy the issuer and ingress:**
+   ```bash
+   kubectl apply -f letsencrypt-issuer.yaml
+   kubectl apply -k deploy/k8s/overlays/mainnet  # or testnet
+   ```
+
+**TLS Configuration Details:**
+- `cert-manager.io/cluster-issuer: "letsencrypt-prod"` — annotation tells cert-manager to use the `letsencrypt-prod` ClusterIssuer.
+- `nginx.ingress.kubernetes.io/ssl-redirect: "true"` — enforces HTTPS by redirecting all HTTP traffic to HTTPS.
+- `tls:` block specifies the hosts and the secret name where the certificate is stored (auto-created by cert-manager).
+
+**Verification:**
+
+Once deployed, cert-manager automatically issues a certificate and stores it in the secret. Monitor the issuing process:
+```bash
+kubectl describe certificate stellaredupay-tls
+kubectl describe clusterissuer letsencrypt-prod
+```
+
+Your API traffic (JWT tokens, payment transaction hashes, student PII) is now encrypted end-to-end, and browsers will see a valid HTTPS certificate.
 
 ---
 
@@ -458,6 +609,149 @@ Each school has its own `stellarAddress`. The transaction poller fans out to all
 - The `concurrentRequestHandler` middleware adds a circuit breaker (opens after 5 failures, resets after 30s) and a request queue (max 50 concurrent, max 1000 queued) to protect against Horizon API bursts.
 - Idempotency keys prevent duplicate payment processing from retried HTTP requests.
 - Graceful shutdown waits up to 8s for the retry worker to finish its current batch before closing the MongoDB connection.
+
+---
+
+## Money Representation on the Payment-Verification Path
+
+`paymentController.verifyPayment` and the `studentBalanceUpdater` it shares with
+`submitTransaction` decide whether a student's fee is settled — `valid`,
+`partial`, or `overpaid` — and compute `excessAmount` / `remainingBalance`.
+That decision used to run on IEEE-754 doubles: cumulative totals were summed
+with MongoDB's `{ $sum: '$amount' }` (float addition, done server-side, order
+not guaranteed), rounded with `toFixed(7)`, and re-parsed with `parseFloat`
+before being compared against `feeAmount` with exact `<` / `>` / `===`.
+`toFixed` cannot repair a value already corrupted by float addition, and
+`parseFloat` immediately turns the rounded string back into a double —
+reintroducing the same class of error on the next operation. A fee paid in
+installments that summed, in exact decimal, to precisely the fee amount could
+therefore land one unit-in-the-last-place away and be misclassified `partial`
+or `overpaid` instead of `valid`.
+
+**Chosen representation: `decimal.js`.** This was already the convention
+elsewhere in the codebase (`paymentLimitsService.js`,
+`currencyConversionService.js`, `feeAdjustmentEngine.js`,
+`utils/paymentLimits.js` — see their "ROUNDING POLICY" comments), so extending
+it to the verification path unifies on an existing pattern rather than adding
+a fourth. Integer Stellar stroops (`utils/stellarAmount.js`, used by
+`stellarService.js`) remain the right choice for on-chain amount parsing and
+comparison, and are unaffected by this change.
+
+`backend/src/utils/money.js` is the canonical entry point for this path:
+
+- `toMoney(value)` / `decimalFromMongo(value)` — parse a JS value or a BSON
+  `Decimal128` aggregation result into a `Decimal`.
+- `classifyFeePayment(cumulativeTotal, feeAmount)` — the single place that
+  decides `valid` / `partial` / `overpaid` and derives `excessAmount` /
+  `remainingBalance`, all via exact `Decimal` comparison (`.cmp()`), never
+  float `<`/`>`/`===`.
+- `roundMoney(value)` / `toMoneyNumber(value)` — round to Stellar's 7 decimal
+  places and convert to a plain `Number` **only at the output boundary**
+  (the HTTP response or the Mongo write).
+
+**Conversion boundaries:**
+
+```
+MongoDB (amount: Number)
+      │  $group: { $sum: { $toDecimal: '$amount' } }   ← summed as Decimal128, exact
+      ▼
+Decimal128 (aggregation result)
+      │  decimalFromMongo()
+      ▼
+Decimal (decimal.js) ── classifyFeePayment() ── all arithmetic and comparison here
+      │  toMoneyNumber() / roundMoney().toNumber()
+      ▼
+Number  → HTTP response body / Student.totalPaid, remainingBalance, feePaid
+```
+
+The MongoDB half of the fix matters as much as the JS half: summing
+`{ $sum: '$amount' }` accumulates BSON-double rounding **inside MongoDB**,
+before the result ever reaches Node, so no amount of `decimal.js` downstream
+can recover it. Wrapping the summed field in `$toDecimal` makes MongoDB
+perform the addition in exact Decimal128 space instead.
+
+`parseFloat(x.toFixed(7))` must not reappear anywhere on this path — it is a
+reliable marker of float money arithmetic creeping back in.
+
+---
+
+## Fee Adjustment Rule Engine
+
+School admins create discount/penalty/waiver rules on the **Fee Adjustment
+Rules** admin page. When more than one rule matches the same student and
+payment, the order rules run in — and what happens when they disagree — is
+not visible from the UI alone, so it's documented here in full.
+
+**Live path:** admin page (`frontend/src/pages/fee-adjustments.jsx`) →
+`POST/PUT /api/fee-adjustments` → `feeAdjustmentController.js` →
+`FeeAdjustmentRule` Mongo model → `feeAdjustmentService.js`, which is what
+actually computes the fee used at payment time. See the doc comments atop
+`feeAdjustmentRuleModel.js` and `feeAdjustmentService.js` for the
+implementation-level detail this section summarizes.
+
+> **Not the live path:** `backend/src/services/feeAdjustmentEngine.js`
+> (`DynamicFeeAdjustmentEngine`) is a separate, self-contained engine with its
+> own hardcoded rule set. It is exercised only by
+> `tests/feeAdjustment.test.js` and `tests/feeAdjustmentEngine-interactions.test.js`
+> — nothing under `backend/src/controllers` or `backend/src/routes` calls it, so
+> it has no effect on any real fee. It also sorts priority in the **opposite**
+> direction (highest number first) from the live engine below and always
+> stacks every match. Its own header comment documents its behavior in detail
+> so it isn't mistaken for the production rules.
+
+### Rule application order
+
+Rules are sorted **ascending by `priority`** — the **lowest number runs
+first** — with ties broken by `name` ascending, so evaluation order is always
+fully deterministic (`feeAdjustmentService._fetchSortedRules`). Each rule
+operates on the fee amount **left by the previous rule**, not the original
+base amount, so for percentage rules the order changes the numeric result.
+
+### Conflict resolution strategy
+
+Only rules whose `conditions` match the student/payment context are
+considered. The `conflictResolutionPolicy` on the **first matching rule** (by
+priority) governs how the rest of the matches are handled:
+
+| Policy | Behavior |
+|---|---|
+| `stack` (default) | All matching rules apply in priority order, each on the fee left by the one before it. |
+| `first_only` | Only the highest-priority match applies; every other match is skipped. |
+| `best_for_student` | Among matching **discount** rules, only the one with the largest reduction applies; matching **penalty** rules always stack regardless of this policy. |
+
+A `waiver` rule sets the fee to 0 and stops processing immediately,
+regardless of policy. The final fee is always clamped to 0 (never negative).
+
+### Worked example: a percentage scholarship vs. an absolute surcharge
+
+Base fee: **₦10,000**. Two active rules match the same student:
+
+| Priority | Name | Type | Value |
+|---|---|---|---|
+| 5 | Sibling Scholarship | `discount_percentage` | 15 |
+| 20 | Late Registration Surcharge | `penalty_fixed` | 800 |
+
+**Policy `stack` (default, set on the priority-5 rule):**
+1. Priority 5 runs first — 15% off 10,000 → **8,500**
+2. Priority 20 runs next — flat +800 on the fee it inherited → **9,300**
+
+Final fee: **₦9,300**. If the priorities were reversed (surcharge at 5,
+scholarship at 20), the surcharge would apply to 10,000 first (→ 10,800) and
+the 15% discount would then apply to that larger number (→ 9,180) — a
+different final fee from the exact same two rules and values, purely because
+of priority order. This is why priority (not creation order) is what admins
+must set deliberately when rules are meant to interact.
+
+**Same two rules, policy `first_only` instead** (set on the priority-5 rule):
+only the Sibling Scholarship applies — final fee **₦8,500**. The surcharge is
+evaluated, matches, but is skipped because a higher-priority rule already
+applied.
+
+**Same two rules, policy `best_for_student`:** the surcharge is a penalty, so
+it always stacks; the scholarship is the only matching discount, so it also
+applies. Result is identical to `stack` here (**₦9,300**) — this policy only
+changes behavior once *more than one discount* matches at once, by keeping
+the single best one instead of stacking all of them.
 
 ---
 

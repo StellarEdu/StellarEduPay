@@ -222,7 +222,15 @@ function requireSchoolAuth(allowedRoles = []) {
       (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
 
     if (!isSuperAdmin) {
-      // Tenant scope: token schoolId must match the requested school
+      // Tenant scope: non-super-admin tokens MUST have a schoolId
+      if (!decoded.schoolId) {
+        return res.status(403).json({
+          error: 'Forbidden. Token is not scoped to a school.',
+          code: 'MISSING_TENANT_CLAIM',
+        });
+      }
+
+      // Token schoolId must match the requested school.
       // Accept schoolId from X-School-ID header, URL param, or route param.
       // URL param support enables EventSource (which cannot send custom headers).
       const requestedSchoolId = req.headers['x-school-id'] || req.query?.schoolId || req.params?.schoolId;
@@ -244,6 +252,19 @@ function requireSchoolAuth(allowedRoles = []) {
           });
         }
       }
+
+      // Set req.schoolId from token — authoritative source for downstream use
+      req.schoolId = decoded.schoolId;
+    }
+
+    // #1356 — REQUIRE_MFA enforcement: a token minted while MFA setup was
+    // outstanding may only reach the MFA setup/verify/logout endpoints until
+    // the admin completes setup (see handleLogin/verifyAndEnableUserMfa).
+    if (decoded.mfaSetupPending && !MFA_SETUP_ALLOWED_PATHS.has(req.path)) {
+      return res.status(403).json({
+        error: 'MFA setup is required before accessing this resource.',
+        code: 'MFA_SETUP_REQUIRED',
+      });
     }
 
     req.user = decoded;
@@ -251,5 +272,9 @@ function requireSchoolAuth(allowedRoles = []) {
     next();
   };
 }
+
+// Endpoints reachable with a restricted mfaSetupPending token — just enough
+// to complete MFA enrollment or abandon the session.
+const MFA_SETUP_ALLOWED_PATHS = new Set(['/mfa/user/setup', '/mfa/user/verify']);
 
 module.exports = { requireAdminAuth, requireSchoolAuth };

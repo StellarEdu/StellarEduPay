@@ -1,0 +1,10 @@
+groups:
+  - name: admin-alerts
+    rules:
+      - alert: AdminAlertFired
+        expr: increase(send_admin_alert_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Admin alert fired

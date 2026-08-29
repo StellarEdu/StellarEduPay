@@ -234,6 +234,19 @@ const schoolSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    /**
+     * School class/grade naming convention (Issue #1337).
+     * Configurable per school to support multi-country deployments.
+     * Examples:
+     *   Nigeria: ["JSS1", "JSS2", "JSS3", "SS1", "SS2", "SS3"]
+     *   PNG: ["Grade 1", "Grade 2", ..., "Grade 12"]
+     *   Kenya: ["Form 1", "Form 2", "Form 3", "Form 4"]
+     *   UK: ["Year 1", "Year 2", ..., "Year 13"]
+     */
+    classOptions: {
+      type: [String],
+      default: ['JSS1', 'JSS2', 'JSS3', 'SS1', 'SS2', 'SS3'],
+    },
     mfaBackupCodes: [
       {
         hash: { type: String, required: true },
