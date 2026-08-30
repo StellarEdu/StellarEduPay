@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
-const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession } = require('../controllers/authController');
+const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleChangePassword } = require('../controllers/authController');
 const {
   setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
@@ -24,6 +24,11 @@ router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
 router.get('/me', requireAdminAuth, handleMe);
+
+// ── Password management ───────────────────────────────────────────────────────
+// #1360 — Changing the password immediately invalidates all existing sessions
+// so stolen refresh tokens cannot outlive a password reset.
+router.post('/change-password', requireSchoolAuth(), handleChangePassword);
 
 // ── Session management ────────────────────────────────────────────────────────
 router.get('/sessions', requireAdminAuth, handleListSessions);

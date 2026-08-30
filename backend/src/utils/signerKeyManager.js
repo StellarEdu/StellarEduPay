@@ -23,13 +23,38 @@
  *
  * Environment variables
  * ─────────────────────
- *   SIGNER_MASTER_KEY   64-char hex string (32 bytes). REQUIRED to use this
- *                       module. Generate with:
+ *   SIGNER_MASTER_KEY   64-char hex string (32 bytes). Used directly when
+ *                       SIGNER_KEY_SOURCE is unset or 'env'. Generate with:
  *                         node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ *
+ *   SIGNER_KEY_SOURCE   'env' (default) | 'aws_secrets_manager' | 'http'
+ *                       Selects where initializeMasterKey() fetches the key
+ *                       from. Plain env vars expose key material in process
+ *                       listings, `docker inspect`, and Kubernetes Secret
+ *                       manifests — a dedicated secrets manager avoids that
+ *                       and adds rotation + access auditing (issue #1386).
+ *
+ *   SIGNER_MASTER_KEY_SECRET_ID   Required when SIGNER_KEY_SOURCE=aws_secrets_manager.
+ *                                 The AWS Secrets Manager secret name or ARN.
+ *                                 The secret value may be the raw 64-char hex
+ *                                 string, or JSON like {"SIGNER_MASTER_KEY":"<hex>"}.
+ *   AWS_REGION                    Region for the Secrets Manager client
+ *                                 (falls back to the SDK's default provider chain).
+ *
+ *   SIGNER_MASTER_KEY_HTTP_URL    Required when SIGNER_KEY_SOURCE=http. A
+ *                                 generic secrets-provider endpoint (e.g. a
+ *                                 Vault or GCP Secret Manager proxy) returning
+ *                                 either the raw hex string or JSON like
+ *                                 {"SIGNER_MASTER_KEY":"<hex>"} / {"key":"<hex>"}.
+ *   SIGNER_MASTER_KEY_HTTP_TOKEN  Optional bearer token sent as
+ *                                 `Authorization: Bearer <token>`.
  *
  * Usage
  * ─────
- *   const { encryptSecretKey, decryptSecretKey, getKeypair } = require('./signerKeyManager');
+ *   const { initializeMasterKey, encryptSecretKey, decryptSecretKey, getKeypair } = require('./signerKeyManager');
+ *
+ *   // Once at server startup, before any signing operation:
+ *   await initializeMasterKey();
  *
  *   // When onboarding a school:
  *   const blob = encryptSecretKey('SXXXXX...your-stellar-secret...');
@@ -47,30 +72,124 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const KEY_HEX_LENGTH = 64; // 32 bytes
+const HTTP_FETCH_TIMEOUT_MS = 5000;
+
+// Populated by initializeMasterKey() when SIGNER_KEY_SOURCE names a secrets
+// provider. Held in memory only — never written back to process.env or disk —
+// and takes precedence over SIGNER_MASTER_KEY so callers that never invoke
+// initializeMasterKey() keep working exactly as before (env-var default).
+let _cachedMasterKeyHex = null;
+
+function _validateHex(hex, label) {
+  if (typeof hex !== 'string' || hex.length !== KEY_HEX_LENGTH || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error(`[signerKeyManager] ${label} must be a ${KEY_HEX_LENGTH}-character hex string (32 bytes).`);
+  }
+}
 
 // ── Master key loading ────────────────────────────────────────────────────────
 
 /**
- * Load and validate the master encryption key from SIGNER_MASTER_KEY env var.
- * Throws a clear error rather than silently returning null — a missing key
- * means any operation requiring signing is impossible and should fail loudly.
+ * Load and validate the master encryption key — from the in-memory cache
+ * populated by initializeMasterKey() when a secrets provider is configured,
+ * or from SIGNER_MASTER_KEY otherwise. Throws a clear error rather than
+ * silently returning null — a missing key means any operation requiring
+ * signing is impossible and should fail loudly.
  *
  * @returns {Buffer} 32-byte key buffer
  */
 function getMasterKey() {
-  const hex = process.env.SIGNER_MASTER_KEY;
+  const hex = _cachedMasterKeyHex || process.env.SIGNER_MASTER_KEY;
   if (!hex) {
     throw new Error(
-      '[signerKeyManager] SIGNER_MASTER_KEY is not set. ' +
-      'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
+      '[signerKeyManager] No signing master key available. Set SIGNER_MASTER_KEY directly, ' +
+      'or configure SIGNER_KEY_SOURCE + call initializeMasterKey() at startup. ' +
+      'Generate a key with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
     );
   }
-  if (hex.length !== KEY_HEX_LENGTH || !/^[0-9a-fA-F]+$/.test(hex)) {
-    throw new Error(
-      `[signerKeyManager] SIGNER_MASTER_KEY must be a ${KEY_HEX_LENGTH}-character hex string (32 bytes).`,
-    );
-  }
+  _validateHex(hex, _cachedMasterKeyHex ? 'The resolved signing master key' : 'SIGNER_MASTER_KEY');
   return Buffer.from(hex, 'hex');
+}
+
+/**
+ * Fetch the master key from the configured secrets provider and cache it in
+ * memory for getMasterKey() to use. Call once at server startup, before any
+ * signing operation. A no-op when SIGNER_KEY_SOURCE is unset or 'env' — in
+ * that case getMasterKey() reads SIGNER_MASTER_KEY directly, as before.
+ *
+ * Throws on misconfiguration or a provider error so a broken secrets source
+ * fails loudly at boot rather than on the first payment signing attempt.
+ *
+ * @returns {Promise<void>}
+ */
+async function initializeMasterKey() {
+  const source = (process.env.SIGNER_KEY_SOURCE || 'env').toLowerCase();
+
+  if (source === 'env') {
+    return;
+  }
+
+  if (source === 'aws_secrets_manager') {
+    const secretId = process.env.SIGNER_MASTER_KEY_SECRET_ID;
+    if (!secretId) {
+      throw new Error('[signerKeyManager] SIGNER_MASTER_KEY_SECRET_ID is required when SIGNER_KEY_SOURCE=aws_secrets_manager.');
+    }
+    // Required lazily so deployments that don't use AWS never need the
+    // package installed or its credential chain configured.
+    const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+    const client = new SecretsManagerClient(process.env.AWS_REGION ? { region: process.env.AWS_REGION } : {});
+    let response;
+    try {
+      response = await client.send(new GetSecretValueCommand({ SecretId: secretId }));
+    } catch (err) {
+      throw new Error(`[signerKeyManager] Failed to fetch secret "${secretId}" from AWS Secrets Manager: ${err.message}`);
+    }
+    _cachedMasterKeyHex = _extractHexFromRaw(response.SecretString);
+  } else if (source === 'http') {
+    const url = process.env.SIGNER_MASTER_KEY_HTTP_URL;
+    if (!url) {
+      throw new Error('[signerKeyManager] SIGNER_MASTER_KEY_HTTP_URL is required when SIGNER_KEY_SOURCE=http.');
+    }
+    const headers = {};
+    if (process.env.SIGNER_MASTER_KEY_HTTP_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.SIGNER_MASTER_KEY_HTTP_TOKEN}`;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HTTP_FETCH_TIMEOUT_MS);
+    let raw;
+    try {
+      const resp = await fetch(url, { headers, signal: controller.signal });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      raw = await resp.text();
+    } catch (err) {
+      throw new Error(`[signerKeyManager] Failed to fetch signing key from ${url}: ${err.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+    _cachedMasterKeyHex = _extractHexFromRaw(raw);
+  } else {
+    throw new Error(`[signerKeyManager] Unknown SIGNER_KEY_SOURCE "${source}". Use 'env', 'aws_secrets_manager', or 'http'.`);
+  }
+
+  _validateHex(_cachedMasterKeyHex, `The key returned by SIGNER_KEY_SOURCE=${source}`);
+}
+
+/**
+ * A secrets provider may return the hex key as a bare string or wrapped in
+ * JSON (e.g. {"SIGNER_MASTER_KEY": "<hex>"} or {"key": "<hex>"}).
+ */
+function _extractHexFromRaw(raw) {
+  const trimmed = (raw || '').trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object') {
+      return String(parsed.SIGNER_MASTER_KEY || parsed.key || '').trim();
+    }
+  } catch {
+    // Not JSON — treat the whole response as the raw hex value.
+  }
+  return trimmed;
 }
 
 // ── Encrypt / Decrypt ─────────────────────────────────────────────────────────
@@ -200,14 +319,20 @@ function reEncryptSecretKey(oldEncryptedBlob) {
     );
   }
 
-  // Temporarily override to decrypt with old key
+  // Temporarily override to decrypt with old key. Also clears the secrets-
+  // manager cache so getMasterKey() falls through to the env var below —
+  // otherwise a cached key would take precedence and this override would be
+  // silently ignored (see getMasterKey()).
   const originalEnv = process.env.SIGNER_MASTER_KEY;
+  const originalCache = _cachedMasterKeyHex;
   process.env.SIGNER_MASTER_KEY = oldKeyHex;
+  _cachedMasterKeyHex = null;
   let secretKey;
   try {
     secretKey = decryptSecretKey(oldEncryptedBlob);
   } finally {
     process.env.SIGNER_MASTER_KEY = originalEnv;
+    _cachedMasterKeyHex = originalCache;
   }
 
   return encryptSecretKey(secretKey);
@@ -216,13 +341,14 @@ function reEncryptSecretKey(oldEncryptedBlob) {
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns true when SIGNER_MASTER_KEY is present and correctly formatted.
+ * Returns true when a master key is available — either resolved from a
+ * secrets provider via initializeMasterKey(), or present in SIGNER_MASTER_KEY.
  * Use this for health checks — avoids throwing.
  *
  * @returns {boolean}
  */
 function isMasterKeyConfigured() {
-  const hex = process.env.SIGNER_MASTER_KEY;
+  const hex = _cachedMasterKeyHex || process.env.SIGNER_MASTER_KEY;
   return (
     typeof hex === 'string' &&
     hex.length === KEY_HEX_LENGTH &&
@@ -231,6 +357,7 @@ function isMasterKeyConfigured() {
 }
 
 module.exports = {
+  initializeMasterKey,
   encryptSecretKey,
   decryptSecretKey,
   getKeypair,

@@ -4,6 +4,9 @@ Disallow: /dashboard
 Disallow: /audit-logs
 Disallow: /reports
 Disallow: /test-currency
+Disallow: /fee-adjustments
+Disallow: /disputes
+Disallow: /fees
 
 # Allow public pages
 Allow: /

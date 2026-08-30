@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getFeeStructures,
   createFeeStructure,
@@ -23,6 +24,7 @@ const EMPTY_FORM = {
 // ── Delete-confirmation modal ─────────────────────────────────────────────────
 
 function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel }) {
+  const { t } = useTranslation();
   const cancelRef = useRef(null);
 
   useEffect(() => {
@@ -44,21 +46,21 @@ function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel })
     >
       <div style={modalStyle}>
         <h2 id="del-modal-title" style={{ marginTop: 0, fontSize: "1.1rem" }}>
-          Delete fee structure?
+          {t("fees.deleteTitle")}
         </h2>
         <p id="del-modal-desc" style={{ color: "var(--text)", lineHeight: 1.5 }}>
-          You are about to delete the fee structure for{" "}
+          {t("fees.deleteIntro")}{" "}
           <strong>{feeStructure.className}</strong>.
           {studentCount > 0 && (
             <>
-              {" "}This affects{" "}
+              {" "}{t("fees.deleteAffects")}{" "}
               <strong>
-                {studentCount} student{studentCount !== 1 ? "s" : ""}
+                {t("fees.studentCount", { count: studentCount })}
               </strong>
               .
             </>
           )}{" "}
-          This cannot be undone.
+          {t("fees.deleteCannotUndo")}
         </p>
         <div
           style={{
@@ -69,10 +71,10 @@ function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel })
           }}
         >
           <button ref={cancelRef} onClick={onCancel} className="btn btn-ghost">
-            Cancel
+            {t("actions.cancel")}
           </button>
           <button onClick={onConfirm} className="btn btn-danger">
-            Delete
+            {t("actions.delete")}
           </button>
         </div>
       </div>
@@ -119,7 +121,7 @@ export default function FeesPage() {
     setError(null);
     getFeeStructures()
       .then(({ data }) => setFees(data))
-      .catch(() => setError("Could not load fee structures."))
+      .catch(() => setError(t("fees.failedToLoad")))
       .finally(() => setLoading(false));
   }
 
@@ -156,11 +158,11 @@ export default function FeesPage() {
 
     const feeAmount = parseFloat(form.feeAmount);
     if (!form.className) {
-      setCreateError("Class is required.");
+      setCreateError(t("fees.classRequired"));
       return;
     }
     if (!form.feeAmount || isNaN(feeAmount) || feeAmount <= 0) {
-      setCreateError("Fee amount must be a positive number.");
+      setCreateError(t("fees.amountPositive"));
       return;
     }
 
@@ -180,7 +182,7 @@ export default function FeesPage() {
       setCreateError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
           err.response?.data?.errors?.[0] ||
-          "Failed to create fee structure."
+          t("fees.failedToCreate")
       );
     } finally {
       setCreating(false);
@@ -210,7 +212,7 @@ export default function FeesPage() {
     } catch (err) {
       setDeleteError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
-          "Failed to delete fee structure."
+          t("fees.failedToDelete")
       );
     }
   }
@@ -220,9 +222,9 @@ export default function FeesPage() {
   return (
     <>
       <PageHero
-        eyebrow="Admin"
-        title="Fee Structures"
-        subtitle="Define per-class fee amounts that students are required to pay."
+        eyebrow={t("fees.eyebrow")}
+        title={t("fees.title")}
+        subtitle={t("fees.subtitle")}
       />
 
       <div className="page-wrap">
@@ -235,7 +237,7 @@ export default function FeesPage() {
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
             >
               <IconDollarSign size={16} />
-              Create Fee Structure
+              {t("fees.createTitle")}
             </div>
           </div>
           <div className="card-body">
@@ -249,7 +251,7 @@ export default function FeesPage() {
                 style={{ marginBottom: "1rem" }}
               >
                 <IconCheck size={15} />
-                <span>Fee structure created successfully.</span>
+                <span>{t("fees.createSuccess")}</span>
               </div>
             )}
             {createError && (
@@ -265,7 +267,7 @@ export default function FeesPage() {
 
             <form
               onSubmit={handleCreate}
-              aria-label="Create fee structure"
+              aria-label={t("fees.createFormAria")}
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
@@ -276,7 +278,7 @@ export default function FeesPage() {
               {/* Class */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-className">
-                  Class <span aria-hidden="true" style={{ color: "var(--danger)" }}>*</span>
+                  {t("fees.classLabel")} <span aria-hidden="true" style={{ color: "var(--danger)" }}>*</span>
                 </label>
                 <select
                   id="fee-className"
@@ -288,7 +290,7 @@ export default function FeesPage() {
                   className="form-input"
                   aria-required="true"
                 >
-                  <option value="">Select class…</option>
+                  <option value="">{t("fees.selectClass")}</option>
                   {classOptions.map((c) => (
                     <option key={c} value={c}>
                       {c}
@@ -300,7 +302,7 @@ export default function FeesPage() {
               {/* Fee Amount */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-feeAmount">
-                  Fee Amount (XLM){" "}
+                  {t("fees.feeAmountLabel")}{" "}
                   <span aria-hidden="true" style={{ color: "var(--danger)" }}>*</span>
                 </label>
                 <input
@@ -309,7 +311,7 @@ export default function FeesPage() {
                   type="number"
                   min="0.0000001"
                   step="any"
-                  placeholder="e.g. 250"
+                  placeholder={t("fees.feePlaceholder")}
                   value={form.feeAmount}
                   onChange={handleFormChange}
                   required
@@ -322,7 +324,7 @@ export default function FeesPage() {
               {/* Academic Year */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-academicYear">
-                  Academic Year
+                  {t("fees.academicYearLabel")}
                 </label>
                 <input
                   id="fee-academicYear"
@@ -339,13 +341,13 @@ export default function FeesPage() {
               {/* Description */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-description">
-                  Description
+                  {t("fees.descriptionLabel")}
                 </label>
                 <input
                   id="fee-description"
                   name="description"
                   type="text"
-                  placeholder="Optional note"
+                  placeholder={t("fees.descriptionPlaceholder")}
                   value={form.description}
                   onChange={handleFormChange}
                   disabled={creating}
@@ -362,7 +364,7 @@ export default function FeesPage() {
                   style={{ width: "100%" }}
                   aria-busy={creating}
                 >
-                  {creating ? "Creating…" : "Create"}
+                  {creating ? t("fees.creating") : t("fees.create")}
                 </button>
               </div>
             </form>
@@ -386,10 +388,10 @@ export default function FeesPage() {
         {/* ── Fee table ────────────────────────────────────────────────────── */}
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Existing Fee Structures</div>
+            <div className="card-title">{t("fees.existingTitle")}</div>
             {!loading && (
               <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                {fees.length} {fees.length === 1 ? "structure" : "structures"}
+                {t("fees.count", { count: fees.length })}
               </span>
             )}
           </div>
@@ -397,29 +399,29 @@ export default function FeesPage() {
           {loading ? (
             <div className="card-body">
               <p aria-busy="true" style={{ color: "var(--text-muted)" }}>
-                Loading fee structures…
+                {t("fees.loading")}
               </p>
             </div>
           ) : fees.length === 0 ? (
             <div className="card-body">
               <p style={{ color: "var(--text-muted)" }}>
-                No fee structures found. Use the form above to create one.
+                {t("fees.empty")}
               </p>
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table
                 className="data-table"
-                aria-label="Fee structures"
+                aria-label={t("fees.tableAria")}
               >
                 <thead>
                   <tr>
-                    <th scope="col">Class</th>
-                    <th scope="col">Fee Amount</th>
-                    <th scope="col">Academic Year</th>
-                    <th scope="col">Description</th>
+                    <th scope="col">{t("fees.colClass")}</th>
+                    <th scope="col">{t("fees.colFeeAmount")}</th>
+                    <th scope="col">{t("fees.colAcademicYear")}</th>
+                    <th scope="col">{t("fees.colDescription")}</th>
                     <th scope="col">
-                      <span className="sr-only">Actions</span>
+                      <span className="sr-only">{t("fees.colActions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -451,9 +453,9 @@ export default function FeesPage() {
                           onClick={() => handleDeleteClick(fee)}
                           className="btn btn-sm btn-ghost"
                           style={{ color: "var(--danger, #dc2626)" }}
-                          aria-label={`Delete fee structure for ${fee.className}`}
+                          aria-label={t("fees.deleteForClass", { className: fee.className })}
                         >
-                          Delete
+                          {t("actions.delete")}
                         </button>
                       </td>
                     </tr>

@@ -14,6 +14,7 @@
  *   import SseDegradedBanner from '../components/SseDegradedBanner';
  *   <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} />
  */
+import { useTranslation } from "react-i18next";
 
 const STYLES = {
   base: {
@@ -51,11 +52,13 @@ function Dot({ color }) {
 }
 
 export default function SseDegradedBanner({ degraded, connectionStatus }) {
+  const { t } = useTranslation();
+
   if (connectionStatus === 'failed') {
     return (
       <div role="alert" aria-live="assertive" style={{ ...STYLES.base, ...STYLES.failed }}>
         <Dot color="#a5b4fc" />
-        Live updates unavailable — refresh the page to restore real-time data.
+        {t("degradedBanner.failed")}
       </div>
     );
   }
@@ -64,7 +67,7 @@ export default function SseDegradedBanner({ degraded, connectionStatus }) {
     return (
       <div role="status" aria-live="polite" style={{ ...STYLES.base, ...STYLES.reconnecting }}>
         <Dot color="#fcd34d" />
-        Reconnecting to live updates&hellip;
+        {t("degradedBanner.reconnecting")}
       </div>
     );
   }
@@ -74,7 +77,7 @@ export default function SseDegradedBanner({ degraded, connectionStatus }) {
   return (
     <div role="alert" aria-live="polite" style={{ ...STYLES.base, ...STYLES.degraded }}>
       <Dot color="#fca5a5" />
-      Real-time updates degraded — some live events may not appear until connectivity is restored.
+      {t("degradedBanner.degraded")}
     </div>
   );
 }

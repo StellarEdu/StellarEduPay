@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import SyncButton from "../components/SyncButton";
 import ErrorBoundary from "../components/ErrorBoundary";
 import StudentForm from "../components/StudentForm";
@@ -14,23 +15,24 @@ import {
 
 const PAGE_SIZE = 20;
 
-function timeAgo(iso) {
-  if (!iso) return "Never";
-  const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
-  if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-const STATUS_BADGE = {
-  paid:    { cls: "badge badge-success", label: "Paid" },
-  partial: { cls: "badge badge-warning", label: "Partial" },
-  unpaid:  { cls: "badge badge-danger",  label: "Unpaid" },
-};
-
 function Dashboard() {
+  const { t } = useTranslation();
+  const timeAgo = (iso) => {
+    if (!iso) return t("time.never");
+    const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
+    if (mins < 1) return t("time.justNow");
+    if (mins < 60) return t("time.minutesAgo", { mins });
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return t("time.hoursAgo", { hrs });
+    return new Date(iso).toLocaleDateString();
+  };
+
+  const STATUS_BADGE = {
+    paid:    { cls: "badge badge-success", label: t("status.student.paid") },
+    partial: { cls: "badge badge-warning", label: t("status.student.partial") },
+    unpaid:  { cls: "badge badge-danger",  label: t("status.student.unpaid") },
+  };
+
   const [lastSyncAt, setLastSyncAt]           = useState(null);
   const [syncMsg, setSyncMsg]                 = useState(null);
   const [summary, setSummary]                 = useState(null);
@@ -77,9 +79,9 @@ function Dashboard() {
     setSummaryError(null);
     getPaymentSummary()
       .then(({ data }) => setSummary(data))
-      .catch(() => setSummaryError("Could not load payment summary."))
+      .catch(() => setSummaryError(t("dashboard.failedToLoadSummary")))
       .finally(() => setSummaryLoading(false));
-  }, []);
+  }, [t]);
 
   const fetchStudents = useCallback((p, srch, st, cls) => {
     // Cancel any in-flight student fetch before issuing a new one.
@@ -98,7 +100,7 @@ function Dashboard() {
       .catch((err) => {
         // Silently ignore aborted (superseded) requests.
         if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
-        setStudentsError("Could not load student list.");
+        setStudentsError(t("dashboard.failedToLoadStudents"));
       })
       .finally(() => {
         // Only clear loading when this controller is still the current one.
@@ -106,7 +108,7 @@ function Dashboard() {
           setStudentsLoading(false);
         }
       });
-  }, []);
+  }, [t]);
 
   // Tracks whether the page effect is running for the very first time.
   // On mount the filter effect already calls fetchStudents(1, …), so the page
@@ -117,7 +119,7 @@ function Dashboard() {
   useEffect(() => {
     getSyncStatus()
       .then(({ data }) => setLastSyncAt(data.lastSyncAt))
-      .catch(() => setError("Could not load sync status."));
+      .catch(() => setError(t("dashboard.failedToLoadSyncStatus")));
     fetchSummary();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -137,7 +139,7 @@ function Dashboard() {
 
   function handleSyncComplete(data) {
     setLastSyncAt(new Date().toISOString());
-    setSyncMsg(data?.message || "Sync complete.");
+    setSyncMsg(data?.message || t("dashboard.syncComplete"));
     setTimeout(() => setSyncMsg(null), 3500);
     fetchSummary();
     setPage(1);
@@ -150,7 +152,7 @@ function Dashboard() {
       setEditingStudentData(data);
       setEditingStudent(student.studentId);
     } catch {
-      setError("Failed to load student details");
+      setError(t("dashboard.failedToLoadStudentDetails"));
     }
   }
 
@@ -166,29 +168,29 @@ function Dashboard() {
 
   const stats = [
     {
-      label: "Total Students",
+      label: t("dashboard.statTotalStudents"),
       value: summary?.totalStudents ?? summary?.total ?? "—",
       Icon: IconUsers,
       color: "cyan",
     },
     {
-      label: "Paid",
+      label: t("status.student.paid"),
       value: summary?.paidCount ?? summary?.counts?.paid ?? "—",
       Icon: IconCheck,
       color: "green",
     },
     {
-      label: "Pending",
+      label: t("dashboard.statPending"),
       value: summary ? ((summary.unpaidCount || 0) + (summary.counts?.partial || 0)) || "—" : "—",
       Icon: IconAlertTriangle,
       color: "amber",
     },
     {
-      label: "XLM Collected",
+      label: t("dashboard.statXlmCollected"),
       value: summary
         ? (summary.totalXlmCollected || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
         : "—",
-      sub: "XLM total",
+      sub: t("dashboard.statXlmTotalSub"),
       Icon: IconDollarSign,
       color: "violet",
     },
@@ -256,7 +258,7 @@ function Dashboard() {
 
       {/* Accessibility live regions */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {summaryLoading || studentsLoading ? "Loading dashboard data…" : "Dashboard data loaded."}
+        {summaryLoading || studentsLoading ? t("dashboard.loadingAria") : t("dashboard.loadedAria")}
       </div>
       {(summaryError || studentsError) && (
         <div aria-live="assertive" aria-atomic="true" className="sr-only">
@@ -268,13 +270,13 @@ function Dashboard() {
 
         {/* ── Centered Hero Header ──────────────────── */}
         <PageHero
-          eyebrow="Admin Console"
-          title="Payments Dashboard"
-          subtitle="Monitor students, fees, and blockchain-settled payments in real time."
+          eyebrow={t("dashboard.eyebrow")}
+          title={t("dashboard.title")}
+          subtitle={t("dashboard.subtitle")}
         >
           <SyncButton onSyncComplete={handleSyncComplete} lastSyncTime={lastSyncAt} />
           <span style={{ alignSelf: "center", fontSize: "0.82rem", color: "rgba(255,255,255,0.85)" }}>
-            Last sync: <strong style={{ color: "#fff" }}>{timeAgo(lastSyncAt)}</strong>
+            {t("actions.lastSync")} <strong style={{ color: "#fff" }}>{timeAgo(lastSyncAt)}</strong>
           </span>
         </PageHero>
 
@@ -297,7 +299,7 @@ function Dashboard() {
           {summaryError ? (
             <div role="alert" className="alert alert-danger" style={{ marginBottom: "1.5rem" }}>
               <span style={{ flex: 1 }}>{summaryError}</span>
-              <button onClick={fetchSummary} className="btn btn-sm btn-ghost" style={{ color: "inherit", borderColor: "currentColor", opacity: 0.8 }}>Retry</button>
+              <button onClick={fetchSummary} className="btn btn-sm btn-ghost" style={{ color: "inherit", borderColor: "currentColor", opacity: 0.8 }}>{t("actions.retry")}</button>
             </div>
           ) : (
             <div className="stat-grid" style={{ marginBottom: "1.75rem" }}>
@@ -319,22 +321,22 @@ function Dashboard() {
         <div className="card">
           <div className="card-header">
             <div>
-              <div className="card-title">Students</div>
+              <div className="card-title">{t("dashboard.studentsTitle")}</div>
               {!studentsLoading && total > 0 && (
-                <div className="card-subtitle">{total.toLocaleString()} total</div>
+                <div className="card-subtitle">{t("dashboard.studentsTotal", { count: total })}</div>
               )}
             </div>
 
             {/* Toolbar */}
-            <div className="toolbar" role="search" aria-label="Filter students" style={{ margin: 0 }}>
+            <div className="toolbar" role="search" aria-label={t("dashboard.filterStudentsAria")} style={{ margin: 0 }}>
               <div className="dash-search">
                 <span className="dash-search-icon"><IconSearch size={14} /></span>
                 <input
                   type="search"
-                  placeholder="Name or ID…"
+                  placeholder={t("dashboard.searchPlaceholder")}
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  aria-label="Search students by name or ID"
+                  aria-label={t("dashboard.searchAria")}
                   style={{
                     padding: "0.4rem 0.7rem",
                     paddingLeft: "2.125rem",
@@ -355,7 +357,7 @@ function Dashboard() {
               <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
-                aria-label="Filter by payment status"
+                aria-label={t("dashboard.filterByStatusAria")}
                 style={{
                   padding: "0.4rem 0.7rem",
                   border: "1.5px solid var(--border)",
@@ -368,15 +370,15 @@ function Dashboard() {
                   cursor: "pointer",
                 }}
               >
-                <option value="all">All Status</option>
-                <option value="paid">Paid</option>
-                <option value="partial">Partial</option>
-                <option value="unpaid">Unpaid</option>
+                <option value="all">{t("dashboard.allStatus")}</option>
+                <option value="paid">{t("status.student.paid")}</option>
+                <option value="partial">{t("status.student.partial")}</option>
+                <option value="unpaid">{t("status.student.unpaid")}</option>
               </select>
               <select
                 value={classFilter}
                 onChange={e => setClassFilter(e.target.value)}
-                aria-label="Filter by class"
+                aria-label={t("dashboard.filterByClassAria")}
                 style={{
                   padding: "0.4rem 0.7rem",
                   border: "1.5px solid var(--border)",
@@ -389,7 +391,7 @@ function Dashboard() {
                   cursor: "pointer",
                 }}
               >
-                <option value="">All Classes</option>
+                <option value="">{t("dashboard.allClasses")}</option>
                 {["JSS1","JSS2","JSS3","SS1","SS2","SS3"].map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -408,20 +410,20 @@ function Dashboard() {
                     className="btn btn-sm btn-ghost"
                     style={{ color: "inherit", borderColor: "currentColor", opacity: 0.8 }}
                   >
-                    Retry
+                    {t("actions.retry")}
                   </button>
                 </div>
               </div>
             ) : (
-              <div style={{ overflowX: "auto" }} aria-busy={studentsLoading} aria-label="Student list">
-                <table className="data-table" aria-label={studentsLoading ? "Loading students" : "Student list"}>
+              <div style={{ overflowX: "auto" }} aria-busy={studentsLoading} aria-label={t("dashboard.studentTableAria")}>
+                <table className="data-table" aria-label={studentsLoading ? t("dashboard.studentsLoadingAria") : t("dashboard.studentTableAria")}>
                   <thead>
                     <tr>
-                      <th scope="col">Student ID</th>
-                      <th scope="col">Name</th>
-                      <th scope="col">Class</th>
-                      <th scope="col">Fee</th>
-                      <th scope="col">Status</th>
+                      <th scope="col">{t("dashboard.colStudentId")}</th>
+                      <th scope="col">{t("dashboard.colName")}</th>
+                      <th scope="col">{t("dashboard.colClass")}</th>
+                      <th scope="col">{t("dashboard.colFee")}</th>
+                      <th scope="col">{t("dashboard.colStatus")}</th>
                       <th scope="col"></th>
                     </tr>
                   </thead>
@@ -442,9 +444,9 @@ function Dashboard() {
                         <td colSpan="6">
                           <div className="empty-state">
                             <div className="empty-state-icon"><IconSearch size={26} /></div>
-                            <div className="empty-state-title">No students found</div>
+                            <div className="empty-state-title">{t("dashboard.emptyTitle")}</div>
                             <div className="empty-state-desc">
-                              {search || statusFilter !== "all" || classFilter ? "Try adjusting your search or filters." : "No students have been registered yet."}
+                              {search || statusFilter !== "all" || classFilter ? t("dashboard.emptyFilters") : t("dashboard.emptyNone")}
                             </div>
                           </div>
                         </td>
@@ -469,7 +471,7 @@ function Dashboard() {
                               onClick={() => handleEditStudent(s)}
                               className="btn btn-sm btn-ghost"
                             >
-                              Edit
+                              {t("actions.edit")}
                             </button>
                           </td>
                         </tr>
@@ -485,17 +487,17 @@ function Dashboard() {
           {total > 0 && (
             <div style={{ padding: "0.875rem 1.25rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
               <span className="pagination-info" aria-live="polite" aria-atomic="true">
-                {studentsLoading ? "Loading…" : `${rangeStart}–${rangeEnd} of ${total.toLocaleString()} students`}
+                {studentsLoading ? t("actions.loading") : t("dashboard.rangeOf", { start: rangeStart, end: rangeEnd, total: total.toLocaleString() })}
               </span>
-              <nav className="pagination-controls" aria-label="Student list pagination">
+              <nav className="pagination-controls" aria-label={t("dashboard.paginationAria")}>
                 <button
                   className="page-btn"
                   disabled={page === 1 || studentsLoading}
                   onClick={() => setPage(p => p - 1)}
-                  aria-label="Previous page"
+                  aria-label={t("actions.previousPage")}
                   style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
                 >
-                  <IconChevronLeft size={15} /> Prev
+                  <IconChevronLeft size={15} /> {t("actions.prev")}
                 </button>
                 <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)", padding: "0 0.25rem" }} aria-current="page">
                   {page} / {pages}
@@ -504,10 +506,10 @@ function Dashboard() {
                   className="page-btn"
                   disabled={page === pages || studentsLoading}
                   onClick={() => setPage(p => p + 1)}
-                  aria-label="Next page"
+                  aria-label={t("actions.nextPage")}
                   style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
                 >
-                  Next <IconChevronRight size={15} />
+                  {t("actions.next")} <IconChevronRight size={15} />
                 </button>
               </nav>
             </div>

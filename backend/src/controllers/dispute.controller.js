@@ -15,8 +15,14 @@ const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
 const { fireWebhook, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
+const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
+const {
+  recordDisputeRaised,
+  recordDisputeResolved,
+  refreshOpenDisputeGauge,
+} = require('../metrics/disputeMetrics');
 
 // ── State machine (#895) ─────────────────────────────────────────────────────
 //
@@ -157,6 +163,11 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
   payment.status = targetPaymentStatus;
   await payment.save();
 
+  // #1353 — Keep the student's totalPaid/feePaid in sync with the dispute
+  // outcome: DISPUTED payments must not count toward totalPaid, and moving
+  // back to SUCCESS (dispute rejected) must restore it.
+  await updateStudentBalance(schoolId, payment.studentId);
+
   logger.info('Payment status synced after dispute transition', {
     schoolId, txHash, disputeStatus: newDisputeStatus, previousStatus, paymentStatus: targetPaymentStatus,
   });
@@ -247,6 +258,15 @@ async function flagDispute(req, res, next) {
 
     // Notify (best-effort)
     await _notifyDisputeChange(schoolId, 'dispute.created', dispute);
+
+    // Metrics (#1375). Recorded after the write succeeded, and never allowed to
+    // fail the request — a scrape value is not worth a 500 to the caller.
+    try {
+      recordDisputeRaised(schoolId);
+      await refreshOpenDisputeGauge();
+    } catch (metricsErr) {
+      logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
+    }
 
     res.status(201).json(dispute);
   } catch (err) { next(err); }
@@ -404,6 +424,16 @@ async function resolveDispute(req, res, next) {
     // #894 — Emit SSE + webhook (best-effort)
     const eventName = newStatus === 'open' ? 'dispute.reopened' : `dispute.${newStatus}`;
     await _notifyDisputeChange(schoolId, eventName, dispute);
+
+    // Metrics (#1375). Resolution duration and the SLA breach are only recorded
+    // on a terminal status; a reopen just moves the gauges. Never allowed to
+    // fail the request.
+    try {
+      if (isTerminal) recordDisputeResolved(dispute);
+      await refreshOpenDisputeGauge();
+    } catch (metricsErr) {
+      logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
+    }
 
     res.json(dispute);
   } catch (err) { next(err); }

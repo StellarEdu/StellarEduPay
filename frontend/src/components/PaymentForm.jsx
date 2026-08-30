@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { useTranslation } from "react-i18next";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
 import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds } from "../services/api";
@@ -8,23 +9,24 @@ import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
 
 const STATUS_BADGE = {
-  valid:     { cls: "badge badge-success", label: "Valid" },
-  overpaid:  { cls: "badge badge-warning", label: "Overpaid" },
-  underpaid: { cls: "badge badge-danger",  label: "Underpaid" },
-  unknown:   { cls: "badge badge-neutral", label: "Unknown" },
+  valid:     { cls: "badge badge-success", key: "status.validation.valid" },
+  overpaid:  { cls: "badge badge-warning", key: "status.validation.overpaid" },
+  underpaid: { cls: "badge badge-danger",  key: "status.validation.underpaid" },
+  unknown:   { cls: "badge badge-neutral", key: "status.validation.unknown" },
 };
 
 function CopyButton({ text, copyKey, copied, onCopy }) {
+  const { t } = useTranslation();
   const isCopied = copied === copyKey;
   return (
     <button
       onClick={() => onCopy(text, copyKey)}
       className="btn btn-sm btn-ghost"
-      aria-label={isCopied ? "Copied" : "Copy to clipboard"}
+      aria-label={isCopied ? t("actions.copied") : t("actions.copyToClipboard")}
       style={{ flexShrink: 0, gap: "0.3rem" }}
     >
       {isCopied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-      {isCopied ? "Copied!" : "Copy"}
+      {isCopied ? t("actions.copied") : t("actions.copy")}
     </button>
   );
 }
@@ -41,7 +43,7 @@ function InfoRow({ label, children }) {
       flexWrap: "wrap",
     }}>
       <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", flexShrink: 0 }}>{label}</span>
-      <div style={{ fontWeight: 600, textAlign: "right" }}>{children}</div>
+      <div style={{ fontWeight: 600, textAlign: "right", wordBreak: "break-word", overflowWrap: "anywhere" }}>{children}</div>
     </div>
   );
 }
@@ -147,7 +149,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
       if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
       setError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
-        "Student not found. Please check the ID and try again."
+        t("paymentForm.studentNotFound")
       );
       errorRef.current?.focus();
     } finally {
@@ -158,7 +160,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
         setPaymentsLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   // #1344 — a bookmarked/shared /pay/:studentId URL pre-fills the lookup so a
   // parent doesn't have to retype the student ID on every visit.
@@ -226,6 +228,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
   }
 
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK === "testnet";
+  const { t } = useTranslation();
 
   return (
     <>
@@ -233,14 +236,14 @@ export default function PaymentForm({ initialStudentId = "" }) {
 
       <div className="card pf-wrap">
         <div className="card-header">
-          <div className="card-title">Pay School Fees</div>
+          <div className="card-title">{t("paymentForm.title")}</div>
           {isTestnet && (
-            <span className="badge badge-warning" style={{ fontSize: "0.68rem" }}>Testnet</span>
+            <span className="badge badge-warning" style={{ fontSize: "0.68rem" }}>{t("paymentForm.testnetBadge")}</span>
           )}
         </div>
         <div className="card-body">
           <p style={{ fontSize: "0.875rem", color: "var(--text-muted)", marginBottom: "1.25rem" }}>
-            Enter your student ID to get payment instructions.
+            {t("paymentForm.intro")}
           </p>
 
           <form onSubmit={(e) => {
@@ -253,13 +256,13 @@ export default function PaymentForm({ initialStudentId = "" }) {
             }
             lookupStudent(studentId);
           }}>
-            <label className="pf-section-label" htmlFor="sid">Student ID</label>
+            <label className="pf-section-label" htmlFor="sid">{t("paymentForm.studentIdLabel")}</label>
             <div className="pf-id-input-wrap">
               <span className="pf-search-icon"><IconSearch size={15} /></span>
               <input
                 id="sid"
                 type="text"
-                placeholder="e.g. STU001"
+                placeholder={t("paymentForm.studentIdPlaceholder")}
                 value={studentId}
                 onChange={(e) => {
                   handleStudentIdChange(e);
@@ -272,7 +275,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
               />
             </div>
             <button type="submit" disabled={loading} className="btn btn-dark" style={{ width: "100%" }}>
-              {loading ? "Looking up…" : "Get Payment Instructions"}
+              {loading ? t("paymentForm.lookingUp") : t("paymentForm.submit")}
             </button>
           </form>
 
@@ -288,20 +291,20 @@ export default function PaymentForm({ initialStudentId = "" }) {
               {isTestnet && (
                 <div className="alert alert-warning" style={{ marginBottom: "1rem", fontSize: "0.8125rem" }}>
                   <IconAlertTriangle size={14} />
-                  Testnet mode — do not send real funds.
+                  {t("paymentForm.testnetMode")}
                 </div>
               )}
               {hasDeletedPayments && (
                 <div role="alert" className="alert alert-warning" style={{ marginBottom: "1rem", fontSize: "0.8125rem" }}>
                   <IconAlertTriangle size={14} />
-                  This student has deleted payment records not included in the balance shown.
+                  {t("paymentForm.deletedPaymentRecords")}
                 </div>
               )}
               {balanceError && (
                 <div role="alert" className="alert alert-warning" style={{ marginBottom: "1rem", fontSize: "0.8125rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                     <IconAlertTriangle size={14} />
-                    Balance information could not be loaded.
+                    {t("paymentForm.balanceLoadError")}
                   </span>
                   <button
                     type="button"
@@ -309,21 +312,21 @@ export default function PaymentForm({ initialStudentId = "" }) {
                     className="btn btn-sm btn-ghost"
                     style={{ flexShrink: 0 }}
                   >
-                    Retry
+                    {t("paymentForm.retry")}
                   </button>
                 </div>
               )}
 
               {/* Student info */}
-              <InfoRow label="Student">{student.name}</InfoRow>
-              <InfoRow label="Class">{student.class}</InfoRow>
-              <InfoRow label="Fee">
+              <InfoRow label={t("paymentForm.student")}>{student.name}</InfoRow>
+              <InfoRow label={t("paymentForm.class")}>{student.class}</InfoRow>
+              <InfoRow label={t("paymentForm.fee")}>
                 {instructions.feeAmount ?? student.feeAmount}
                 <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
               </InfoRow>
-              <InfoRow label="Status">
+              <InfoRow label={t("actions.status")}>
                 <span className={student.feePaid ? "badge badge-success" : "badge badge-danger"}>
-                  {student.feePaid ? "Paid" : "Unpaid"}
+                  {student.feePaid ? t("paymentForm.paid") : t("paymentForm.unpaid")}
                 </span>
               </InfoRow>
 
@@ -331,7 +334,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
               <div style={{ marginTop: "0.875rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                 <button type="button" onClick={copyShareLink} className="btn btn-sm btn-ghost" style={{ alignSelf: "flex-start", gap: "0.3rem" }}>
                   {shareCopied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-                  {shareCopied ? "Link copied!" : "Share payment link"}
+                  {shareCopied ? t("paymentForm.linkCopied") : t("paymentForm.shareLink")}
                 </button>
                 <div className="pf-code-row">
                   <span className="pf-code">{sharePaymentUrl(student.studentId)}</span>
@@ -343,7 +346,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
 
               {/* Wallet address */}
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>
-                <span className="pf-section-label">Wallet Address</span>
+                <span className="pf-section-label">{t("paymentForm.walletAddress")}</span>
                 <div className="pf-code-row">
                   <span className="pf-code">{instructions.walletAddress}</span>
                   <CopyButton text={instructions.walletAddress} copyKey="wallet" copied={copied} onCopy={copy} />
@@ -352,7 +355,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
 
               {/* Memo */}
               <div style={{ marginBottom: "1.25rem" }}>
-                <span className="pf-section-label">Memo (required)</span>
+                <span className="pf-section-label">{t("paymentForm.memoRequired")}</span>
                 <div className="pf-code-row">
                   <span className="pf-code">{instructions.memo}</span>
                   <CopyButton text={instructions.memo} copyKey="memo" copied={copied} onCopy={copy} />
@@ -381,21 +384,24 @@ export default function PaymentForm({ initialStudentId = "" }) {
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
                     <span className="pf-section-label" style={{ display: "block", marginBottom: "0.75rem" }}>
-                      Scan with Stellar Wallet
+                      {t("paymentForm.scanWithWallet")}
                     </span>
                     <div
                       ref={qrWrapperRef}
-                      style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)" }}
+                      style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)", maxWidth: "100%" }}
                     >
+                      {/* #1384 — 200px is the WCAG-friendly minimum for a
+                          scannable QR on a mobile screen; fits comfortably
+                          within a 360px viewport alongside the card padding. */}
                       <QRCodeSVG
                         value={paymentUri}
-                        size={148}
+                        size={200}
                         role="img"
-                        aria-label={`QR code for payment to ${instructions.walletAddress}`}
+                        aria-label={t("paymentForm.qrAria", { address: instructions.walletAddress })}
                       />
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      Compatible with Lobstr, Solar, XBULL and any SEP-0007 wallet.
+                      {t("paymentForm.walletCompatibility")}
                     </p>
 
                     {/* Memo type — for wallets that require a numeric or hash memo (#1118) */}
@@ -406,7 +412,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
                           className="pf-section-label"
                           style={{ display: "block", marginBottom: "0.375rem" }}
                         >
-                          Memo type
+                          {t("paymentForm.memoType")}
                         </label>
                         <select
                           id="memo-type-select"
@@ -415,14 +421,14 @@ export default function PaymentForm({ initialStudentId = "" }) {
                           className="input input-sm"
                           style={{ maxWidth: "16rem", margin: "0 auto" }}
                         >
-                          <option value="MEMO_TEXT">Text (default)</option>
-                          <option value="MEMO_ID">ID — numeric</option>
-                          <option value="MEMO_HASH">Hash — 32 bytes</option>
+                          <option value="MEMO_TEXT">{t("paymentForm.memoTypeText")}</option>
+                          <option value="MEMO_ID">{t("paymentForm.memoTypeId")}</option>
+                          <option value="MEMO_HASH">{t("paymentForm.memoTypeHash")}</option>
                         </select>
                         {activeMemoType !== "MEMO_TEXT" && (
                           <div style={{ marginTop: "0.625rem" }}>
                             <span className="pf-section-label" style={{ display: "block", marginBottom: "0.375rem" }}>
-                              Memo value for this type
+                              {t("paymentForm.memoValueForType")}
                             </span>
                             <div className="pf-code-row" style={{ justifyContent: "center" }}>
                               <span className="pf-code" style={{ wordBreak: "break-all" }}>{encodedMemo}</span>
@@ -431,8 +437,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
                           </div>
                         )}
                         <p style={{ marginTop: "0.5rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          Only change this if your wallet cannot send a text memo. All three
-                          types identify the same payment.
+                          {t("paymentForm.memoCaution")}
                         </p>
                       </div>
                     )}
@@ -443,21 +448,21 @@ export default function PaymentForm({ initialStudentId = "" }) {
                         type="button"
                         onClick={() => copy(paymentUri, "qr-uri")}
                         className="btn btn-sm btn-ghost"
-                        aria-label={copied === "qr-uri" ? "Payment URI copied" : "Copy payment URI"}
+                        aria-label={copied === "qr-uri" ? t("paymentForm.uriCopied") : t("paymentForm.copyUri")}
                         style={{ gap: "0.35rem" }}
                       >
                         {copied === "qr-uri" ? <IconCheck size={13} /> : <IconCopy size={13} />}
-                        {copied === "qr-uri" ? "Copied!" : "Copy payment URI"}
+                        {copied === "qr-uri" ? t("actions.copied") : t("paymentForm.copyUri")}
                       </button>
                       <button
                         type="button"
                         onClick={() => downloadQr(downloadFilename)}
                         className="btn btn-sm btn-ghost"
-                        aria-label="Download QR code as PNG"
+                        aria-label={t("paymentForm.downloadQrAria")}
                         style={{ gap: "0.35rem" }}
                       >
                         <IconDownload size={13} />
-                        Download QR
+                        {t("paymentForm.downloadQr")}
                       </button>
                     </div>
                   </div>
@@ -466,7 +471,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
 
               {instructions.acceptedAssets?.length > 0 && (
                 <p style={{ marginTop: "0.875rem", fontSize: "0.775rem", color: "var(--text-muted)" }}>
-                  Accepted assets: {instructions.acceptedAssets.map(a => a.displayName).join(", ")}
+                  {t("paymentForm.acceptedAssets")} {instructions.acceptedAssets.map(a => a.displayName).join(", ")}
                 </p>
               )}
             </div>
@@ -476,7 +481,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
           {(payments !== null || paymentsLoading) && (
             <div style={{ marginTop: "1.75rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--text)", marginBottom: "0.875rem", paddingBottom: "0.625rem", borderBottom: "1px solid var(--border)" }}>
-                Payment History
+                {t("paymentForm.paymentHistory")}
               </div>
               {paymentsLoading ? (
                 Array.from({ length: 2 }).map((_, i) => (
@@ -489,7 +494,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
                   </div>
                 ))
               ) : payments.length === 0 ? (
-                <p style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>No payments recorded yet.</p>
+                <p style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>{t("paymentForm.noPayments")}</p>
               ) : payments.map((p, i) => {
                 const st = p.feeValidationStatus || "unknown";
                 const badge = STATUS_BADGE[st] || STATUS_BADGE.unknown;
@@ -497,11 +502,11 @@ export default function PaymentForm({ initialStudentId = "" }) {
                 const alreadyDisputed = disputedTxs.has(p.txHash);
                 const refund = refunds[p.txHash];
                 const refundStatusStyles = {
-                  approval_pending: { cls: "badge badge-warning", label: "Refund: Awaiting Approval" },
-                  pending: { cls: "badge badge-info", label: "Refund: Pending" },
-                  submitted: { cls: "badge badge-primary", label: "Refund: Submitted" },
-                  confirmed: { cls: "badge badge-success", label: "Refund: Confirmed" },
-                  failed: { cls: "badge badge-danger", label: "Refund: Failed" },
+                  approval_pending: { cls: "badge badge-warning" },
+                  pending: { cls: "badge badge-info" },
+                  submitted: { cls: "badge badge-primary" },
+                  confirmed: { cls: "badge badge-success" },
+                  failed: { cls: "badge badge-danger" },
                 };
                 return (
                   <div key={p.txHash || i} className="pf-payment-item">
@@ -513,13 +518,15 @@ export default function PaymentForm({ initialStudentId = "" }) {
                         </span>
                       </strong>
                       <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
-                        <span className={badge.cls}>{badge.label}</span>
-                        {refund && (
-                          <span className={refundStatusStyles[refund.status]?.cls || "badge badge-neutral"}>
-                            {refundStatusStyles[refund.status]?.label || `Refund: ${refund.status}`}
-                          </span>
-                        )}
-                      </div>
+                          <span className={badge.cls}>{t(badge.key)}</span>
+                          {refund && (
+                            <span className={refundStatusStyles[refund.status]?.cls || "badge badge-neutral"}>
+                              {refundStatusStyles[refund.status]
+                                ? `${t("status.refund.prefix")} ${t(`status.refund.${refund.status}`)}`
+                                : `${t("status.refund.prefix")} ${refund.status}`}
+                            </span>
+                          )}
+                        </div>
                     </div>
                     <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem", wordBreak: "break-all" }}>
                       {p.txHash}
@@ -533,7 +540,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
                     {canDispute && (
                       <div style={{ marginTop: "0.625rem" }}>
                         {alreadyDisputed ? (
-                          <span className="badge badge-warning">Dispute submitted</span>
+                          <span className="badge badge-warning">{t("paymentForm.disputeSubmitted")}</span>
                         ) : disputingTx === p.txHash ? (
                           <div style={{ marginTop: "0.5rem" }}>
                             <DisputeForm
@@ -552,7 +559,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
                             className="btn btn-sm btn-ghost"
                             style={{ marginTop: "0.25rem" }}
                           >
-                            Raise Dispute
+                            {t("paymentForm.raiseDispute")}
                           </button>
                         )}
                       </div>

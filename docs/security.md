@@ -12,9 +12,87 @@ The login response includes `mfaSetupRequired: true` when this restricted sessio
 
 ## Credential rotation
 
-JWT secrets and the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`) have scripted
-rotation — see `scripts/rotate-jwt-secret.js` and `scripts/rotate-signer-master-key.js`, and
-the "Key Rotation" section of `docs/operator-runbooks.md` for when and how to run them.
+JWT secrets, the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`), and the webhook
+secret encryption key (`WEBHOOK_SECRET_ENCRYPTION_KEY`) have scripted rotation — see
+`scripts/rotate-jwt-secret.js`, `scripts/rotate-signer-master-key.js`, and
+`scripts/rotate-webhook-encryption-key.js`, and the "Key Rotation" section of
+`docs/operator-runbooks.md` for when and how to run them.
+
+### Webhook secret encryption key rotation
+
+`backend/src/services/webhookSecretEncryption.js` encrypts every school's `webhookSecret` at
+rest (AES-256-GCM) using a key derived from `WEBHOOK_SECRET_ENCRYPTION_KEY`. Rotating that key
+without re-encrypting the stored secrets would make every existing secret undecryptable with
+the new key, breaking outbound webhook signing for every school (#1380). Rotation is scripted
+and supports a dual-key grace period so there is no cutover window where deliveries fail.
+
+**Procedure:**
+
+1. Generate a new key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+2. Set `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` to the **current** key (the one already
+   protecting stored secrets) and `WEBHOOK_SECRET_ENCRYPTION_KEY` to the **new** key, both in
+   the deployment's secret store.
+3. Run the migration script against the target database, first as a dry run:
+   ```bash
+   WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS=<current key> WEBHOOK_SECRET_ENCRYPTION_KEY=<new key> \
+     node scripts/rotate-webhook-encryption-key.js
+   ```
+   Review the per-school report, then re-run with `--apply` to persist the re-encrypted
+   values:
+   ```bash
+   WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS=<current key> WEBHOOK_SECRET_ENCRYPTION_KEY=<new key> \
+     node scripts/rotate-webhook-encryption-key.js --apply
+   ```
+4. Redeploy the API and worker instances with both env vars set. While
+   `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` is present, `decryptWebhookSecret()` transparently
+   falls back to it whenever the new key fails an auth-tag check — this covers any secret the
+   migration script hasn't reached yet and any instance still finishing a rolling deploy, so
+   webhook deliveries are never interrupted mid-rotation.
+5. Once the rollout is complete and step 3's `--apply` run reports zero failures, drop
+   `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS` from the deployment and redeploy again to close the
+   grace period.
+6. Verify a live webhook delivery signs correctly, then record the rotation time and operator
+   in the incident log per the general rotation order in `docs/operator-runbooks.md`.
+
+Skipping step 2 (or dropping the previous key before step 3 completes) reproduces the original
+failure mode: any secret the script hasn't re-encrypted yet becomes unreadable, and signing
+outbound webhooks for that school silently breaks.
+
+## Signer master key secrets management (#1386)
+
+`backend/src/utils/signerKeyManager.js` encrypts every school's Stellar signing secret key at
+rest under a single master key. By default that master key is read from the
+`SIGNER_MASTER_KEY` environment variable, which is the simplest option but has real exposure in
+production: env vars are visible in `docker inspect` output and `/proc/<pid>/environ` on any node
+running the container, in Kubernetes Secret manifests that may end up committed to version
+control or stored unencrypted in `etcd`, and in CI logs that print the environment on failure.
+
+To avoid holding the plaintext key in an env var, set `SIGNER_KEY_SOURCE` and call
+`initializeMasterKey()` once at startup (already wired into `backend/src/app.js`'s boot sequence)
+to resolve it from a real secrets manager instead:
+
+| `SIGNER_KEY_SOURCE` | Behavior |
+|---|---|
+| `env` (default) | `getMasterKey()` reads `SIGNER_MASTER_KEY` directly — unchanged from before this feature. |
+| `aws_secrets_manager` | Fetches the secret named by `SIGNER_MASTER_KEY_SECRET_ID` via `@aws-sdk/client-secrets-manager`, using `AWS_REGION` and the SDK's normal credential provider chain (IAM role, instance profile, etc. — no static AWS keys need to live in this app's config). |
+| `http` | Fetches from any HTTP secrets endpoint at `SIGNER_MASTER_KEY_HTTP_URL` (e.g. a Vault or GCP Secret Manager sidecar/proxy), sending `SIGNER_MASTER_KEY_HTTP_TOKEN` as a bearer token when set. |
+
+Either provider may return the key as a bare 64-character hex string or as JSON
+(`{"SIGNER_MASTER_KEY": "<hex>"}` or `{"key": "<hex>"}`). The resolved key is cached in memory
+only for the life of the process — it is never written back to `process.env` or to disk — and
+`getMasterKey()` prefers it over `SIGNER_MASTER_KEY` whenever `initializeMasterKey()` has
+populated it, so a misconfigured or unreachable provider fails loudly at boot (the process exits
+non-zero, per `backend/src/app.js`) instead of silently falling back to an unset env var.
+
+This does not change key **rotation** mechanics — `reEncryptSecretKey()` and
+`scripts/rotate-signer-master-key.js` still apply; point `SIGNER_MASTER_KEY_OLD` /
+`SIGNER_MASTER_KEY` (or the provider-backed equivalents) at the old and new key material as
+described above.
+
+A dedicated CI job (`scripts/scan-repo-secrets.js`, the `secret-scan-repo` job in
+`.github/workflows/ci.yml`) scans every tracked file in the repository for real Stellar StrKey
+secret keys (`S` + 55 base32 chars) so one can never be committed regardless of which
+`SIGNER_KEY_SOURCE` a deployment uses.
 
 ## Content Security Policy (CSP)
 

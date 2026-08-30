@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { useTranslation } from "react-i18next";
 
 export default function Custom404() {
+  const { t } = useTranslation();
   return (
     <>
       <style>{`
@@ -70,24 +72,24 @@ export default function Custom404() {
       <div className="not-found-wrap">
         <div className="not-found-card">
           <div className="not-found-code" aria-label="404">404</div>
-          <h1 className="not-found-title">Page Not Found</h1>
+          <h1 className="not-found-title">{t("notFound.title")}</h1>
           <p className="not-found-desc">
-            The page you&apos;re looking for doesn&apos;t exist. It may have been moved or the URL is incorrect.
+            {t("notFound.desc")}
           </p>
 
           <div className="not-found-actions">
             <Link href="/" className="btn btn-primary">
-              ← Back to Home
+              {t("notFound.backHome")}
             </Link>
             <Link href="/pay-fees" className="btn btn-ghost">
-              Pay Fees
+              {t("nav.payFees")}
             </Link>
           </div>
 
           <div className="not-found-links">
-            <Link href="/dashboard" className="not-found-link">Dashboard</Link>
-            <Link href="/reports" className="not-found-link">Reports</Link>
-            <Link href="/login" className="not-found-link">Admin Login</Link>
+            <Link href="/dashboard" className="not-found-link">{t("nav.dashboard")}</Link>
+            <Link href="/reports" className="not-found-link">{t("nav.reports")}</Link>
+            <Link href="/login" className="not-found-link">{t("nav.adminLogin")}</Link>
           </div>
         </div>
       </div>

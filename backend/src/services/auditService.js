@@ -232,6 +232,49 @@ async function verifyAuditChain(schoolId, { limit = 1000 } = {}) {
   return { ok: broken.length === 0, scanned: entries.length, broken };
 }
 
+/** Maximum number of rows that may be exported in a single request. */
+const MAX_EXPORT_ROWS = 10000;
+
+/**
+ * exportAuditLogs — fetch up to MAX_EXPORT_ROWS matching records and return
+ * them as a flat array suitable for CSV or JSON serialisation.
+ *
+ * Accepts the same filter parameters as getAuditLogs (minus pagination).
+ * Sorted oldest-first so the export is chronologically readable.
+ *
+ * @param {object} filters - { schoolId, action, targetType, performedBy,
+ *                             result, startDate, endDate, limit? }
+ * @returns {Promise<Array>}  array of plain audit log objects
+ */
+async function exportAuditLogs(filters = {}) {
+  const {
+    schoolId, action, targetType, performedBy, result,
+    startDate, endDate,
+    limit: requestedLimit,
+  } = filters;
+
+  const query = { schoolId };
+  if (action)      query.action      = action;
+  if (targetType)  query.targetType  = targetType;
+  if (performedBy) query.performedBy = performedBy;
+  if (result)      query.result      = result;
+  if (startDate || endDate) {
+    query.createdAt = {};
+    if (startDate) query.createdAt.$gte = new Date(startDate);
+    if (endDate)   query.createdAt.$lte = new Date(endDate);
+  }
+
+  const rowLimit = Math.min(
+    Math.max(parseInt(requestedLimit, 10) || MAX_EXPORT_ROWS, 1),
+    MAX_EXPORT_ROWS,
+  );
+
+  return AuditLog.find(query)
+    .sort({ createdAt: 1 })
+    .limit(rowLimit)
+    .lean();
+}
+
 /**
  * archiveAuditLogs — marks records older than retentionDays as archived=true.
  * Records are never deleted; archiving signals they can be exported to cold storage.
@@ -252,10 +295,12 @@ module.exports = {
   logAudit,
   getAuditLogs,
   getRecentAuditLogs,
+  exportAuditLogs,
   getAuditHealth,
   verifyAuditChain,
   archiveAuditLogs,
   _resetAuditFailureCount,
   // Exported for testing
   _computeEntryHash,
+  MAX_EXPORT_ROWS,
 };

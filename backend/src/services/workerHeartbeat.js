@@ -30,6 +30,7 @@ const WORKER_NAMES = {
   CONSISTENCY_SCHEDULER:  'consistency_scheduler',
   REMINDER_SCHEDULER:     'reminder_scheduler',
   TX_QUEUE_WORKER:        'tx_queue_worker',
+  JOB_RECOVERY_SCHEDULER: 'job_recovery_scheduler',
 };
 
 /**
@@ -67,6 +68,10 @@ const WORKER_CONFIG = {
     // means the worker legitimately hasn't fired recently.
     expectedIntervalMs: parseInt(process.env.TX_QUEUE_HEARTBEAT_INTERVAL_MS || '300000', 10),
     gracePeriodMs:      parseInt(process.env.WORKER_HEARTBEAT_GRACE_MS || '120000', 10),
+  },
+  [WORKER_NAMES.JOB_RECOVERY_SCHEDULER]: {
+    expectedIntervalMs: parseInt(process.env.JOB_RECOVERY_INTERVAL_MS || '60000', 10),
+    gracePeriodMs:      parseInt(process.env.WORKER_HEARTBEAT_GRACE_MS || '60000', 10),
   },
 };
 

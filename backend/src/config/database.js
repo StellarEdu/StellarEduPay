@@ -34,6 +34,16 @@ const POOL_CONFIG = {
   
   // Maximum number of concurrent operations
   maxConcurrent: parseInt(process.env.DB_MAX_CONCURRENT || '50', 10),
+
+  // Server-side ceiling on a single report aggregation, in milliseconds
+  // (default: 15000). socketTimeoutMS only abandons the client's socket — the
+  // server keeps executing the pipeline and keeps holding its connection.
+  // maxTimeMS is what actually makes the server stop, so a slow report cannot
+  // pin a pool connection for the length of the query.
+  reportAggregationMaxTimeMS: parseInt(
+    process.env.DB_REPORT_AGGREGATION_MAX_TIME_MS || '15000',
+    10
+  ),
 };
 
 // ── Retry Configuration ─────────────────────────────────────────────────────────

@@ -612,6 +612,98 @@ async function handleRevokeSession(req, res) {
   return res.json({ message: 'Session revoked.' });
 }
 
+// ── Change Password ───────────────────────────────────────────────────────────
+// #1360 — Invalidate ALL existing refresh tokens and sessions for the user
+// when their password changes so that a stolen refresh token cannot be used
+// to continue obtaining access tokens after a password reset.
+
+async function handleChangePassword(req, res) {
+  const { currentPassword, newPassword } = req.body || {};
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({
+      error: 'currentPassword and newPassword are required.',
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  if (newPassword.length < 8) {
+    return res.status(400).json({
+      error: 'New password must be at least 8 characters.',
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const userId = req.admin?.userId;
+
+  // Super-admin (env-based) path
+  if (!userId || userId === 'super_admin') {
+    return res.status(403).json({
+      error: 'Super-admin password must be changed via environment variables.',
+      code: 'FORBIDDEN',
+    });
+  }
+
+  let user;
+  try {
+    const User = require('../models/userModel');
+    user = await User.findById(userId);
+  } catch (err) {
+    logger.error('[AuthController] DB lookup failed during password change', { error: err.message });
+    return res.status(503).json({ error: 'Service unavailable.', code: 'AUTH_DB_ERROR' });
+  }
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found.', code: 'NOT_FOUND' });
+  }
+
+  const currentValid = Boolean(currentPassword) && await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!currentValid) {
+    return res.status(401).json({ error: 'Current password is incorrect.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 12);
+
+  try {
+    const User = require('../models/userModel');
+    await User.findByIdAndUpdate(userId, { $set: { passwordHash: newHash } });
+  } catch (err) {
+    logger.error('[AuthController] Failed to update password hash', { error: err.message });
+    return res.status(500).json({ error: 'Failed to update password.', code: 'DB_ERROR' });
+  }
+
+  // #1360 — Revoke ALL active sessions and their refresh token families so
+  // any stolen refresh token is immediately invalidated after a password change.
+  const store = getStore();
+  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+  try {
+    const sessions = await store.listUserSessions(userId);
+    await Promise.all(
+      sessions.map(async ({ sessionId, familyId }) => {
+        if (familyId) {
+          await store.revokeFamily(familyId, refreshTTL).catch(() =>
+            logger.debug('[AuthController] revokeFamily on password change missed', { sessionId })
+          );
+        }
+        await store.delSession(sessionId).catch(() =>
+          logger.debug('[AuthController] delSession on password change missed', { sessionId })
+        );
+      })
+    );
+    logger.info('[AuthController] All sessions revoked after password change', { userId, count: sessions.length });
+  } catch (err) {
+    // Non-fatal: password is already updated; log and continue.
+    logger.warn('[AuthController] Failed to revoke sessions after password change', { userId, error: err.message });
+  }
+
+  // Clear the caller's own cookies — they must log in again with the new password.
+  const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
+  res.clearCookie(ACCESS_COOKIE, { ...cookieBase, path: '/' });
+  res.clearCookie(REFRESH_COOKIE, { ...cookieBase, path: REFRESH_COOKIE_PATH });
+
+  return res.json({ message: 'Password changed. All sessions have been invalidated. Please log in again.' });
+}
+
 module.exports = {
   handleLogin,
   handleRefresh,
@@ -619,5 +711,6 @@ module.exports = {
   handleMe,
   handleListSessions,
   handleRevokeSession,
+  handleChangePassword,
   _resetStore,
 };

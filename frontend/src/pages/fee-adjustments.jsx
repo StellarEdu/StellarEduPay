@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getFeeAdjustmentRules,
   createFeeAdjustmentRule,
   updateFeeAdjustmentRule,
   deleteFeeAdjustmentRule,
+  getFeeAdjustmentAffectedCount,
 } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { validateStellarAmount } from "../utils/stellarAmount";
@@ -12,11 +14,17 @@ import PageHero from "../components/PageHero";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const RULE_TYPES = [
-  { value: "discount_percentage", label: "Discount %" },
-  { value: "discount_fixed",      label: "Discount (fixed XLM)" },
-  { value: "penalty_percentage",  label: "Penalty %" },
-  { value: "penalty_fixed",       label: "Penalty (fixed XLM)" },
-  { value: "waiver",              label: "Full waiver" },
+  { value: "discount_percentage", labelKey: "feeAdjustments.ruleTypeDiscountPct" },
+  { value: "discount_fixed",      labelKey: "feeAdjustments.ruleTypeDiscountFixed" },
+  { value: "penalty_percentage",  labelKey: "feeAdjustments.ruleTypePenaltyPct" },
+  { value: "penalty_fixed",       labelKey: "feeAdjustments.ruleTypePenaltyFixed" },
+  { value: "waiver",              labelKey: "feeAdjustments.ruleTypeWaiver" },
+];
+
+const CONFLICT_POLICIES = [
+  { value: "stack",             label: "Stack (apply all matching rules)" },
+  { value: "first_only",        label: "First only (highest priority wins)" },
+  { value: "best_for_student",  label: "Best for student (largest discount wins)" },
 ];
 
 const EMPTY_FORM = {
@@ -24,6 +32,7 @@ const EMPTY_FORM = {
   type: "discount_percentage",
   value: "",
   priority: 10,
+  conflictResolutionPolicy: "stack",
   description: "",
   isActive: true,
 };
@@ -37,8 +46,9 @@ function isFixedAmountType(type) {
 }
 
 function RuleTypePill({ type }) {
-  const t = RULE_TYPES.find(r => r.value === type);
-  const label = t?.label ?? type;
+  const { t } = useTranslation();
+  const match = RULE_TYPES.find(r => r.value === type);
+  const label = match?.labelKey ? t(match.labelKey) : type;
   const isDiscount = type.startsWith("discount") || type === "waiver";
   return (
     <span
@@ -50,7 +60,21 @@ function RuleTypePill({ type }) {
   );
 }
 
+function ConflictPolicyPill({ policy }) {
+  const p = CONFLICT_POLICIES.find(c => c.value === (policy || "stack"));
+  return (
+    <span
+      className="badge badge-neutral"
+      style={{ fontSize: "0.7rem", textTransform: "none" }}
+      title="Only takes effect when this is the highest-priority rule matching a given student alongside other matching rules"
+    >
+      {p ? p.label.split(" (")[0] : (policy || "stack")}
+    </span>
+  );
+}
+
 export default function FeeAdjustments() {
+  const { t } = useTranslation();
   const { schoolId } = useAdminAuthContext();
   const [rules, setRules]           = useState([]);
   const [loading, setLoading]       = useState(true);
@@ -60,6 +84,11 @@ export default function FeeAdjustments() {
   const [saving, setSaving]         = useState(false);
   const [formError, setFormError]   = useState(null);
   const [formSuccess, setFormSuccess] = useState(false);
+  const [deleteTarget, setDeleteTarget]     = useState(null); // rule pending confirmation
+  const [affectedCount, setAffectedCount]   = useState(null);
+  const [deleteReason, setDeleteReason]     = useState("");
+  const [deleteError, setDeleteError]       = useState(null);
+  const [deleting, setDeleting]             = useState(false);
 
   const load = useCallback(() => {
     if (!schoolId) return; // Don't load until we have the authenticated school context
@@ -67,9 +96,9 @@ export default function FeeAdjustments() {
     setError(null);
     getFeeAdjustmentRules(schoolId)
       .then(({ data }) => setRules(data))
-      .catch(() => setError("Could not load rules."))
+      .catch(() => setError(t("feeAdjustments.failedToLoad")))
       .finally(() => setLoading(false));
-  }, [schoolId]);
+  }, [schoolId, t]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -80,6 +109,7 @@ export default function FeeAdjustments() {
       type: rule.type,
       value: rule.value,
       priority: rule.priority ?? 10,
+      conflictResolutionPolicy: rule.conflictResolutionPolicy || "stack",
       description: rule.description || "",
       isActive: rule.isActive,
     });
@@ -116,7 +146,7 @@ export default function FeeAdjustments() {
     } else if (form.type !== "waiver") {
       const pct = Number(form.value);
       if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
-        setFormError("Percentage must be greater than 0 and at most 100");
+        setFormError(t("feeAdjustments.percentRange"));
         return;
       }
     }
@@ -141,20 +171,47 @@ export default function FeeAdjustments() {
       load();
     } catch (err) {
       setFormError(
-        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Save failed."
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("feeAdjustments.saveFailed")
       );
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDeactivate(rule) {
-    if (!confirm(`Deactivate "${rule.name}"?`)) return;
+  function handleDeactivate(rule) {
+    setDeleteTarget(rule);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+    getFeeAdjustmentAffectedCount(rule._id, schoolId)
+      .then(({ data }) => setAffectedCount(data.affectedCount))
+      .catch(() => setAffectedCount(null));
+  }
+
+  function cancelDeactivate() {
+    setDeleteTarget(null);
+    setDeleteReason("");
+    setDeleteError(null);
+    setAffectedCount(null);
+  }
+
+  async function confirmDeactivate() {
+    if (!deleteReason.trim()) {
+      setDeleteError("A reason is required to deactivate this rule.");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await deleteFeeAdjustmentRule(rule._id, schoolId);
+      await deleteFeeAdjustmentRule(deleteTarget._id, schoolId, deleteReason.trim());
+      cancelDeactivate();
       load();
-    } catch {
-      setError("Could not deactivate rule.");
+    } catch (err) {
+      setDeleteError(
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Could not deactivate rule."
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -195,17 +252,17 @@ export default function FeeAdjustments() {
 
       <div className="page-wrap">
         <PageHero
-          eyebrow="Configuration"
-          title="Fee Adjustment Rules"
-          subtitle="Discounts, penalties and waivers — applied in ascending priority order (lower number first)."
+          eyebrow={t("feeAdjustments.eyebrow")}
+          title={t("feeAdjustments.title")}
+          subtitle={t("feeAdjustments.subtitle")}
         />
 
         {/* ── Form ─────────────────────────────────────── */}
         <div className="card" style={{ marginBottom: "1.5rem" }}>
           <div className="card-header">
-            <div className="card-title">{editId ? "Edit Rule" : "New Rule"}</div>
+            <div className="card-title">{editId ? t("feeAdjustments.editTitle") : t("feeAdjustments.newTitle")}</div>
             {editId && (
-              <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>Cancel</button>
+              <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>{t("actions.cancel")}</button>
             )}
           </div>
           <div className="card-body">
@@ -218,39 +275,39 @@ export default function FeeAdjustments() {
             {formSuccess && (
               <div role="status" className="alert alert-success" style={{ marginBottom: "1rem" }}>
                 <IconCheck size={15} />
-                <span>Rule saved successfully.</span>
+                <span>{t("feeAdjustments.saved")}</span>
               </div>
             )}
 
             <form onSubmit={handleSubmit}>
               <div className="fa-form-grid">
                 <div className="form-group">
-                  <label className="form-label">Name *</label>
+                  <label className="form-label">{t("feeAdjustments.nameLabel")}</label>
                   <input
                     required
                     className="form-input"
                     value={form.name}
                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                    placeholder="e.g. Early Bird Discount"
+                    placeholder={t("feeAdjustments.namePlaceholder")}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Type *</label>
+                  <label className="form-label">{t("feeAdjustments.typeLabel")}</label>
                   <select
                     className="form-input form-select"
                     value={form.type}
                     onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
                   >
-                    {RULE_TYPES.map(t => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
+                    {RULE_TYPES.map(rt => (
+                      <option key={rt.value} value={rt.value}>{t(rt.labelKey)}</option>
                     ))}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label className="form-label">
-                    Value{form.type === "waiver" ? " (N/A)" : " *"}
+                    {t("feeAdjustments.valueLabel")}{form.type === "waiver" ? t("feeAdjustments.valueNa") : " *"}
                   </label>
                   {/*
                     Fixed values are XLM amounts, so they step by one stroop —
@@ -268,12 +325,12 @@ export default function FeeAdjustments() {
                     className="form-input"
                     value={form.value}
                     onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
-                    placeholder={form.type.includes("percentage") ? "e.g. 10" : "e.g. 50"}
+                    placeholder={form.type.includes("percentage") ? t("feeAdjustments.percentPlaceholder") : t("feeAdjustments.amountPlaceholder")}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Priority</label>
+                  <label className="form-label">{t("feeAdjustments.priorityLabel")}</label>
                   <input
                     type="number"
                     min="0"
@@ -281,16 +338,33 @@ export default function FeeAdjustments() {
                     value={form.priority}
                     onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}
                   />
-                  <p className="fa-priority-hint">Lower number = applied first (default: 10)</p>
+                  <p className="fa-priority-hint">{t("feeAdjustments.priorityHint")}</p>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">When rules overlap</label>
+                  <select
+                    className="form-input form-select"
+                    value={form.conflictResolutionPolicy}
+                    onChange={e => setForm(f => ({ ...f, conflictResolutionPolicy: e.target.value }))}
+                  >
+                    {CONFLICT_POLICIES.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                  <p className="fa-priority-hint">
+                    Only matters if this ends up the highest-priority rule matching a
+                    student alongside others — see "How overlapping rules resolve" below.
+                  </p>
                 </div>
 
                 <div className="form-group full">
-                  <label className="form-label">Description</label>
+                  <label className="form-label">{t("feeAdjustments.descriptionLabel")}</label>
                   <input
                     className="form-input"
                     value={form.description}
                     onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                    placeholder="Optional — visible to admins only"
+                    placeholder={t("feeAdjustments.descriptionPlaceholder")}
                   />
                 </div>
 
@@ -302,7 +376,7 @@ export default function FeeAdjustments() {
                         checked={form.isActive}
                         onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))}
                       />
-                      Rule is active
+                      {t("feeAdjustments.activeLabel")}
                     </label>
                   </div>
                 )}
@@ -310,15 +384,54 @@ export default function FeeAdjustments() {
 
               <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem" }}>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? "Saving…" : editId ? "Update Rule" : "Create Rule"}
+                  {saving ? t("feeAdjustments.saving") : editId ? t("feeAdjustments.update") : t("feeAdjustments.create")}
                 </button>
                 {editId && (
                   <button type="button" className="btn btn-ghost" onClick={cancelEdit}>
-                    Cancel
+                    {t("actions.cancel")}
                   </button>
                 )}
               </div>
             </form>
+          </div>
+        </div>
+
+        {/* ── How overlapping rules resolve ───────────── */}
+        <div className="card" style={{ marginBottom: "1.5rem" }}>
+          <div className="card-header">
+            <div className="card-title">How overlapping rules resolve</div>
+          </div>
+          <div className="card-body" style={{ fontSize: "0.85rem", lineHeight: 1.6 }}>
+            <p style={{ marginTop: 0 }}>
+              When more than one active rule matches the same student, they run in{" "}
+              <strong>ascending priority order — lowest number first</strong> (ties broken
+              alphabetically by name). Each rule adjusts the fee <em>left by the rule before
+              it</em>, not the original fee — so for percentage rules, priority order changes
+              the final amount.
+            </p>
+            <p>
+              What happens to the rest of the matches is set by the{" "}
+              <strong>"When rules overlap"</strong> field on whichever matching rule has the
+              lowest priority number:
+            </p>
+            <ul style={{ margin: "0.25rem 0 0.75rem", paddingLeft: "1.25rem" }}>
+              <li><strong>Stack</strong> — every matching rule applies, in priority order.</li>
+              <li><strong>First only</strong> — only that top rule applies; other matches are ignored.</li>
+              <li><strong>Best for student</strong> — among matching <em>discounts</em>, only the one
+                that saves the most applies; matching <em>penalties</em> always stack regardless.</li>
+            </ul>
+            <p style={{
+              margin: 0, padding: "0.6rem 0.75rem", borderRadius: 6,
+              background: "var(--bg-subtle, var(--bg))", border: "1px solid var(--border)",
+            }}>
+              <strong>Example:</strong> a ₦10,000 fee with a 15% scholarship (priority 5) and a
+              flat ₦800 late surcharge (priority 20), policy "Stack": the scholarship runs
+              first (10,000 → 8,500), then the surcharge adds on top of that (8,500 → final{" "}
+              <strong>₦9,300</strong>). Swap the two priorities instead and the surcharge would
+              apply to the full 10,000 first (→ 10,800), then the 15% would come off that
+              larger number (→ final <strong>₦9,180</strong>) — a different final fee from the
+              exact same two rules and values, purely from priority order.
+            </p>
           </div>
         </div>
 
@@ -332,9 +445,9 @@ export default function FeeAdjustments() {
 
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Rules</div>
+            <div className="card-title">{t("feeAdjustments.rulesTitle")}</div>
             <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-              {rules.length} rule{rules.length !== 1 ? "s" : ""}
+              {t("feeAdjustments.count", { count: rules.length })}
             </span>
           </div>
 
@@ -344,13 +457,13 @@ export default function FeeAdjustments() {
                 <thead>
                   <tr>
                     <th>Priority</th><th>Name</th><th>Type</th><th>Value</th>
-                    <th>Status</th><th></th>
+                    <th>When overlapping</th><th>Status</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {Array.from({ length: 4 }).map((_, i) => (
                     <tr key={i}>
-                      {[30,140,120,50,60,80].map((w, j) => (
+                      {[30,140,120,50,90,60,80].map((w, j) => (
                         <td key={j}><div className="skeleton" style={{ height: 12, width: w }} /></td>
                       ))}
                     </tr>
@@ -360,8 +473,8 @@ export default function FeeAdjustments() {
             </div>
           ) : rules.length === 0 ? (
             <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
-              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>No rules yet</p>
-              <p style={{ fontSize: "0.8125rem" }}>Create a rule above to get started.</p>
+              <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("feeAdjustments.emptyTitle")}</p>
+              <p style={{ fontSize: "0.8125rem" }}>{t("feeAdjustments.emptyHint")}</p>
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -372,6 +485,7 @@ export default function FeeAdjustments() {
                     <th scope="col">Name</th>
                     <th scope="col">Type</th>
                     <th scope="col">Value</th>
+                    <th scope="col">When overlapping</th>
                     <th scope="col">Status</th>
                     <th scope="col" style={{ textAlign: "right" }}>Actions</th>
                   </tr>
@@ -407,9 +521,10 @@ export default function FeeAdjustments() {
                       <td style={{ fontVariantNumeric: "tabular-nums" }}>
                         {rule.type === "waiver" ? "—" : rule.value}
                       </td>
+                      <td><ConflictPolicyPill policy={rule.conflictResolutionPolicy} /></td>
                       <td>
                         <span className={`badge ${rule.isActive ? "badge-success" : "badge-neutral"}`}>
-                          {rule.isActive ? "Active" : "Inactive"}
+                          {rule.isActive ? t("feeAdjustments.active") : t("feeAdjustments.inactive")}
                         </span>
                       </td>
                       <td>
@@ -418,14 +533,14 @@ export default function FeeAdjustments() {
                             className="btn btn-sm btn-ghost"
                             onClick={() => startEdit(rule)}
                           >
-                            Edit
+                            {t("actions.edit")}
                           </button>
                           {rule.isActive && (
                             <button
                               className="btn btn-sm btn-danger"
                               onClick={() => handleDeactivate(rule)}
                             >
-                              Deactivate
+                              {t("feeAdjustments.deactivate")}
                             </button>
                           )}
                         </div>
@@ -437,6 +552,63 @@ export default function FeeAdjustments() {
             </div>
           )}
         </div>
+
+        {deleteTarget && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fa-delete-title"
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+              display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+            }}
+          >
+            <div className="card" style={{ maxWidth: 440, width: "90%" }}>
+              <div className="card-header">
+                <div className="card-title" id="fa-delete-title">Deactivate rule?</div>
+              </div>
+              <div className="card-body">
+                <p style={{ marginBottom: "0.75rem" }}>
+                  This will deactivate <strong>&quot;{deleteTarget.name}&quot;</strong>. It will
+                  no longer be applied to future payment verifications.
+                </p>
+                <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
+                  {affectedCount === null
+                    ? "Checking how many students this rule currently applies to…"
+                    : `This rule currently applies to ${affectedCount} student${affectedCount !== 1 ? "s" : ""}.`}
+                </p>
+
+                {deleteError && (
+                  <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
+                    <IconAlertTriangle size={15} />
+                    <span>{deleteError}</span>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="fa-delete-reason">Reason *</label>
+                  <input
+                    id="fa-delete-reason"
+                    className="form-input"
+                    value={deleteReason}
+                    onChange={e => setDeleteReason(e.target.value)}
+                    placeholder="Why is this rule being deactivated?"
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button className="btn btn-ghost" onClick={cancelDeactivate} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-danger" onClick={confirmDeactivate} disabled={deleting}>
+                    {deleting ? "Deactivating…" : "Deactivate Rule"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

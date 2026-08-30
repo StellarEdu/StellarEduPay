@@ -5,12 +5,14 @@ import { setupUserMfa, verifyUserMfa } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import PageHero from "../components/PageHero";
 import RequireAdmin from "../components/RequireAdmin";
+import { useTranslation } from "react-i18next";
 
 // #1356 — Shown when REQUIRE_MFA=true and the logged-in admin has not yet
 // enrolled in MFA. The backend restricts the session to this flow's two
 // endpoints until POST /auth/mfa/user/verify succeeds.
 function MfaSetupContent() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [secret, setSecret]     = useState(null);
   const [qrCode, setQrCode]     = useState(null);
   const [code, setCode]         = useState("");
@@ -28,10 +30,10 @@ function MfaSetupContent() {
         setQrCode(res.data.qrCode);
       })
       .catch(err => {
-        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to start MFA setup.");
+        setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("mfa.failedToStart"));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -41,7 +43,7 @@ function MfaSetupContent() {
       await verifyUserMfa({ secret, code: code.trim() });
       router.push("/dashboard");
     } catch (err) {
-      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Failed to verify MFA code.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("mfa.failedToVerify"));
     } finally {
       setSubmitting(false);
     }
@@ -50,9 +52,9 @@ function MfaSetupContent() {
   return (
     <div className="page-wrap" style={{ maxWidth: 480 }}>
       <PageHero
-        eyebrow="Security"
-        title="Set up multi-factor authentication"
-        subtitle="Your school requires MFA before you can access the dashboard."
+        eyebrow={t("mfa.eyebrow")}
+        title={t("mfa.title")}
+        subtitle={t("mfa.subtitle")}
       />
 
       {error && (
@@ -62,24 +64,24 @@ function MfaSetupContent() {
       )}
 
       {loading ? (
-        <p>Loading…</p>
+        <p>{t("mfa.loading")}</p>
       ) : qrCode ? (
         <div className="card">
           <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             <p style={{ fontSize: "0.875rem" }}>
-              Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, …), then enter the 6-digit code it generates.
+              {t("mfa.scanInstructions")}
             </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
               <QRCodeSVG value={qrCode} size={180} />
             </div>
             {secret && (
               <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", textAlign: "center", fontFamily: "monospace" }}>
-                Can&apos;t scan? Enter manually: {secret}
+                {t("mfa.cantScan", { secret })}
               </p>
             )}
             <form onSubmit={handleSubmit}>
               <div className="form-group">
-                <label className="form-label" htmlFor="mfa-code">6-digit code</label>
+                <label className="form-label" htmlFor="mfa-code">{t("mfa.codeLabel")}</label>
                 <input
                   id="mfa-code"
                   type="text"
@@ -89,12 +91,12 @@ function MfaSetupContent() {
                   onChange={e => setCode(e.target.value)}
                   maxLength={6}
                   className="form-input"
-                  placeholder="123456"
+                  placeholder={t("mfa.codePlaceholder")}
                   required
                 />
               </div>
               <button type="submit" className="btn btn-primary" disabled={submitting || code.trim().length !== 6}>
-                {submitting ? "Verifying…" : "Enable MFA"}
+                {submitting ? t("mfa.verifying") : t("mfa.enableMfa")}
               </button>
             </form>
           </div>

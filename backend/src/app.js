@@ -56,6 +56,7 @@ const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./s
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
+const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
 const { close: closeReportCacheInvalidator } = require('./services/reportCacheInvalidator');
 const { closeQueue } = require('./queue/transactionQueue');
@@ -96,7 +97,10 @@ const app = express();
 // Trust the number of proxy hops configured via TRUSTED_PROXY_HOPS (default: 1).
 // This ensures Express derives req.ip from the correct X-Forwarded-For entry
 // rather than trusting client-supplied headers, which would allow rate-limit bypass.
-app.set('trust proxy', parseInt(process.env.TRUSTED_PROXY_HOPS || '1', 10));
+// Reuses config's already-validated value instead of re-parsing process.env
+// directly, so a malformed TRUSTED_PROXY_HOPS fails fast at config load
+// (see config/index.js) instead of silently becoming NaN here.
+app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(cors({
@@ -225,6 +229,18 @@ const { connect: connectDatabase } = require('./config/database');
 // timeouts, and majority write concern for financial data durability.
 
 connectDatabase().then(async () => {
+  // Resolve the signer master key from the configured secrets provider
+  // (issue #1386) before anything might need to sign a transaction. A no-op
+  // when SIGNER_KEY_SOURCE is unset — signerKeyManager then reads
+  // SIGNER_MASTER_KEY directly, as before.
+  const { initializeMasterKey } = require('./utils/signerKeyManager');
+  try {
+    await initializeMasterKey();
+  } catch (err) {
+    logger.error('[Startup] Failed to resolve signer master key from SIGNER_KEY_SOURCE', { error: err.message });
+    throw err;
+  }
+
   // Start heap monitoring to detect memory leaks early
   startHeapMonitoring();
 
@@ -251,10 +267,15 @@ connectDatabase().then(async () => {
     logger.error('Stuck payment reconciliation failed on startup', { error: err.message });
   }
 
-  // Recover any pending/processing BullMQ jobs that survived a restart in MongoDB
-  const { recoverPendingJobs } = require('./queue/transactionQueue');
+  // Recover any pending/processing BullMQ jobs that survived a restart in MongoDB.
+  // Retries with exponential backoff while waiting for Redis to become ready
+  // (#1381) instead of giving up on the first connection error — a Redis outage
+  // at boot would otherwise strand those jobs in MongoDB until the next restart.
+  // If Redis never comes up within the retry budget, the leader-only
+  // jobRecoveryScheduler below keeps retrying once it does.
+  const { recoverPendingJobsWithRetry } = require('./queue/transactionQueue');
   try {
-    await recoverPendingJobs();
+    await recoverPendingJobsWithRetry();
   } catch (err) {
     logger.error('Transaction queue recovery failed on startup', { error: err.message });
   }
@@ -277,6 +298,7 @@ connectDatabase().then(async () => {
     startWebhookRetryScheduler();
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
+    startJobRecoveryScheduler();
   };
 
   const stopLeaderSchedulers = () => {
@@ -291,6 +313,7 @@ connectDatabase().then(async () => {
     stopWebhookRetryScheduler();
     stopReconciliationReportScheduler();
     stopMetricsRollupScheduler();
+    stopJobRecoveryScheduler();
   };
 
   leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);

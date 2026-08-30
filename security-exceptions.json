@@ -1,5 +1,47 @@
 {
-  "description": "Machine-readable record of high/critical npm audit findings that are deferred rather than fixed. Read by scripts/check-dependency-audit.js in CI. See docs/dependency-triage.md for the process.",
+  "description": "Machine-readable record of (a) high/critical npm audit findings that are deferred rather than fixed (read by scripts/check-dependency-audit.js) and (b) known-safe matches for the repo secret scanner (read by scripts/scan-repo-secrets.js). See docs/dependency-triage.md and docs/security.md for the respective processes.",
   "exceptions": [
+    {
+      "type": "mnemonic",
+      "file": "backend/migrations/024_add_underpaid_reconciliation_field.js",
+      "line": 7,
+      "reason": "Prose comment in a migration file — long sentence with lowercase words that matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/api-spec.md",
+      "line": 424,
+      "reason": "API documentation prose — describes the school wallet address field; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/redis-dependency.md",
+      "line": 28,
+      "reason": "Technical documentation prose describing Redis degradation behaviour; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/bulkPaymentStatus.test.js",
+      "line": 8,
+      "reason": "Test file comment describing test behaviour; not a mnemonic phrase."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/rotateSignerMasterKey.test.js",
+      "line": 66,
+      "reason": "Test description string in it() call; not a mnemonic phrase."
+    },
+    {
+      "type": "stellar-secret",
+      "file": "tests/scanRepoSecrets.test.js",
+      "line": 38,
+      "reason": "Synthetic test fixture for scan-repo-secrets.js unit tests — this is a structurally-valid but non-existent Stellar keypair used only to exercise the detector."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/scanRepoSecrets.test.js",
+      "line": 59,
+      "reason": "BIP-39 mnemonic test fixture (all real BIP-39 words) used to exercise the mnemonic detector in unit tests."
+    }
   ]
 }

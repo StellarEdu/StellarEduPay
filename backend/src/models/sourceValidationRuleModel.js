@@ -58,6 +58,9 @@ const sourceValidationRuleSchema = new mongoose.Schema({
    */
   priority: { type: Number, default: 10 },
   maxTransactionsPerDay: { type: Number, default: null }, // for new_sender_limit
+  // Last time an incoming payment's sender address matched this rule; null
+  // until the rule has matched at least once.
+  lastMatchedAt: { type: Date, default: null },
 }, { timestamps: true });
 
 // Compound unique index: rule names must be unique per school, not globally

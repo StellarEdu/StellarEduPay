@@ -281,47 +281,171 @@ async function getStuckPayments(req, res, next) {
 // transitions like DISPUTED → REFUNDED in addition to the normal set.
 const ALLOWED_TRANSITIONS = ADMIN_PAYMENT_STATUS_TRANSITIONS;
 
+/**
+ * Applies one admin status transition, school-scoped, and writes the audit
+ * entry. Shared by the single-payment and bulk endpoints so the two can never
+ * diverge on validation, the transition table, or what gets audited.
+ *
+ * @param {object} params
+ * @param {object} params.req - The request, for schoolId and auditContext
+ * @param {string} params.txHash
+ * @param {string} params.newStatus
+ * @param {string} params.reason
+ * @returns {Promise<object>} ok:true with the payment, or ok:false with error and code
+ */
+async function applyStatusTransition({ req, txHash, newStatus, reason }) {
+  const payment = await Payment.findOne({ schoolId: req.schoolId, txHash });
+  if (!payment) {
+    return { ok: false, error: 'Payment not found', code: 'NOT_FOUND' };
+  }
+
+  const previousStatus = payment.status;
+  const allowed = ALLOWED_TRANSITIONS[previousStatus] || [];
+  if (!allowed.includes(newStatus)) {
+    return {
+      ok: false,
+      error: `Cannot transition from ${previousStatus} to ${newStatus}`,
+      code: 'INVALID_TRANSITION',
+    };
+  }
+
+  // Set $locals.adminOverride so the pre-save hook uses ADMIN_PAYMENT_STATUS_TRANSITIONS
+  // instead of the narrower PAYMENT_STATUS_TRANSITIONS.  $locals is Mongoose's
+  // per-document transient store — it is never persisted and survives through save().
+  payment.$locals.adminOverride = true;
+  payment.status = newStatus;
+  const updated = await payment.save();
+
+  await logAudit({
+    schoolId: req.schoolId,
+    action: 'payment_status_update',
+    performedBy: req.auditContext?.performedBy || 'unknown',
+    targetId: txHash,
+    targetType: 'payment',
+    details: { from: previousStatus, to: newStatus, reason, adminOverride: true },
+    result: 'success',
+    ipAddress: req.auditContext?.ipAddress,
+    userAgent: req.auditContext?.userAgent,
+  });
+
+  return { ok: true, payment: updated, previousStatus };
+}
+
+/**
+ * Rejects a status/reason pair that no transition should accept.
+ * @param {string} newStatus
+ * @param {string} reason
+ * @returns {object|null} An error body, or null when the pair is acceptable
+ */
+function validateStatusChange(newStatus, reason) {
+  if (!newStatus || !reason) {
+    return { error: 'status and reason are required', code: 'VALIDATION_ERROR' };
+  }
+  if (newStatus === PAYMENT_STATUS.PENDING) {
+    return { error: 'Cannot transition to PENDING', code: 'INVALID_TRANSITION' };
+  }
+  return null;
+}
+
 async function updatePaymentStatus(req, res, next) {
   try {
     const { txHash } = req.params;
     const { status: newStatus, reason } = req.body;
 
-    if (!newStatus || !reason) return res.status(400).json({ error: 'status and reason are required', code: 'VALIDATION_ERROR' });
-    if (newStatus === PAYMENT_STATUS.PENDING) return res.status(400).json({ error: 'Cannot transition to PENDING', code: 'INVALID_TRANSITION' });
+    const invalid = validateStatusChange(newStatus, reason);
+    if (invalid) return res.status(400).json(invalid);
 
-    const payment = await Payment.findOne({ schoolId: req.schoolId, txHash });
-    if (!payment) {
-      const err = new Error('Payment not found');
+    const result = await applyStatusTransition({ req, txHash, newStatus, reason });
+
+    if (!result.ok && result.code === 'NOT_FOUND') {
+      const err = new Error(result.error);
       err.code = 'NOT_FOUND';
       return next(err);
     }
-
-    const previousStatus = payment.status;
-    const allowed = ALLOWED_TRANSITIONS[previousStatus] || [];
-    if (!allowed.includes(newStatus)) {
-      return res.status(400).json({ error: `Cannot transition from ${previousStatus} to ${newStatus}`, code: 'INVALID_TRANSITION' });
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error, code: result.code });
     }
 
-    // Set $locals.adminOverride so the pre-save hook uses ADMIN_PAYMENT_STATUS_TRANSITIONS
-    // instead of the narrower PAYMENT_STATUS_TRANSITIONS.  $locals is Mongoose's
-    // per-document transient store — it is never persisted and survives through save().
-    payment.$locals.adminOverride = true;
-    payment.status = newStatus;
-    const updated = await payment.save();
+    res.json(result.payment);
+  } catch (err) {
+    next(err);
+  }
+}
 
-    await logAudit({
-      schoolId: req.schoolId,
-      action: 'payment_status_update',
-      performedBy: req.auditContext?.performedBy || 'unknown',
-      targetId: txHash,
-      targetType: 'payment',
-      details: { from: previousStatus, to: newStatus, reason, adminOverride: true },
-      result: 'success',
-      ipAddress: req.auditContext?.ipAddress,
-      userAgent: req.auditContext?.userAgent,
+/** Most payments one bulk request may transition. */
+const BULK_STATUS_UPDATE_LIMIT = parseInt(
+  process.env.BULK_PAYMENT_STATUS_LIMIT || '100',
+  10
+);
+
+/**
+ * Rejects a malformed txHashes array.
+ * @param {unknown} txHashes
+ * @returns {object|null} An error body, or null when the array is acceptable
+ */
+function validateTxHashes(txHashes) {
+  if (!Array.isArray(txHashes) || txHashes.length === 0) {
+    return { error: 'txHashes must be a non-empty array', code: 'VALIDATION_ERROR' };
+  }
+  if (txHashes.length > BULK_STATUS_UPDATE_LIMIT) {
+    return {
+      error: `txHashes exceeds the limit of ${BULK_STATUS_UPDATE_LIMIT}`,
+      code: 'BATCH_TOO_LARGE',
+      limit: BULK_STATUS_UPDATE_LIMIT,
+    };
+  }
+  if (txHashes.some((h) => typeof h !== 'string' || !h.trim())) {
+    return { error: 'txHashes must contain only non-empty strings', code: 'VALIDATION_ERROR' };
+  }
+  if (new Set(txHashes).size !== txHashes.length) {
+    return { error: 'txHashes contains duplicates', code: 'VALIDATION_ERROR' };
+  }
+  return null;
+}
+
+/**
+ * PATCH /api/payments/bulk/status
+ *
+ * Applies one status transition to many payments during reconciliation, which
+ * otherwise means one request per payment.
+ *
+ * Deliberately NOT all-or-nothing: a reconciliation batch routinely contains a
+ * few payments that have already moved on, and failing the whole request over
+ * them would leave the admin worse off than the single-payment endpoint. Each
+ * txHash gets its own result, and the response reports how many succeeded.
+ * Every successful transition writes the same audit entry the single endpoint
+ * writes, so the trail is identical either way.
+ */
+async function bulkUpdatePaymentStatus(req, res, next) {
+  try {
+    const { txHashes, status: newStatus, reason } = req.body || {};
+
+    const badBatch = validateTxHashes(txHashes);
+    if (badBatch) return res.status(400).json(badBatch);
+
+    const invalid = validateStatusChange(newStatus, reason);
+    if (invalid) return res.status(400).json(invalid);
+
+    // Sequential on purpose: each transition runs the model pre-save hook and
+    // writes an audit entry, and a reconciliation batch is not worth holding a
+    // large slice of the connection pool for.
+    const results = [];
+    for (const txHash of txHashes) {
+      const outcome = await applyStatusTransition({ req, txHash, newStatus, reason });
+      results.push(
+        outcome.ok
+          ? { txHash, updated: true, from: outcome.previousStatus, to: newStatus }
+          : { txHash, updated: false, error: outcome.error, code: outcome.code }
+      );
+    }
+
+    const updatedCount = results.filter((r) => r.updated).length;
+    res.json({
+      requested: txHashes.length,
+      updated: updatedCount,
+      failed: txHashes.length - updatedCount,
+      results,
     });
-
-    res.json(updated);
   } catch (err) {
     next(err);
   }
@@ -672,6 +796,8 @@ module.exports = {
   getQueueJobStatus,
   getStuckPayments,
   updatePaymentStatus,
+  bulkUpdatePaymentStatus,
+  BULK_STATUS_UPDATE_LIMIT,
   reviewSuspiciousPayment,
   streamPaymentEvents,
   initiatePaymentRefund,

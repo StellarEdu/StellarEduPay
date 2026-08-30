@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { updateStudent } from "../services/api";
 import PaymentPlanForm from "./PaymentPlanForm";
+import { stripHtml } from "../utils/sanitizeInput";
 
 export default function StudentForm({ student, onClose, onSave }) {
+  const { t } = useTranslation();
   const [formData, setFormData] = useState({
     name: "",
     class: "",
@@ -34,23 +37,30 @@ export default function StudentForm({ student, onClose, onSave }) {
 
     try {
       await updateStudent(student.studentId, formData);
-      setSuccess("Student updated successfully!");
+      setSuccess(t("studentForm.updateSuccess"));
       setTimeout(() => {
         if (onSave) onSave();
         if (onClose) onClose();
       }, 1000);
     } catch (err) {
-      setError(err.response?.data?.error || "Failed to update student");
+      setError(err.response?.data?.error || t("studentForm.updateFailed"));
     } finally {
       setLoading(false);
     }
   }
 
+  // Text fields get HTML tags stripped as the user types — defense-in-depth
+  // against stored XSS via student name/class (issue #1391), on top of the
+  // backend's own sanitization/escaping.
+  const TEXT_FIELDS = new Set(["name", "class"]);
+
   function handleChange(e) {
     const { name, value, type, checked } = e.target;
+    let nextValue = type === "checkbox" ? checked : value;
+    if (TEXT_FIELDS.has(name)) nextValue = stripHtml(nextValue);
     setFormData(prev => ({
       ...prev,
-      [name]: type === "checkbox" ? checked : value,
+      [name]: nextValue,
     }));
   }
 
@@ -79,7 +89,7 @@ export default function StudentForm({ student, onClose, onSave }) {
         maxHeight: "90vh",
         overflowY: "auto",
       }}>
-        <h2 style={{ marginTop: 0, marginBottom: "1.5rem" }}>Edit Student</h2>
+        <h2 style={{ marginTop: 0, marginBottom: "1.5rem" }}>{t("studentForm.editTitle")}</h2>
 
         {error && (
           <div style={{
@@ -118,7 +128,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-              Student ID
+              {t("studentForm.studentId")}
             </label>
             <input
               type="text"
@@ -145,7 +155,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-              Name
+              {t("studentForm.name")}
             </label>
             <input
               type="text"
@@ -172,7 +182,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-              Class
+               {t("studentForm.className")}
             </label>
             <input
               type="text"
@@ -199,7 +209,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-              Parent Email
+              {t("studentForm.parentEmail")}
             </label>
             <input
               type="email"
@@ -226,7 +236,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-              Parent Phone
+              {t("studentForm.parentPhone")}
             </label>
             <input
               type="tel"
@@ -272,15 +282,15 @@ export default function StudentForm({ student, onClose, onSave }) {
                 }}
               />
               <span>
-                <strong>Receive payment reminders</strong>
+                <strong>{t("studentForm.receiveReminders")}</strong>
                 <div style={{
                   fontSize: "0.8rem",
                   color: "var(--muted)",
                   marginTop: "0.25rem",
                 }}>
                   {formData.reminderOptOut
-                    ? "Reminders are disabled for this student"
-                    : "Reminders are enabled for this student"}
+                    ? t("studentForm.remindersDisabled")
+                    : t("studentForm.remindersEnabled")}
                 </div>
               </span>
             </label>
@@ -312,7 +322,7 @@ export default function StudentForm({ student, onClose, onSave }) {
                 fontSize: "0.9rem",
               }}
             >
-              Cancel
+              {t("actions.cancel")}
             </button>
             <button
               type="submit"
@@ -328,7 +338,7 @@ export default function StudentForm({ student, onClose, onSave }) {
                 opacity: loading ? 0.6 : 1,
               }}
             >
-              {loading ? "Saving…" : "Save Changes"}
+              {loading ? t("actions.savingEllipsis") : t("studentForm.saveChanges")}
             </button>
           </div>
         </form>

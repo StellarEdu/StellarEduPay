@@ -1,70 +1,72 @@
 import Head from "next/head";
 import Link from "next/link";
+import { useTranslation } from "react-i18next";
 
 const FEATURES = [
   {
     icon: "⚡",
-    title: "3–5 Second Settlement",
-    desc: "Stellar confirms transactions faster than a credit card swipe. Parents get instant proof of payment.",
+    title: "landing.featSettlementTitle",
+    desc: "landing.featSettlementDesc",
   },
   {
     icon: "🔗",
-    title: "On-Chain Immutability",
-    desc: "Every payment is permanently recorded on a public blockchain. Receipts that can never be faked or lost.",
+    title: "landing.featImmutabilityTitle",
+    desc: "landing.featImmutabilityDesc",
   },
   {
     icon: "🔄",
-    title: "Zero Manual Reconciliation",
-    desc: "Student IDs in the Stellar memo field automatically match every payment — no spreadsheets required.",
+    title: "landing.featReconciliationTitle",
+    desc: "landing.featReconciliationDesc",
   },
   {
     icon: "💰",
-    title: "$0.000001 Per Transaction",
-    desc: "Forget 2.9% + 30¢. Stellar's fees are microscopic. Every dollar goes toward education.",
+    title: "landing.featCostTitle",
+    desc: "landing.featCostDesc",
   },
   {
     icon: "🏫",
-    title: "Multi-School Architecture",
-    desc: "Fully isolated wallets, students, and records per institution. Scale from one school to a district.",
+    title: "landing.featMultiSchoolTitle",
+    desc: "landing.featMultiSchoolDesc",
   },
   {
     icon: "📡",
-    title: "Real-Time Notifications",
-    desc: "Server-sent events push live payment confirmations to parents and admins the instant they land.",
+    title: "landing.featRealtimeTitle",
+    desc: "landing.featRealtimeDesc",
   },
 ];
 
 const STEPS = [
   {
     n: "1",
-    title: "Parent opens the pay page",
-    desc: "They see the school wallet address, their student's ID as a pre-filled memo, the exact amount owed, and accepted assets (XLM or USDC).",
+    title: "landing.howStep1Title",
+    desc: "landing.howStep1Desc",
   },
   {
     n: "2",
-    title: "They send from any Stellar wallet",
-    desc: "Lobstr, Solar, XBULL — any wallet works. The transaction hits the Stellar network and confirms in seconds.",
+    title: "landing.howStep2Title",
+    desc: "landing.howStep2Desc",
   },
   {
     n: "3",
-    title: "StellarEduPay does the rest",
-    desc: "The poller reads the blockchain, matches the memo to the student, validates the amount, marks the fee paid, and fires a webhook.",
+    title: "landing.howStep3Title",
+    desc: "landing.howStep3Desc",
   },
 ];
 
 const STATS = [
-  { v: "< 5s", l: "Settlement time" },
-  { v: "$0.000001", l: "Per transaction" },
-  { v: "100%", l: "On-chain verified" },
-  { v: "0", l: "Manual steps" },
+  { v: "< 5s", l: "landing.statSettlement" },
+  { v: "$0.000001", l: "landing.statPerTx" },
+  { v: "100%", l: "landing.statOnChain" },
+  { v: "0", l: "landing.statManualSteps" },
 ];
 
 export default function Home() {
+  const { t } = useTranslation();
   return (
     <>
       <Head>
-        <title>StellarEduPay — Blockchain School Fee Payments</title>
-        <meta name="description" content="Instant, transparent, fraud-proof school fee payments on the Stellar blockchain. Auto-reconciliation via transaction memos." />
+        <title>{t("landing.headTitle")}</title>
+        <meta name="description" content={t("landing.headDesc")} />
       </Head>
 
       
@@ -83,28 +85,27 @@ export default function Home() {
           <div className="lp-hero-content">
             <div className="lp-badge">
               <span className="lp-badge-dot" />
-              Live on Stellar Testnet
+              {t("landing.badge")}
             </div>
 
             <h1>
-              School fees,<br />
-              <em>settled in seconds.</em>
+              {t("landing.heroLine1")}<br />
+              <em>{t("landing.heroLine2")}</em>
             </h1>
 
             <p className="lp-hero-sub">
-              Blockchain-powered payments that eliminate manual reconciliation,
-              prevent fraud, and give parents instant proof — for a fraction of a cent per transaction.
+              {t("landing.heroSub")}
             </p>
 
             <div className="lp-hero-actions">
               <Link href="/pay-fees" className="btn-cta">
-                Pay Fees Now
+                {t("landing.ctaPayNow")}
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
                 </svg>
               </Link>
               <Link href="/dashboard" className="btn-ghost">
-                View Dashboard
+                {t("landing.ctaDashboard")}
               </Link>
             </div>
           </div>
@@ -113,7 +114,7 @@ export default function Home() {
             <div className="lp-scroll-arrow">
               <div className="lp-scroll-ball" />
             </div>
-            Scroll
+            {t("landing.scroll")}
           </div>
         </section>
 
@@ -124,7 +125,7 @@ export default function Home() {
               {STATS.map(({ v, l }) => (
                 <div key={l} className="lp-stat">
                   <span className="lp-stat-v">{v}</span>
-                  <span className="lp-stat-l">{l}</span>
+                  <span className="lp-stat-l">{t(l)}</span>
                 </div>
               ))}
             </div>
@@ -135,16 +136,16 @@ export default function Home() {
         <section className="lp-features">
           <div className="lp-container">
             <div className="lp-section-header">
-              <span className="lp-eyebrow">Why StellarEduPay</span>
-              <h2 className="lp-section-h2">Built for how schools<br />actually work.</h2>
-              <p className="lp-section-p">No PDFs. No bank transfers. No chasing payments. Just transparent, instant, verifiable transactions on a public blockchain.</p>
+              <span className="lp-eyebrow">{t("landing.featuresEyebrow")}</span>
+              <h2 className="lp-section-h2">{t("landing.featuresH2a")}<br />{t("landing.featuresH2b")}</h2>
+              <p className="lp-section-p">{t("landing.featuresP")}</p>
             </div>
             <div className="lp-features-grid">
               {FEATURES.map(({ icon, title, desc }) => (
                 <div key={title} className="lp-feat">
                   <span className="lp-feat-icon">{icon}</span>
-                  <p className="lp-feat-title">{title}</p>
-                  <p className="lp-feat-desc">{desc}</p>
+                  <p className="lp-feat-title">{t(title)}</p>
+                  <p className="lp-feat-desc">{t(desc)}</p>
                 </div>
               ))}
             </div>
@@ -154,19 +155,19 @@ export default function Home() {
         {/* ── TRUST STRIP ── */}
         <div className="lp-trust">
           <div className="lp-container">
-            <span className="lp-trust-label">Built on proven technology</span>
+            <span className="lp-trust-label">{t("landing.trustLabel")}</span>
             <div className="lp-trust-items">
               {[
-                ["Stellar SDK v12", "⬡"],
-                ["MongoDB Atlas-ready", "🍃"],
-                ["BullMQ + Redis", "⚙"],
-                ["JWT + TOTP MFA", "🔐"],
-                ["Prometheus metrics", "📊"],
-                ["OpenAPI documented", "📄"],
+                ["landing.trustSdk", "⬡"],
+                ["landing.trustMongo", "🍃"],
+                ["landing.trustRedis", "⚙"],
+                ["landing.trustJwt", "🔐"],
+                ["landing.trustPrometheus", "📊"],
+                ["landing.trustOpenApi", "📄"],
               ].map(([label, icon]) => (
                 <div key={label} className="lp-trust-item">
                   <span>{icon}</span>
-                  <span>{label}</span>
+                  <span>{t(label)}</span>
                 </div>
               ))}
             </div>
@@ -177,16 +178,16 @@ export default function Home() {
         <section className="lp-how">
           <div className="lp-container">
             <div className="lp-section-header">
-              <span className="lp-eyebrow">How It Works</span>
-              <h2 className="lp-section-h2">Three steps.<br />One transaction.</h2>
-              <p className="lp-section-p">Parents pay. Stellar confirms. StellarEduPay matches, validates, and records — automatically.</p>
+              <span className="lp-eyebrow">{t("landing.howItWorksTitle")}</span>
+              <h2 className="lp-section-h2">{t("landing.howH2a")}<br />{t("landing.howH2b")}</h2>
+              <p className="lp-section-p">{t("landing.howP")}</p>
             </div>
             <div className="lp-steps">
               {STEPS.map(({ n, title, desc }) => (
                 <div key={n} className="lp-step">
                   <div className="lp-step-num">{n}</div>
-                  <p className="lp-step-title">{title}</p>
-                  <p className="lp-step-desc">{desc}</p>
+                  <p className="lp-step-title">{t(title)}</p>
+                  <p className="lp-step-desc">{t(desc)}</p>
                 </div>
               ))}
             </div>
@@ -196,11 +197,11 @@ export default function Home() {
         {/* ── CTA ── */}
         <section className="lp-cta">
           <div className="lp-cta-inner">
-            <h2>Ready to run on blockchain?</h2>
-            <p>Everything is already live. Connect a school wallet, register students, and start accepting on-chain fee payments today.</p>
+            <h2>{t("landing.ctaH2")}</h2>
+            <p>{t("landing.ctaP")}</p>
             <div className="lp-cta-btns">
-              <Link href="/pay-fees" className="btn-cta">Start Paying Fees</Link>
-              <Link href="/dashboard" className="btn-ghost">Admin Dashboard</Link>
+              <Link href="/pay-fees" className="btn-cta">{t("landing.ctaStart")}</Link>
+              <Link href="/dashboard" className="btn-ghost">{t("landing.ctaAdminDashboard")}</Link>
             </div>
           </div>
         </section>
@@ -210,13 +211,13 @@ export default function Home() {
           <div className="lp-footer-inner">
             <div className="lp-footer-brand">
               <div className="lp-footer-logo">S</div>
-              <span className="lp-footer-name">StellarEduPay</span>
+              <span className="lp-footer-name">{t("app.name")}</span>
             </div>
-            <span className="lp-footer-copy">© {new Date().getFullYear()} MIT License</span>
+            <span className="lp-footer-copy">{t("landing.footerCopy", { year: new Date().getFullYear() })}</span>
             <div className="lp-footer-links">
-              <a href="https://stellar.org" target="_blank" rel="noopener noreferrer">Stellar</a>
-              <a href="https://github.com/manuelusman73-png/StellarEduPay" target="_blank" rel="noopener noreferrer">GitHub</a>
-              <Link href="/api/docs">API Docs</Link>
+              <a href="https://stellar.org" target="_blank" rel="noopener noreferrer">{t("landing.footerStellar")}</a>
+              <a href="https://github.com/manuelusman73-png/StellarEduPay" target="_blank" rel="noopener noreferrer">{t("landing.footerGithub")}</a>
+              <Link href="/api/docs">{t("landing.footerApiDocs")}</Link>
             </div>
           </div>
         </footer>

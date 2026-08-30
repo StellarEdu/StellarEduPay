@@ -1,3 +1,5 @@
+import i18n from "../i18n";
+
 /**
  * Canonical payment status definitions for the frontend — Issue #72.
  *
@@ -47,13 +49,20 @@ export const TERMINAL_STATUSES = Object.freeze([
 
 /**
  * Returns the display label for a payment status, with a fallback for
- * unknown values.
+ * unknown values. Localized via i18n (status.payment.<STATUS>); falls back
+ * to the English label map for anything not translated.
  *
  * @param {string} status
  * @returns {string}
  */
 export function getPaymentStatusLabel(status) {
-  return PAYMENT_STATUS_LABELS[status] ?? status ?? 'Unknown';
+  if (status && PAYMENT_STATUS_LABELS[status]) {
+    const key = `status.payment.${status}`;
+    const resolved = i18n.t(key);
+    if (typeof resolved === "string" && resolved !== key) return resolved;
+    return PAYMENT_STATUS_LABELS[status];
+  }
+  return status ?? 'Unknown';
 }
 
 /**

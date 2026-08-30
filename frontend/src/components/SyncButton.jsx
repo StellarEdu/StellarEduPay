@@ -6,10 +6,12 @@
  *   lastSyncTime    — ISO string or Date of the last sync (optional)
  */
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { syncPayments } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 
 export default function SyncButton({ onSyncComplete, lastSyncTime }) {
+  const { t } = useTranslation();
   const [showModal, setShowModal] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState(null);
@@ -22,13 +24,13 @@ export default function SyncButton({ onSyncComplete, lastSyncTime }) {
       setShowModal(false);
       onSyncComplete?.(data);
     } catch (err) {
-      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Sync failed. Please try again.");
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("actions.syncFailed"));
     } finally {
       setSyncing(false);
     }
   }
 
-  const formattedLastSync = lastSyncTime ? new Date(lastSyncTime).toLocaleString() : "Never";
+  const formattedLastSync = lastSyncTime ? new Date(lastSyncTime).toLocaleString() : t("actions.never");
 
   return (
     <>
@@ -36,9 +38,9 @@ export default function SyncButton({ onSyncComplete, lastSyncTime }) {
         onClick={() => setShowModal(true)}
         disabled={syncing}
         style={btnStyle}
-        aria-label="Sync payments from blockchain"
+        aria-label={t("sync.aria")}
       >
-        {syncing ? "Syncing…" : "Sync Payments"}
+        {syncing ? t("actions.syncing") : t("actions.syncPayments")}
       </button>
 
       {showModal && (
@@ -50,14 +52,13 @@ export default function SyncButton({ onSyncComplete, lastSyncTime }) {
         >
           <div style={modalStyle}>
             <h3 id="sync-modal-title" style={{ margin: "0 0 0.5rem" }}>
-              Confirm Sync
+              {t("sync.title")}
             </h3>
             <p style={{ margin: "0 0 0.25rem", fontSize: "0.9rem", color: "var(--text)" }}>
-              This will fetch the latest transactions from the Stellar network and update payment
-              records.
+              {t("sync.description")}
             </p>
             <p style={{ margin: "0 0 1rem", fontSize: "0.85rem", color: "var(--muted)" }}>
-              Last sync: <strong>{formattedLastSync}</strong>
+              {t("actions.lastSync")} <strong>{formattedLastSync}</strong>
             </p>
 
             {error && (
@@ -78,15 +79,15 @@ export default function SyncButton({ onSyncComplete, lastSyncTime }) {
                 disabled={syncing}
                 style={cancelBtnStyle}
               >
-                Cancel
+                {t("actions.cancel")}
               </button>
               <button
                 onClick={handleConfirm}
                 disabled={syncing}
                 style={confirmBtnStyle}
-                aria-label="Confirm sync"
+                aria-label={t("sync.ariaConfirm")}
               >
-                {syncing ? "Syncing…" : "Confirm Sync"}
+                {syncing ? t("actions.syncing") : t("actions.confirmSync")}
               </button>
             </div>
           </div>

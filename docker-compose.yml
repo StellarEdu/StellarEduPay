@@ -109,7 +109,7 @@ services:
           chmod 400 /etc/mongodb/keyfile
           chown mongodb:mongodb /etc/mongodb/keyfile
         fi
-        exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /etc/mongodb/keyfile --bind_ip_all
+        exec docker-entrypoint.sh mongod --replSet rs0 --auth --keyFile /etc/mongodb/keyfile --bind_ip_all
     # MongoDB port is NOT exposed to the host by default. The backend reaches
     # it over the internal backend-db network. To access MongoDB from the host
     # for local debugging only, override this in a docker-compose.override.yml:

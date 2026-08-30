@@ -24,9 +24,58 @@ const logger = require('../utils/logger');
 
 /**
  * Dynamic Fee Adjustment Engine
- * 
+ *
  * Handles flexible discounts, penalties, and promotions for StellarEduPay payments.
- * This engine is used during payment validation to calculate the final fee.
+ *
+ * ⚠️ NOT ON THE LIVE PATH: nothing under backend/src/{controllers,routes} requires
+ * this module or the `feeEngine` singleton it exports — grep the tree and the only
+ * hits are this file and tests/feeAdjustment*.test.js. The rules school admins
+ * actually create (via the "Fee Adjustment Rules" admin page → POST/PUT
+ * /api/fee-adjustments) are stored in the `FeeAdjustmentRule` Mongo model and
+ * evaluated by `feeAdjustmentService.js`, which is what `feeAdjustmentController.js`
+ * calls. That service uses ASCENDING priority (lower number first) and an explicit
+ * per-rule `conflictResolutionPolicy` ("stack" / "first_only" / "best_for_student") —
+ * see the doc comments on `feeAdjustmentService.js` and `feeAdjustmentRuleModel.js`,
+ * and the worked example in docs/architecture.md, for the behavior that governs
+ * real fee calculations. This class's own order/conflict rules (documented below)
+ * are the OPPOSITE of that live engine on priority direction and do not support
+ * per-rule conflict policies at all — do not use this file as a reference for how
+ * the production admin-configured rules resolve.
+ *
+ * ── Rule application order (this engine only) ──────────────────────────────
+ * Rules are sorted DESCENDING by `priority` (see `loadDefaultRules` and
+ * `addRule`) — the HIGHEST priority number runs FIRST. This is the reverse of
+ * the live `feeAdjustmentService.js`, where the lowest number runs first.
+ *
+ * ── Conflict resolution strategy (this engine only) ────────────────────────
+ * There is no policy field and no "pick one" behavior: every rule whose
+ * `condition(ctx)` returns true is applied — all matches always stack,
+ * unconditionally, in priority order. Two rules "conflict" only in the sense
+ * that order changes the numeric result:
+ *
+ *   - Each rule is applied to the RUNNING fee left by every prior rule, not to
+ *     the original `baseAmount`. A percentage rule (isFixed !== true and the
+ *     description doesn't start with "fixed") computes its adjustment as
+ *     `currentFee * value / 100` at the moment it runs, so a percentage
+ *     rule that runs later applies to an already-adjusted fee, and a fixed
+ *     rule that runs later still subtracts/adds the same flat amount
+ *     regardless of position.
+ *   - `type: 'discount'` subtracts from the running fee; `type: 'penalty'` adds
+ *     to it.
+ *   - The final running total is floored at 0 — fees never go negative
+ *     (a warning is logged when clamping occurs).
+ *
+ * Worked example — percentage scholarship (priority 8, "student-discount",
+ * 20% off) vs. a flat surcharge added as a custom rule (priority 20, fixed,
+ * +100) on a base fee of 1000, run through `calculateFee`:
+ *   1. Surcharge runs first (higher priority number): 1000 + 100 = 1100
+ *   2. Scholarship runs second: 1100 - 20% of 1100 (220) = 880
+ * Reversing the priorities (scholarship first) instead gives:
+ *   1. Scholarship: 1000 - 200 = 800
+ *   2. Surcharge:   800 + 100 = 900
+ * Same two rules, same values — a different final fee purely from priority
+ * order, because the percentage is computed against whatever the running fee
+ * happens to be at that point in the loop, not the original base amount.
  */
 
 class DynamicFeeAdjustmentEngine {

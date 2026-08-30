@@ -1,6 +1,6 @@
 'use strict';
 
-const { getAuditLogs, getRecentAuditLogs, verifyAuditChain } = require('../services/auditService');
+const { getAuditLogs, getRecentAuditLogs, verifyAuditChain, exportAuditLogs } = require('../services/auditService');
 
 /**
  * GET /api/audit-logs
@@ -68,7 +68,71 @@ async function getRecentAuditLogsEndpoint(req, res, next) {
   }
 }
 
-module.exports = { getAuditLogsEndpoint, getRecentAuditLogsEndpoint, verifyChainEndpoint };
+/**
+ * GET /api/audit/export
+ *
+ * Download all matching audit logs as CSV or JSON (for compliance exports).
+ *
+ * Query parameters (all optional):
+ *   - format:      'csv' (default) or 'json'
+ *   - action, targetType, performedBy, result: same filters as GET /api/audit
+ *   - startDate, endDate: ISO 8601 date range
+ *   - limit: max rows to export (default/max: 10 000)
+ *
+ * CSV columns: _id, schoolId, action, targetType, targetId, performedBy,
+ *              result, errorMessage, ipAddress, createdAt
+ */
+async function exportAuditLogsEndpoint(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const {
+      format = 'csv',
+      action, targetType, performedBy, result,
+      startDate, endDate, limit,
+    } = req.query;
+
+    const logs = await exportAuditLogs({
+      schoolId, action, targetType, performedBy, result,
+      startDate, endDate, limit,
+    });
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename="audit-export.json"');
+      return res.json(logs);
+    }
+
+    // Default: CSV
+    const CSV_COLUMNS = [
+      '_id', 'schoolId', 'action', 'targetType', 'targetId',
+      'performedBy', 'result', 'errorMessage', 'ipAddress', 'createdAt',
+    ];
+
+    function escapeCsv(value) {
+      if (value == null) return '';
+      const str = String(value);
+      // Wrap in double-quotes if value contains a comma, newline, or double-quote
+      if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    }
+
+    const header = CSV_COLUMNS.join(',');
+    const rows = logs.map((log) =>
+      CSV_COLUMNS.map((col) => escapeCsv(log[col])).join(',')
+    );
+    const csv = [header, ...rows].join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="audit-export.csv"');
+    return res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getAuditLogsEndpoint, getRecentAuditLogsEndpoint, verifyChainEndpoint, exportAuditLogsEndpoint };
 
 async function verifyChainEndpoint(req, res, next) {
   try {

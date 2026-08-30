@@ -66,4 +66,51 @@ describe('Rate limiter — trust proxy configuration', () => {
 
     process.env.TRUSTED_PROXY_HOPS = original;
   });
+
+  // #1285: a non-numeric TRUSTED_PROXY_HOPS would parseInt to NaN, and
+  // `app.set('trust proxy', NaN)` makes every request resolve to the same
+  // (undefined-ish) req.ip — collapsing every client onto one rate-limit
+  // key. config/index.js guards against this by throwing at module load
+  // instead of letting a malformed value reach app.set, so the app never
+  // boots into that state.
+  describe('malformed TRUSTED_PROXY_HOPS fails fast at config load', () => {
+    const CONFIG_PATH = '../src/config';
+    let originalValue;
+
+    beforeEach(() => {
+      originalValue = process.env.TRUSTED_PROXY_HOPS;
+      // config/index.js also requires these; set them so the assertions
+      // below are actually about TRUSTED_PROXY_HOPS, not unrelated
+      // required-env-var failures.
+      process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/test';
+      process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-at-least-32-chars-long';
+      jest.resetModules();
+    });
+
+    afterEach(() => {
+      if (originalValue === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+      else process.env.TRUSTED_PROXY_HOPS = originalValue;
+      jest.resetModules();
+    });
+
+    test('throws instead of producing NaN for a non-numeric value', () => {
+      process.env.TRUSTED_PROXY_HOPS = 'not-a-number';
+      expect(() => require(CONFIG_PATH)).toThrow(
+        /TRUSTED_PROXY_HOPS must be a non-negative integer/
+      );
+    });
+
+    test('throws for a negative value', () => {
+      process.env.TRUSTED_PROXY_HOPS = '-1';
+      expect(() => require(CONFIG_PATH)).toThrow(
+        /TRUSTED_PROXY_HOPS must be a non-negative integer/
+      );
+    });
+
+    test('accepts a valid non-negative integer and exposes it on the config object', () => {
+      process.env.TRUSTED_PROXY_HOPS = '3';
+      const config = require(CONFIG_PATH);
+      expect(config.TRUSTED_PROXY_HOPS).toBe(3);
+    });
+  });
 });

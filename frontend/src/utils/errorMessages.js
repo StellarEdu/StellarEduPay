@@ -1,3 +1,5 @@
+import i18n from "../i18n";
+
 /**
  * Maps backend API error codes to human-readable messages for display in the UI.
  * Falls back to the raw message if no mapping exists.
@@ -99,13 +101,32 @@ const ERROR_MESSAGES = {
 };
 
 /**
+ * Resolves a locale key to a translated string.
+ *
+ * Returns the active-language translation when the key exists (falling back to
+ * English via i18next), or the provided English fallback when the key itself is
+ * missing. Used for non-React code paths (e.g. utils); components should use
+ * `useTranslation()` instead.
+ *
+ * @param {string} key - i18n key, e.g. "errors.DUPLICATE_STUDENT".
+ * @param {string} enFallback - English fallback text if the key is absent.
+ * @returns {string} Translated string.
+ */
+export function tr(key, enFallback) {
+  const resolved = i18n.t(key);
+  return typeof resolved === "string" && resolved !== key ? resolved : enFallback;
+}
+
+/**
  * Returns a human-readable message for the given error code.
  * Falls back to the raw message string, or a generic error if neither is available.
  */
 export function getErrorMessage(code, fallback) {
-  if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+  if (code && ERROR_MESSAGES[code]) {
+    return tr(`errors.${code}`, ERROR_MESSAGES[code]);
+  }
   if (fallback && typeof fallback === "string" && fallback.trim()) return fallback;
-  return "An unexpected error occurred. Please try again.";
+  return tr("errors.UNKNOWN", "An unexpected error occurred. Please try again.");
 }
 
 export default ERROR_MESSAGES;
