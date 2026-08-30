@@ -40,6 +40,7 @@ const webhookDeliveryRoutes = require('./routes/webhookDeliveryRoutes');
 const paymentPlanRoutes = require('./routes/paymentPlanRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
+const cspReportRoutes = require('./routes/cspReportRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
@@ -119,6 +120,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'none'"],
       frameAncestors: ["'none'"],
+      reportUri: ['/api/csp-report'],
     },
   },
   crossOriginEmbedderPolicy: false,
@@ -188,6 +190,7 @@ app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/superadmin', superAdminRoutes);
+app.use('/api/csp-report', cspReportRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);

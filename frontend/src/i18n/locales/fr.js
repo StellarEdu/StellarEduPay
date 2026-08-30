@@ -243,6 +243,8 @@ const fr = {
     fee: "Frais",
     paid: "Payé",
     unpaid: "Impayé",
+    minAmount: "Montant minimum",
+    maxAmount: "Montant maximum",
     linkCopied: "Lien copié !",
     shareLink: "Partager le lien de paiement",
     walletAddress: "Adresse du portefeuille",
