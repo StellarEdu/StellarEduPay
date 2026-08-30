@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { updateStudent } from "../services/api";
 import PaymentPlanForm from "./PaymentPlanForm";
+import { stripHtml } from "../utils/sanitizeInput";
 
 export default function StudentForm({ student, onClose, onSave }) {
   const { t } = useTranslation();
@@ -48,11 +49,18 @@ export default function StudentForm({ student, onClose, onSave }) {
     }
   }
 
+  // Text fields get HTML tags stripped as the user types — defense-in-depth
+  // against stored XSS via student name/class (issue #1391), on top of the
+  // backend's own sanitization/escaping.
+  const TEXT_FIELDS = new Set(["name", "class"]);
+
   function handleChange(e) {
     const { name, value, type, checked } = e.target;
+    let nextValue = type === "checkbox" ? checked : value;
+    if (TEXT_FIELDS.has(name)) nextValue = stripHtml(nextValue);
     setFormData(prev => ({
       ...prev,
-      [name]: type === "checkbox" ? checked : value,
+      [name]: nextValue,
     }));
   }
 
