@@ -8,6 +8,7 @@
     "coverage:frontend": "cd frontend && npm run coverage",
     "test:e2e": "jest tests/e2e/ --forceExit --runInBand --testPathIgnorePatterns=/node_modules/",
     "test:integration": "cross-env RUN_INTEGRATION_TESTS=true jest tests/stellar.integration.test.js --forceExit",
+    "test:loadsim": "jest --testPathPattern=tests/loadsim/ --testPathIgnorePatterns=/node_modules/ --forceExit",
     "test:docker-healthcheck": "cross-env RUN_DOCKER_COMPOSE_HEALTHCHECK_TESTS=true jest tests/dockerComposeHealthCheck.test.js --forceExit",
     "seed": "node scripts/seed-test-data.js",
     "check-version-drift": "node scripts/check-version-drift.js"
@@ -63,7 +64,8 @@
       "/backend/",
       "tests/stellar\\.integration\\.test\\.js",
       "tests/integration/",
-      "tests/e2e/"
+      "tests/e2e/",
+      "tests/loadsim/"
     ],
     "collectCoverageFrom": [
       "backend/src/**/*.js",
