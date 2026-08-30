@@ -97,8 +97,28 @@ webhookDeliverySchema.index({ schoolId: 1, createdAt: -1 });
 // Dead-letter count query: success=false + attemptCount >= maxAttempts
 webhookDeliverySchema.index({ schoolId: 1, success: 1, attemptCount: 1 });
 
-// Auto-expire after 90 days (configurable)
-const TTL_SECONDS = parseInt(process.env.WEBHOOK_DELIVERY_TTL_SECONDS, 10) || 7_776_000;
+// Auto-expire after 90 days.
+//
+// WEBHOOK_DELIVERY_RETENTION_DAYS is the documented knob; the older
+// WEBHOOK_DELIVERY_TTL_SECONDS still wins when set, so a deployment that
+// already configured it does not silently change retention on upgrade.
+const DEFAULT_RETENTION_DAYS = 90;
+
+function resolveTtlSeconds() {
+  const seconds = parseInt(process.env.WEBHOOK_DELIVERY_TTL_SECONDS, 10);
+  if (Number.isFinite(seconds) && seconds > 0) return seconds;
+
+  const days = parseInt(process.env.WEBHOOK_DELIVERY_RETENTION_DAYS, 10);
+  const retentionDays = Number.isFinite(days) && days > 0 ? days : DEFAULT_RETENTION_DAYS;
+  return retentionDays * 24 * 60 * 60;
+}
+
+const TTL_SECONDS = resolveTtlSeconds();
 webhookDeliverySchema.index({ createdAt: 1 }, { expireAfterSeconds: TTL_SECONDS });
 
-module.exports = mongoose.model('WebhookDelivery', webhookDeliverySchema);
+const WebhookDelivery = mongoose.model('WebhookDelivery', webhookDeliverySchema);
+
+module.exports = WebhookDelivery;
+module.exports.TTL_SECONDS = TTL_SECONDS;
+module.exports.DEFAULT_RETENTION_DAYS = DEFAULT_RETENTION_DAYS;
+module.exports.resolveTtlSeconds = resolveTtlSeconds;
