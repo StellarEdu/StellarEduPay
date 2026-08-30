@@ -411,6 +411,40 @@ const horizonUnreachableSince = new client.Gauge({
   registers: [registry],
 });
 
+// leader_election_is_leader / leader_election_tenure_seconds — leadership state
+// for the singleton schedulers. Without these, a split brain (two replicas both
+// holding the lock after a Redis partition) is invisible: it shows up only as
+// duplicate reminders and doubled audit events after the fact. Both are read
+// from leaderElection on each scrape rather than pushed, so they cannot drift
+// out of step with the service's own state. See issue #1378.
+const leaderElectionIsLeader = new client.Gauge({
+  name: 'leader_election_is_leader',
+  help: 'Whether this instance currently holds the scheduler leader lock (1 = leader, 0 = follower)',
+  registers: [registry],
+  collect() {
+    try {
+      const leaderElection = require('../services/leaderElection');
+      this.set(leaderElection.isLeader() ? 1 : 0);
+    } catch (_) {
+      // Leader election may not be wired up yet — scrape still succeeds
+    }
+  },
+});
+
+const leaderElectionTenureSeconds = new client.Gauge({
+  name: 'leader_election_tenure_seconds',
+  help: 'Seconds this instance has continuously held leadership (0 when not the leader)',
+  registers: [registry],
+  collect() {
+    try {
+      const leaderElection = require('../services/leaderElection');
+      this.set(leaderElection.getTenureSeconds());
+    } catch (_) {
+      // Leader election may not be wired up yet — scrape still succeeds
+    }
+  },
+});
+
 // last_backup_verification_age_seconds — seconds since the most recent
 // successful backup restore-verification (scripts/test-backup-recovery.sh),
 // recorded via POST /api/internal/backup-verification-heartbeat. Recomputed
@@ -464,6 +498,8 @@ module.exports = {
   notificationSentTotal,
   backupLastSuccessTimestamp,
   horizonUnreachableSince,
+  leaderElectionIsLeader,
+  leaderElectionTenureSeconds,
   lastBackupVerificationAgeSeconds,
   recordBackupVerificationSuccess,
 };

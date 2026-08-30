@@ -9,6 +9,11 @@ const LEADER_RENEW_INTERVAL_MS = parseInt(process.env.LEADER_RENEW_INTERVAL_MS, 
 const LEADER_ACQUIRE_INTERVAL_MS = parseInt(process.env.LEADER_ACQUIRE_INTERVAL_MS, 10) || 10_000;
 
 let _isLeader = false;
+// Wall-clock ms at which the current leadership term began; null when not the
+// leader. Drives leader_election_tenure_seconds (#1378) — a tenure that keeps
+// resetting is lock churn, and two replicas both reporting a tenure at once is
+// a split brain.
+let _leaderSince = null;
 let _token = null;
 let _fencingToken = null;
 let _renewTimer = null;
@@ -25,6 +30,7 @@ async function _tryAcquire() {
   const acquired = await lock.acquire(LEADER_LOCK_KEY, LEADER_LOCK_TTL_MS);
   if (acquired && !_isLeader) {
     _isLeader = true;
+    _leaderSince = Date.now();
     _token = acquired.token;
     _fencingToken = acquired.fencingToken;
     logger.info('Elected leader — starting leader callbacks', { fencingToken: acquired.fencingToken });
@@ -48,6 +54,7 @@ async function _renew() {
 
 function _demote() {
   _isLeader = false;
+  _leaderSince = null;
   _token = null;
   _fencingToken = null;
   _stopRenew();
@@ -147,10 +154,17 @@ function getFencingToken() {
   return _fencingToken;
 }
 
+/** Seconds this instance has continuously held leadership; 0 when not leader. */
+function getTenureSeconds() {
+  if (!_isLeader || _leaderSince === null) return 0;
+  return Math.max(0, (Date.now() - _leaderSince) / 1000);
+}
+
 module.exports = {
   start,
   stop,
   isLeader,
   register,
   getFencingToken,
+  getTenureSeconds,
 };
