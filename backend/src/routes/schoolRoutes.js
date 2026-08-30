@@ -7,6 +7,7 @@ const {
   getAllSchools,
   getSchool,
   updateSchool,
+  rotateStellarAddress,
   deactivateSchool,
   deactivateSchoolEndpoint,
   activateSchool,
@@ -26,6 +27,9 @@ router.get('/:schoolId',        getSchool);
 router.post('/',                requireAdminAuth, auditContext, createSchool);
 router.patch('/:schoolId',      requireAdminAuth, auditContext, updateSchool);
 router.delete('/:schoolId',     requireAdminAuth, auditContext, deactivateSchool);
+
+// Dedicated wallet-rotation endpoint — step-up auth + mandatory reason (#1387)
+router.put('/:schoolId/stellar-address', requireAdminAuth, auditContext, rotateStellarAddress);
 
 // Explicit activate / deactivate endpoints
 router.patch('/:schoolId/deactivate', requireAdminAuth, auditContext, deactivateSchoolEndpoint);
