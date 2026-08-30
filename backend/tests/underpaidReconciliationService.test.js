@@ -57,6 +57,15 @@ jest.mock('../src/models/paymentModel', () => ({
   findOne:   (...args) => mockFindOne(...args),
 }));
 
+// ── PaymentPlan model mock ───────────────────────────────────────────────────
+// No active plan by default, so evaluateUnderpayment (#1379) falls back to the
+// fee-based classification these tests were written against.
+const mockPlanFindOne = jest.fn().mockResolvedValue(null);
+
+jest.mock('../src/models/paymentPlanModel', () => ({
+  findOne: (...args) => mockPlanFindOne(...args),
+}));
+
 // ── Student model mock ────────────────────────────────────────────────────────
 const mockStudentFindOne          = jest.fn();
 const mockStudentFindOneAndUpdate = jest.fn().mockResolvedValue({});
@@ -119,6 +128,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockSave.mockResolvedValue();
   mockStudentFindOneAndUpdate.mockResolvedValue({});
+  mockPlanFindOne.mockResolvedValue(null);
 });
 
 // ── applyPartialCredit ────────────────────────────────────────────────────────
