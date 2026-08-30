@@ -8,6 +8,10 @@ const {
   verifyPaymentSchema,
 } = require('./schemas/paymentSchemas');
 
+const {
+  getPaymentInstructionsQuerySchema,
+} = require('./schemas/paymentQuerySchemas');
+
 function validate(schema, source = 'body') {
   return (req, res, next) => {
     const { error, value } = schema.validate(req[source], {
@@ -53,6 +57,28 @@ function validateStudentIdParam(req, res, next) {
   if (typeof studentId !== 'string' || !STUDENT_ID_RE.test(studentId)) {
     return res.status(400).json({ error: 'Invalid studentId format', code: 'VALIDATION_ERROR' });
   }
+  return next();
+}
+
+/** Middleware: validate the query string of GET /payments/instructions/:studentId */
+function validatePaymentInstructionsQuery(req, res, next) {
+  const { error, value } = getPaymentInstructionsQuerySchema.validate(req.query, {
+    abortEarly: false,
+    convert:    true,
+  });
+
+  if (error) {
+    return res.status(400).json({
+      error: error.details[0].message,
+      code:  'VALIDATION_ERROR',
+      errors: error.details.map(detail => ({
+        field:   detail.context?.key || detail.path.join('.') || 'unknown',
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.query = value;
   return next();
 }
 
@@ -123,6 +149,7 @@ module.exports = {
   validateSubmitTransaction,
   validateVerifyPayment,
   validateStudentIdParam,
+  validatePaymentInstructionsQuery,
   validateTxHashParam,
   validateRegisterStudent,
   validateFeeStructure,

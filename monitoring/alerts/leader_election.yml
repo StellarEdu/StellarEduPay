@@ -1,0 +1,60 @@
+groups:
+  - name: leader_election
+    interval: 30s
+    rules:
+      # ── Critical: split brain ────────────────────────────────────────────
+      # leader_election_is_leader is 1 on exactly one replica in a healthy
+      # deployment. A Redis network partition can leave two replicas both
+      # believing they hold scheduler:leader, at which point every singleton
+      # scheduler runs twice: duplicate reminder emails, doubled audit events,
+      # and reconciliation writes racing each other. Summing across instances
+      # is the only way to see it — no single replica can tell on its own.
+      - alert: LeaderElectionSplitBrain
+        expr: sum(leader_election_is_leader) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Split brain — {{ $value }} replicas claim scheduler leadership"
+          description: >
+            More than one replica has reported leader_election_is_leader = 1
+            for over a minute. Singleton schedulers are running on each of
+            them, so reminders and audit events are being duplicated and
+            reconciliation may be writing conflicting results. Check Redis
+            reachability from every replica and restart the extra leaders.
+
+      # ── Critical: nobody is the leader ───────────────────────────────────
+      # The mirror image of split brain: no replica holds the lock, so the
+      # singleton schedulers are not running anywhere and reminders,
+      # reconciliation, and finalization have silently stopped.
+      - alert: LeaderElectionNoLeader
+        expr: sum(leader_election_is_leader) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No replica holds scheduler leadership"
+          description: >
+            No replica has held the scheduler leader lock for 5 minutes.
+            Reminder dispatch, reconciliation, and payment finalization are
+            not running. Check that Redis is reachable and that at least one
+            replica is up.
+
+      # ── Warning: leadership is churning ──────────────────────────────────
+      # A healthy leader renews well inside LEADER_LOCK_TTL_MS and keeps its
+      # tenure growing for hours. A tenure that stays under a few minutes
+      # means the lock keeps expiring and being re-acquired — usually Redis
+      # latency or a saturated event loop starving the renew timer.
+      - alert: LeaderElectionChurning
+        expr: max(leader_election_tenure_seconds) < 300
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler leadership is churning"
+          description: >
+            No replica has held leadership for longer than 5 minutes at any
+            point in the last 15 minutes. The leader lock is expiring before
+            it is renewed. Check Redis latency and event-loop lag on the
+            replicas, and review LEADER_LOCK_TTL_MS against
+            LEADER_RENEW_INTERVAL_MS.

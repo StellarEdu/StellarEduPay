@@ -52,6 +52,7 @@ const {
 
 const {
   validateStudentIdParam,
+  validatePaymentInstructionsQuery,
   validateTxHashParam,
   validateCreatePaymentIntent,
   validateVerifyPayment,
@@ -83,6 +84,14 @@ const idempotency = idempotencyMiddleware({ criticalPaymentEndpoints: true });
  *         schema:
  *           type: string
  *         description: Student ID
+ *       - in: query
+ *         name: feeCategory
+ *         required: false
+ *         schema:
+ *           type: string
+ *           maxLength: 100
+ *           pattern: '^[A-Za-z0-9_-]+$'
+ *         description: Restrict the instructions to a single fee category
  *     responses:
  *       200:
  *         description: Payment instructions
@@ -97,6 +106,8 @@ const idempotency = idempotencyMiddleware({ criticalPaymentEndpoints: true });
  *                   type: string
  *                 acceptedAssets:
  *                   type: array
+ *       400:
+ *         description: VALIDATION_ERROR - feeCategory is malformed
  *       404:
  *         description: Student not found
  */
@@ -201,6 +212,7 @@ router.get("/balance/:studentId", validateStudentIdParam, requireSchoolAuth(), g
 router.get(
   "/instructions/:studentId",
   validateStudentIdParam,
+  validatePaymentInstructionsQuery,
   getPaymentInstructions,
 );
 router.get("/receipt/:txHash", generateReceipt);

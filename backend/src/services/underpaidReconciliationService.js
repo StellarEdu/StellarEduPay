@@ -7,18 +7,88 @@
  * - Automatic partial credit tracking for underpaid transactions
  * - Refund mechanism for payments that need to be returned
  * - Documentation and audit trail of all reconciliation actions
+ *
+ * Issue #1379: a student on a payment plan pays in installments, so every
+ * installment is a partial payment against the total fee by design. Comparing
+ * such a payment against the total fee amount flags it as underpaid and pulls
+ * it into the credit/refund workflow, which then refunds money the parent
+ * meant to pay. Where an active plan exists the benchmark is the installment
+ * amount, not the total fee — see docs/payment-plans-underpaid-reconciliation.md.
  */
 
 const mongoose = require('mongoose');
 const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
+const PaymentPlan = require('../models/paymentPlanModel');
 const logger = require('../utils/logger');
 const lock = require('./distributedLock');
 const { logAudit } = require('./auditService');
+const { compareMoney } = require('../utils/money');
 
 // Shares the same TTL convention as the other callers of the per-student
 // balance lock (paymentController.verifyPayment, stellarService.syncPaymentsForSchool).
 const STUDENT_BALANCE_LOCK_TTL_MS = parseInt(process.env.STUDENT_BALANCE_LOCK_TTL_MS || '15000', 10);
+
+/**
+ * Fetch the student's active payment plan, if any.
+ * @param {string} schoolId
+ * @param {string} studentId
+ * @returns {Promise<object|null>} the active plan, or null when the student pays in full
+ */
+async function getActivePaymentPlan(schoolId, studentId) {
+  return PaymentPlan.findOne({
+    schoolId,
+    studentId,
+    status: 'active',
+    deletedAt: null,
+  });
+}
+
+/**
+ * The amount a single payment is expected to cover under a plan: the next
+ * unpaid installment. Once every installment is settled the last one is used,
+ * so a trailing payment is still measured against an installment rather than
+ * against the whole fee.
+ * @param {object} plan
+ * @returns {number|null} expected installment amount, or null for an empty plan
+ */
+function expectedInstallmentAmount(plan) {
+  const installments = plan?.installments || [];
+  if (installments.length === 0) return null;
+  const next = installments.find((inst) => !inst.paid);
+  return (next || installments[installments.length - 1]).amount;
+}
+
+/**
+ * Decide whether a payment is genuinely underpaid, or an intentional
+ * installment against an active payment plan.
+ *
+ * A plan holder's payment is only short if it falls below the installment it
+ * is paying — measuring it against the total fee would flag every installment
+ * they ever make (#1379).
+ *
+ * @param {object} payment - Payment document (needs schoolId, studentId, amount)
+ * @returns {Promise<{underpaid: boolean, basis: 'installment'|'fee', expectedAmount: number|null}>}
+ */
+async function evaluateUnderpayment(payment) {
+  const plan = await getActivePaymentPlan(payment.schoolId, payment.studentId);
+  const expectedAmount = plan ? expectedInstallmentAmount(plan) : null;
+
+  if (expectedAmount === null) {
+    // No plan (or an empty one): the existing fee-based classification stands.
+    return {
+      underpaid: true,
+      basis: 'fee',
+      expectedAmount: null,
+    };
+  }
+
+  return {
+    underpaid: compareMoney(payment.amount, expectedAmount) < 0,
+    basis: 'installment',
+    expectedAmount,
+  };
+}
 
 /**
  * Apply partial credit to an underpaid payment
@@ -53,6 +123,18 @@ async function applyPartialCredit(paymentId, creditAmount, creditAppliedBy, scho
     throw new Error(
       `Payment ${paymentId} is not underpaid (status: ${payment.feeValidationStatus}). ` +
       'Partial credit can only be applied to underpaid transactions.'
+    );
+  }
+
+  // #1379: an installment that meets its scheduled amount is not underpaid,
+  // however it compares against the total fee. Crediting or refunding it would
+  // act on money the parent deliberately paid.
+  const assessment = await evaluateUnderpayment(payment);
+  if (!assessment.underpaid) {
+    throw new Error(
+      `Payment ${paymentId} is an installment against an active payment plan ` +
+      `(expected ${assessment.expectedAmount}, paid ${payment.amount}) and is not underpaid. ` +
+      'Underpaid reconciliation does not apply to scheduled installments.'
     );
   }
 
@@ -183,6 +265,18 @@ async function initiateRefund(paymentId, refundInitiatedBy, schoolId, refundNote
     );
   }
 
+  // #1379: an installment that meets its scheduled amount is not underpaid,
+  // however it compares against the total fee. Crediting or refunding it would
+  // act on money the parent deliberately paid.
+  const assessment = await evaluateUnderpayment(payment);
+  if (!assessment.underpaid) {
+    throw new Error(
+      `Payment ${paymentId} is an installment against an active payment plan ` +
+      `(expected ${assessment.expectedAmount}, paid ${payment.amount}) and is not underpaid. ` +
+      'Underpaid reconciliation does not apply to scheduled installments.'
+    );
+  }
+
   const now = new Date();
 
   // Mark as refund-initiated (actual refund transaction would update this to refund_completed)
@@ -284,7 +378,11 @@ async function getPendingUnderpaidPayments(schoolId, options = {}) {
     .skip(skip)
     .limit(limit);
 
-  return payments;
+  // #1379: drop payments that only look short because they were measured
+  // against the total fee. A plan holder's installment that meets its
+  // scheduled amount must never reach the credit/refund workflow.
+  const assessments = await Promise.all(payments.map(evaluateUnderpayment));
+  return payments.filter((_, i) => assessments[i].underpaid);
 }
 
 /**
@@ -342,6 +440,9 @@ async function getUnderpaidReconciliationSummary(schoolId) {
 }
 
 module.exports = {
+  getActivePaymentPlan,
+  expectedInstallmentAmount,
+  evaluateUnderpayment,
   applyPartialCredit,
   initiateRefund,
   completeRefund,

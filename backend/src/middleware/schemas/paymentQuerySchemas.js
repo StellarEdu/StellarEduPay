@@ -4,6 +4,8 @@
  * Joi schemas for payment query endpoints.
  *
  * Issue #70: Enforces pagination bounds (max page size 100).
+ * Issue #1377: Validates the feeCategory query parameter so an unsanitized
+ *              value never reaches a payment/student lookup.
  * Issue #71: Caps date ranges, validates dates, and ensures no user-supplied
  *            free-text reaches a MongoDB $regex — all filter values are either
  *            strictly typed or validated against an enum so the DB never
@@ -61,6 +63,26 @@ const getAllPaymentsSchema = Joi.object({
   return value;
 }).messages({ 'any.invalid': '{{#message}}' });
 
+// ── getPaymentInstructions query schema ──────────────────────────────────────
+// feeCategory is matched against Student.fees[].category and Payment.feeCategory.
+// Constraining it to the character set those values actually use keeps a
+// malformed value from reaching a query and keeps fee-structure naming out of
+// Mongo cast-error messages. Other query params (asset) are validated in the
+// controller, so unknown keys pass through untouched.
+const FEE_CATEGORY_RE = /^[A-Za-z0-9_-]+$/;
+
+const getPaymentInstructionsQuerySchema = Joi.object({
+  feeCategory: Joi.string()
+    .max(100)
+    .pattern(FEE_CATEGORY_RE)
+    .optional()
+    .messages({
+      'string.pattern.base': 'feeCategory may only contain letters, numbers, underscores and hyphens',
+      'string.max': 'feeCategory must be at most 100 characters',
+      'string.empty': 'feeCategory must not be empty',
+    }),
+}).unknown(true);
+
 // ── getSuspiciousPayments query schema ───────────────────────────────────────
 const getSuspiciousPaymentsSchema = Joi.object({
   ...paginationFields,
@@ -78,6 +100,8 @@ const paginationOnlySchema = Joi.object({
 
 module.exports = {
   getAllPaymentsSchema,
+  getPaymentInstructionsQuerySchema,
+  FEE_CATEGORY_RE,
   getSuspiciousPaymentsSchema,
   getRetryQueueSchema,
   paginationOnlySchema,
