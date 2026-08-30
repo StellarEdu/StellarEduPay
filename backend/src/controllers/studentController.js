@@ -1037,4 +1037,82 @@ async function getFeeHistory(req, res, next) {
   }
 }
 
-module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getFeeHistory, FEE_HISTORY_MAX_LIMIT };
+async function adjustStudentCredit(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { studentId } = req.params;
+    const { delta, reason } = req.body;
+
+    if (delta === undefined || delta === null) {
+      return res.status(400).json({ error: 'delta is required', code: 'VALIDATION_ERROR' });
+    }
+
+    if (typeof delta !== 'number' || !Number.isFinite(delta)) {
+      return res.status(400).json({ error: 'delta must be a finite number', code: 'VALIDATION_ERROR' });
+    }
+
+    if (typeof reason !== 'string' || reason.trim().length === 0) {
+      return res.status(400).json({ error: 'reason is required and must be a non-empty string', code: 'VALIDATION_ERROR' });
+    }
+
+    const student = await Student.findOne({ schoolId, studentId });
+    if (!student) {
+      const err = new Error('Student not found');
+      err.code = 'NOT_FOUND';
+      err.status = 404;
+      return next(err);
+    }
+
+    const newTotal = (student.creditAdjustments || 0) + delta;
+
+    if (newTotal < 0) {
+      return res.status(400).json({
+        error: `Credit adjustment cannot result in negative total. Current: ${student.creditAdjustments}, Delta: ${delta}`,
+        code: 'INVALID_ADJUSTMENT',
+        current: student.creditAdjustments,
+        delta,
+        resultingTotal: newTotal,
+      });
+    }
+
+    const previousTotal = student.creditAdjustments;
+    student.creditAdjustments = newTotal;
+    await student.save();
+
+    del(KEYS.student(studentId));
+
+    // Audit log
+    if (req.auditContext) {
+      await logAudit({
+        schoolId,
+        action: 'student_credit_adjustment',
+        performedBy: req.auditContext.performedBy,
+        targetId: studentId,
+        targetType: 'student',
+        details: {
+          previousTotal,
+          delta,
+          newTotal,
+          reason,
+        },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    res.json({
+      studentId,
+      creditAdjustments: student.creditAdjustments,
+      delta,
+      previousTotal,
+    });
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message, code: 'VALIDATION_ERROR' });
+    }
+    next(err);
+  }
+}
+
+module.exports = { registerStudent, getAllStudents, getStudent, getPublicStudentInfo, updateStudent, deleteStudent, restoreStudent, getDeletedStudentPayments, getPaymentSummary, bulkImportStudents, getOverdueStudents, resetPayment, reconcileStudent, parseCsvBuffer, exportStudents, getFeeHistory, FEE_HISTORY_MAX_LIMIT, adjustStudentCredit };

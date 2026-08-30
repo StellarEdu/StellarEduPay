@@ -384,6 +384,41 @@ rate older than the currency-conversion service's own cache window
 (`PRICE_CACHE_TTL_MS`, default 60s), independent of the 24h idempotency-record TTL.
 See `backend/tests/idempotencyMiddlewareCurrencyFreshness.test.js` for coverage.
 
+## Schema Versioning
+
+The idempotency store automatically handles schema-changing deployments by embedding a schema version in each cached response. When the application version changes (e.g., a migration adds a required field to the payment response), stale cached responses from the previous schema are automatically evicted and the request is reprocessed.
+
+### How It Works
+
+1. **Storage**: Each cached idempotency record includes a `schemaVersion` field derived from the application's package.json version.
+
+2. **Validation**: When retrieving a cached response, the store compares the stored `schemaVersion` with the current application version (`APP_SCHEMA_VERSION`).
+
+3. **Eviction**: If the versions don't match, the cached entry is automatically deleted from both Redis and MongoDB, forcing a fresh request execution with the new schema.
+
+### Example Scenario
+
+**Before Deployment (v1.0.0)**:
+```
+POST /api/payments/verify { txHash: "abc123" }
+→ Response cached with schemaVersion: "1.0.0"
+```
+
+**After Deployment (v1.1.0)** - Migration adds a new required field:
+```
+POST /api/payments/verify { txHash: "abc123" }
+→ Stored schemaVersion "1.0.0" !== current "1.1.0"
+→ Cache entry evicted
+→ Request reprocessed to generate response with new field
+→ New response cached with schemaVersion: "1.1.0"
+```
+
+### Benefits
+
+- **Safe Deployments**: Schema-changing migrations don't leave stale responses in cache.
+- **Client Compatibility**: Clients always receive responses matching the current schema.
+- **No Manual Intervention**: Automatic eviction requires no cache purge or configuration.
+
 ## Migration Notes
 
 ### Breaking Changes
