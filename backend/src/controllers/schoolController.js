@@ -321,6 +321,114 @@ async function updateSchool(req, res, next) {
   }
 }
 
+// PUT /api/schools/:schoolId/stellar-address
+// Issue #1387: a dedicated, audited wallet-rotation endpoint. Requires the
+// same step-up password confirmation as the stellarAddress path in
+// updateSchool() above, plus a mandatory `reason` — rotating a school's
+// payment-receiving wallet has no legitimate "no reason given" case, and the
+// reason is what makes the audit trail (and docs/runbooks/wallet-rotation.md)
+// useful during an incident review.
+async function rotateStellarAddress(req, res, next) {
+  try {
+    const { stellarAddress, reason, confirmPassword } = req.body || {};
+
+    if (!reason || typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({
+        error: 'A reason is required when rotating a school\'s Stellar wallet address.',
+        code: 'REASON_REQUIRED',
+      });
+    }
+
+    if (!stellarAddress || !StellarSdk.StrKey.isValidEd25519PublicKey(stellarAddress)) {
+      return res.status(400).json({
+        error: 'stellarAddress must be a valid Stellar public key (Ed25519)',
+        code: 'INVALID_STELLAR_ADDRESS',
+      });
+    }
+
+    // Step-up authentication — same pattern as updateSchool()'s stellarAddress
+    // path: a valid admin session alone (requireAdminAuth) is not sufficient
+    // to move where a school's fee payments are received.
+    const expectedPassword = process.env.ADMIN_PASSWORD;
+    const bufExpected = Buffer.from(expectedPassword || '');
+    const bufProvided = Buffer.from(confirmPassword || '');
+    const passwordOk =
+      !!expectedPassword &&
+      !!confirmPassword &&
+      bufExpected.length === bufProvided.length &&
+      crypto.timingSafeEqual(bufExpected, bufProvided);
+
+    if (!passwordOk) {
+      return res.status(403).json({
+        error: 'Password confirmation required for stellarAddress rotation',
+        code: 'STEP_UP_REQUIRED',
+      });
+    }
+
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true });
+    if (!school) {
+      const e = new Error('School not found');
+      e.code = 'NOT_FOUND';
+      return next(e);
+    }
+
+    if (school.stellarAddress === stellarAddress) {
+      return res.status(400).json({
+        error: 'New stellarAddress must differ from the current address',
+        code: 'STELLAR_ADDRESS_UNCHANGED',
+      });
+    }
+
+    const previousStellarAddress = school.stellarAddress;
+
+    // Verify the new Stellar account is funded (non-blocking — same as
+    // updateSchool()'s stellarAddress path).
+    const { warning } = await verifyStellarAccountFunding(stellarAddress);
+
+    school.previousStellarAddress = previousStellarAddress;
+    school.stellarAddress = stellarAddress;
+    // A cursor scoped to the old address has no meaning against the new
+    // address's transaction history — see docs/runbooks/wallet-rotation.md
+    // for draining the old address and confirming no in-flight payments are
+    // missed across the cutover.
+    school.syncCursor = null;
+    await school.save();
+
+    schoolCache.invalidate(school);
+
+    if (req.auditContext) {
+      await logAudit({
+        schoolId: school.schoolId,
+        action: 'school_stellar_address_rotated',
+        performedBy: req.auditContext.performedBy,
+        targetId: school.schoolId,
+        targetType: 'school',
+        details: {
+          previousStellarAddress,
+          newStellarAddress: stellarAddress,
+          reason: reason.trim(),
+          severity: 'high',
+        },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    if (warning) {
+      return res.status(202).json({ ...school.toObject(), warning });
+    }
+
+    res.json(school);
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      const validationErrors = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ errors: validationErrors, code: 'VALIDATION_ERROR' });
+    }
+    next(err);
+  }
+}
+
 // DELETE /api/schools/:schoolSlug  (soft-delete)
 async function deactivateSchool(req, res, next) {
   try {
@@ -560,4 +668,4 @@ async function clearSchoolSetting(req, res, next) {
   }
 }
 
-module.exports = { createSchool, getAllSchools, getSchool, updateSchool, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };
+module.exports = { createSchool, getAllSchools, getSchool, updateSchool, rotateStellarAddress, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };

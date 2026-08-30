@@ -59,6 +59,17 @@ jobs:
       - name: Scan example files for secret material
         run: node scripts/scan-example-secrets.js
 
+  secret-scan-repo:
+    name: Scan repository for committed Stellar secret keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Scan tracked files for Stellar secret key material
+        run: node scripts/scan-repo-secrets.js
+
   migrations:
     name: Validate migration numbering
     runs-on: ubuntu-latest

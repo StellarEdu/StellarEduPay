@@ -29,6 +29,22 @@ const schoolSchema = new mongoose.Schema(
       },
     },
     network:        { type: String, enum: ['testnet', 'mainnet'], default: 'testnet' },
+    /**
+     * The wallet address this school used before its most recent rotation
+     * (issue #1387). Set automatically by PUT /api/schools/:schoolId/stellar-address
+     * whenever stellarAddress changes, so operators can identify the old
+     * address to check for in-flight payments sent during a rotation window —
+     * see docs/runbooks/wallet-rotation.md. Null if the address has never
+     * been rotated.
+     */
+    previousStellarAddress: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (value) => value == null || StellarSdk.StrKey.isValidEd25519PublicKey(value),
+        message: 'previousStellarAddress must be a valid Stellar public key (Ed25519)',
+      },
+    },
     isActive:       { type: Boolean, default: true, index: true },
     /**
      * Horizon paging cursor for the transaction poller (#839).

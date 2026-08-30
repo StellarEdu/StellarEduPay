@@ -229,6 +229,18 @@ const { connect: connectDatabase } = require('./config/database');
 // timeouts, and majority write concern for financial data durability.
 
 connectDatabase().then(async () => {
+  // Resolve the signer master key from the configured secrets provider
+  // (issue #1386) before anything might need to sign a transaction. A no-op
+  // when SIGNER_KEY_SOURCE is unset — signerKeyManager then reads
+  // SIGNER_MASTER_KEY directly, as before.
+  const { initializeMasterKey } = require('./utils/signerKeyManager');
+  try {
+    await initializeMasterKey();
+  } catch (err) {
+    logger.error('[Startup] Failed to resolve signer master key from SIGNER_KEY_SOURCE', { error: err.message });
+    throw err;
+  }
+
   // Start heap monitoring to detect memory leaks early
   startHeapMonitoring();
 

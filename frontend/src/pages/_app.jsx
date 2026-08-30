@@ -75,6 +75,15 @@ MyApp.getInitialProps = async ({ Component, ctx }) => {
     ? Component.getInitialProps(ctx)
     : {});
 
+  // #1385 — robots.txt only asks crawlers not to fetch these URLs; a page
+  // that's still linked from somewhere else can get indexed anyway without
+  // an explicit noindex signal. APP_LAYOUT_ROUTES is exactly the set of
+  // authenticated admin pages (dashboard, audit logs, fee adjustments,
+  // disputes, etc.), so it doubles as the noindex route list.
+  if (ctx.res && APP_LAYOUT_ROUTES.includes(ctx.pathname)) {
+    ctx.res.setHeader("X-Robots-Tag", "noindex");
+  }
+
   const acceptLang = ctx.req?.headers?.["accept-language"] || "";
   const primary = acceptLang
     .split(",")[0]

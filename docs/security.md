@@ -58,6 +58,42 @@ Skipping step 2 (or dropping the previous key before step 3 completes) reproduce
 failure mode: any secret the script hasn't re-encrypted yet becomes unreadable, and signing
 outbound webhooks for that school silently breaks.
 
+## Signer master key secrets management (#1386)
+
+`backend/src/utils/signerKeyManager.js` encrypts every school's Stellar signing secret key at
+rest under a single master key. By default that master key is read from the
+`SIGNER_MASTER_KEY` environment variable, which is the simplest option but has real exposure in
+production: env vars are visible in `docker inspect` output and `/proc/<pid>/environ` on any node
+running the container, in Kubernetes Secret manifests that may end up committed to version
+control or stored unencrypted in `etcd`, and in CI logs that print the environment on failure.
+
+To avoid holding the plaintext key in an env var, set `SIGNER_KEY_SOURCE` and call
+`initializeMasterKey()` once at startup (already wired into `backend/src/app.js`'s boot sequence)
+to resolve it from a real secrets manager instead:
+
+| `SIGNER_KEY_SOURCE` | Behavior |
+|---|---|
+| `env` (default) | `getMasterKey()` reads `SIGNER_MASTER_KEY` directly — unchanged from before this feature. |
+| `aws_secrets_manager` | Fetches the secret named by `SIGNER_MASTER_KEY_SECRET_ID` via `@aws-sdk/client-secrets-manager`, using `AWS_REGION` and the SDK's normal credential provider chain (IAM role, instance profile, etc. — no static AWS keys need to live in this app's config). |
+| `http` | Fetches from any HTTP secrets endpoint at `SIGNER_MASTER_KEY_HTTP_URL` (e.g. a Vault or GCP Secret Manager sidecar/proxy), sending `SIGNER_MASTER_KEY_HTTP_TOKEN` as a bearer token when set. |
+
+Either provider may return the key as a bare 64-character hex string or as JSON
+(`{"SIGNER_MASTER_KEY": "<hex>"}` or `{"key": "<hex>"}`). The resolved key is cached in memory
+only for the life of the process — it is never written back to `process.env` or to disk — and
+`getMasterKey()` prefers it over `SIGNER_MASTER_KEY` whenever `initializeMasterKey()` has
+populated it, so a misconfigured or unreachable provider fails loudly at boot (the process exits
+non-zero, per `backend/src/app.js`) instead of silently falling back to an unset env var.
+
+This does not change key **rotation** mechanics — `reEncryptSecretKey()` and
+`scripts/rotate-signer-master-key.js` still apply; point `SIGNER_MASTER_KEY_OLD` /
+`SIGNER_MASTER_KEY` (or the provider-backed equivalents) at the old and new key material as
+described above.
+
+A dedicated CI job (`scripts/scan-repo-secrets.js`, the `secret-scan-repo` job in
+`.github/workflows/ci.yml`) scans every tracked file in the repository for real Stellar StrKey
+secret keys (`S` + 55 base32 chars) so one can never be committed regardless of which
+`SIGNER_KEY_SOURCE` a deployment uses.
+
 ## Content Security Policy (CSP)
 
 StellarEduPay enforces a Content Security Policy on all HTTP responses to mitigate XSS attacks. The policy is applied at two layers: the Next.js frontend and the Express backend.

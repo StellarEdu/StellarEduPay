@@ -1704,3 +1704,23 @@ html.dark textarea::placeholder { color: var(--text-subtle); }
         .pf-id-input-wrap input {
           padding-left: 2.25rem;
         }
+
+        /* #1384 — mobile responsiveness for the QR/wallet-address/amount
+           payment instructions: WCAG 2.5.5 minimum touch target for copy
+           buttons, and a single-column stack for narrow viewports so the
+           wallet address gets full width instead of being squeezed next to
+           its copy button. */
+        .pf-wrap .btn-sm {
+          min-height: 44px;
+          min-width: 44px;
+        }
+        @media (max-width: 480px) {
+          .pf-code-row {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .pf-code-row .btn {
+            width: 100%;
+            justify-content: center;
+          }
+        }

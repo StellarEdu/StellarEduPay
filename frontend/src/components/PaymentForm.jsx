@@ -43,7 +43,7 @@ function InfoRow({ label, children }) {
       flexWrap: "wrap",
     }}>
       <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", flexShrink: 0 }}>{label}</span>
-      <div style={{ fontWeight: 600, textAlign: "right" }}>{children}</div>
+      <div style={{ fontWeight: 600, textAlign: "right", wordBreak: "break-word", overflowWrap: "anywhere" }}>{children}</div>
     </div>
   );
 }
@@ -388,11 +388,14 @@ export default function PaymentForm({ initialStudentId = "" }) {
                     </span>
                     <div
                       ref={qrWrapperRef}
-                      style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)" }}
+                      style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)", maxWidth: "100%" }}
                     >
+                      {/* #1384 — 200px is the WCAG-friendly minimum for a
+                          scannable QR on a mobile screen; fits comfortably
+                          within a 360px viewport alongside the card padding. */}
                       <QRCodeSVG
                         value={paymentUri}
-                        size={148}
+                        size={200}
                         role="img"
                         aria-label={t("paymentForm.qrAria", { address: instructions.walletAddress })}
                       />
