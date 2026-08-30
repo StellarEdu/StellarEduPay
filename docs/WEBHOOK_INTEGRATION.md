@@ -398,3 +398,51 @@ All webhook URLs are validated at **registration time and again at every send**:
 - **Redirects are disabled** — a 3xx response from the endpoint is treated as a delivery failure (`SSRF_REDIRECT_BLOCKED`).
 - Response bodies are capped at 64 KB.
 - DNS is re-resolved immediately before each delivery (DNS-rebinding defence).
+
+## Delivery history retention (#1414)
+
+Every delivery attempt is recorded in the `webhookdeliveries` collection — one
+document per attempt, per endpoint, per school. A busy deployment produces
+these continuously, so the collection is bounded by a TTL index on `createdAt`
+rather than kept forever.
+
+**Default retention is 90 days.** After that MongoDB removes the record
+automatically; the background TTL monitor runs about once a minute, so deletion
+is prompt but not instant.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `WEBHOOK_DELIVERY_RETENTION_DAYS` | Retention in days | `90` |
+| `WEBHOOK_DELIVERY_TTL_SECONDS` | Retention in seconds; **takes precedence** when set | — |
+
+`WEBHOOK_DELIVERY_TTL_SECONDS` is kept for deployments that already configured
+it, so upgrading does not silently change their retention. New deployments
+should use `WEBHOOK_DELIVERY_RETENTION_DAYS`.
+
+### What this means for you
+
+- **Debugging window.** Delivery history for an endpoint is available for the
+  retention period. Anything you need beyond that — compliance evidence, audit
+  trails — must be exported to your own store before it expires.
+- **Dead-letter counts.** The `webhook_dead_letter_total` metric counts failed
+  deliveries that exhausted their retries. Expired records leave that count, so
+  it reflects the retention window rather than all time.
+
+### Applying it to an existing deployment
+
+Mongoose only creates schema indexes on collections it creates, so a collection
+that predates the TTL declaration will not have the index. Migration
+`028_add_webhook_delivery_ttl_index` adds it, and re-creates it if the
+configured retention has changed — MongoDB will not alter `expireAfterSeconds`
+on an existing index in place.
+
+```bash
+npm run migrate
+```
+
+Verify:
+
+```js
+db.webhookdeliveries.getIndexes()
+// { v: 2, key: { createdAt: 1 }, name: 'createdAt_1', expireAfterSeconds: 7776000 }
+```
