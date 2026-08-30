@@ -191,7 +191,9 @@ router.post(
   validateVerifyPayment,
   verifyPayment,
 );
-router.post("/sync", strictLimiter, requireAdminAuth, auditContext, syncAllPayments);
+// syncLimiter runs after requireAdminAuth on purpose: it keys on
+// req.schoolId, which auth is what populates.
+router.post("/sync", strictLimiter, requireAdminAuth, syncLimiter, auditContext, syncAllPayments);
 router.post("/finalize", requireAdminAuth, auditContext, finalizePayments);
 router.post("/dlq/:id/retry", requireSchoolAuth(), retryDeadLetterJob);
 

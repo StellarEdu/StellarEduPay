@@ -140,6 +140,31 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
 
 const generalLimiter       = rl(15 * 60 * 1000, 100);
 const strictLimiter        = rl(15 * 60 * 1000, 10);
+
+// POST /api/payments/sync triggers a full Horizon sync for one school's wallet.
+// The global limiter is per IP, so one school scripting the endpoint could
+// exhaust the shared Horizon budget, trip the circuit breaker and stall
+// background polling for everyone. This bounds it to one manual sync per school
+// per poll interval - beyond that the background poller already covers it.
+//
+// Keyed on schoolId, falling back to the IP so a request that somehow arrives
+// without school context still gets its own bucket rather than sharing one.
+const SYNC_INTERVAL_MS = parseInt(
+  process.env.SYNC_INTERVAL_MS || process.env.POLL_INTERVAL_MS || '60000',
+  10,
+);
+const SYNC_RL_MSG = {
+  success: false,
+  error: {
+    code: 'SYNC_RATE_LIMITED',
+    message:
+      'A manual sync was already requested for this school recently. ' +
+      'Background polling continues regardless; retry after the interval shown in Retry-After.',
+  },
+};
+const syncLimiter = rl(SYNC_INTERVAL_MS, 1, SYNC_RL_MSG, {
+  keyGenerator: (req) => (req.schoolId ? `sync:${req.schoolId}` : `sync-ip:${req.ip}`),
+});
 const verifyLimiter        = rl(60 * 1000, parseInt(process.env.VERIFY_RATE_LIMIT || '10', 10));
 const reminderTriggerLimiter = rl(
   60 * 1000,
