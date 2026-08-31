@@ -157,7 +157,30 @@ async function approveRefund(refundId, approvedBy) {
   return updated;
 }
 
+// Valid status transitions for a refund. Only the listed target statuses are
+// allowed from each source status. Confirmed and failed are terminal states.
+const REFUND_STATUS_TRANSITIONS = {
+  approval_pending: ['pending', 'failed'],
+  pending:          ['submitted', 'failed'],
+  submitted:        ['confirmed', 'failed'],
+  confirmed:        [],
+  failed:           [],
+};
+
+// All statuses that are defined on the Refund model.
+const VALID_REFUND_STATUSES = Object.keys(REFUND_STATUS_TRANSITIONS);
+
 async function updateRefundStatus(refundId, newStatus, txHash = null, failureReason = null) {
+  // ── 1. Validate newStatus against the model enum before touching the DB ──
+  if (!VALID_REFUND_STATUSES.includes(newStatus)) {
+    const err = new Error(
+      `Invalid refund status "${newStatus}". Must be one of: ${VALID_REFUND_STATUSES.join(', ')}`
+    );
+    err.code = 'INVALID_STATUS';
+    throw err;
+  }
+
+  // ── 2. Load the refund to read its schoolId / originalTxHash for the lock key ──
   const refund = await Refund.findById(refundId);
   if (!refund) {
     const err = new Error('Refund not found');
@@ -165,45 +188,83 @@ async function updateRefundStatus(refundId, newStatus, txHash = null, failureRea
     throw err;
   }
 
-  const previousStatus = refund.status;
-  refund.status = newStatus;
-
-  if (newStatus === 'confirmed' && txHash) {
-    refund.refundTxHash = txHash;
-    refund.confirmedAt = new Date();
-  } else if (newStatus === 'failed' && failureReason) {
-    refund.failureReason = failureReason;
-    refund.failedAt = new Date();
+  // ── 3. Acquire the per-payment distributed lock (same key used by initiateRefund) ──
+  const lockKey = refundLockKey(refund.schoolId, refund.originalTxHash);
+  const acquired = await lock.acquire(lockKey, REFUND_LOCK_TTL_MS);
+  if (!acquired) {
+    const err = new Error('A refund operation for this payment is already in progress. Please try again shortly.');
+    err.code = 'REFUND_LOCK_CONTENDED';
+    throw err;
   }
 
-  const updated = await refund.save();
+  const { token } = acquired;
+  try {
+    // ── 4. Re-fetch inside the lock to get the authoritative current status ──
+    const lockedRefund = await Refund.findById(refundId);
+    if (!lockedRefund) {
+      const err = new Error('Refund not found');
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
 
-  const eventId = uuidv4();
-  await Outbox.create({
-    eventId,
-    eventType: 'refund.status_changed',
-    aggregateId: refund.originalTxHash,
-    aggregateType: 'payment',
-    payload: {
-      refundId: refund._id.toString(),
-      schoolId: refund.schoolId,
-      originalTxHash: refund.originalTxHash,
+    const previousStatus = lockedRefund.status;
+
+    // ── 5. Enforce the legal-transition table ──────────────────────────────
+    const allowedTransitions = REFUND_STATUS_TRANSITIONS[previousStatus];
+    if (!allowedTransitions.includes(newStatus)) {
+      const err = new Error(
+        `Cannot transition refund from "${previousStatus}" to "${newStatus}". ` +
+        (allowedTransitions.length
+          ? `Allowed transitions: ${allowedTransitions.join(', ')}.`
+          : `"${previousStatus}" is a terminal state.`)
+      );
+      err.code = 'INVALID_STATUS_TRANSITION';
+      err.currentStatus = previousStatus;
+      err.requestedStatus = newStatus;
+      throw err;
+    }
+
+    lockedRefund.status = newStatus;
+
+    if (newStatus === 'confirmed' && txHash) {
+      lockedRefund.refundTxHash = txHash;
+      lockedRefund.confirmedAt = new Date();
+    } else if (newStatus === 'failed' && failureReason) {
+      lockedRefund.failureReason = failureReason;
+      lockedRefund.failedAt = new Date();
+    }
+
+    const updated = await lockedRefund.save();
+
+    const eventId = uuidv4();
+    await Outbox.create({
+      eventId,
+      eventType: 'refund.status_changed',
+      aggregateId: lockedRefund.originalTxHash,
+      aggregateType: 'payment',
+      payload: {
+        refundId: lockedRefund._id.toString(),
+        schoolId: lockedRefund.schoolId,
+        originalTxHash: lockedRefund.originalTxHash,
+        previousStatus,
+        newStatus,
+        refundTxHash: lockedRefund.refundTxHash,
+        failureReason,
+      },
+    });
+
+    logger.info('Refund status updated', {
+      schoolId: lockedRefund.schoolId,
+      originalTxHash: lockedRefund.originalTxHash,
+      refundId: lockedRefund._id,
       previousStatus,
       newStatus,
-      refundTxHash: refund.refundTxHash,
-      failureReason,
-    },
-  });
+    });
 
-  logger.info('Refund status updated', {
-    schoolId: refund.schoolId,
-    originalTxHash: refund.originalTxHash,
-    refundId: refund._id,
-    previousStatus,
-    newStatus,
-  });
-
-  return updated;
+    return updated;
+  } finally {
+    await lock.release(lockKey, token);
+  }
 }
 
 async function getRefundsByPayment(schoolId, originalTxHash) {
@@ -224,4 +285,6 @@ module.exports = {
   getRefundsBySchool,
   refundLockKey,
   ACTIVE_REFUND_STATUSES,
+  VALID_REFUND_STATUSES,
+  REFUND_STATUS_TRANSITIONS,
 };
