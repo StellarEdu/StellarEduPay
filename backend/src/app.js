@@ -189,6 +189,7 @@ app.use('/api/webhook-deliveries', webhookDeliveryRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/csp-report', cspReportRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);

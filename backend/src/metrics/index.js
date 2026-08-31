@@ -332,6 +332,13 @@ const horizonRateLimitedTotal = new client.Counter({
   registers: [registry],
 });
 
+const pollingCycleDurationSeconds = new client.Histogram({
+  name: 'polling_cycle_duration_seconds',
+  help: 'Duration of a complete transaction polling cycle in seconds',
+  buckets: [1, 5, 10, 30, 60, 120, 300],
+  registers: [registry],
+});
+
 // mongodb_connection_state — live mongoose readyState (0=disconnected,
 // 1=connected, 2=connecting, 3=disconnecting). Read fresh on each scrape so it
 // reflects reality even across reconnect cycles the app never explicitly logs.
@@ -500,6 +507,7 @@ module.exports = {
   horizonPollMaxDeferralCycles,
   horizonPollRequestsTotal,
   horizonRateLimitedTotal,
+  pollingCycleDurationSeconds,
   syncDurationSeconds,
   paymentProcessingDurationSeconds,
   nodejsHeapUsedRatio,
