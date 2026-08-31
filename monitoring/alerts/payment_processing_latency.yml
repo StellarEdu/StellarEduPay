@@ -1,0 +1,22 @@
+groups:
+  - name: payment_processing_latency
+    interval: 60s
+    rules:
+      # ── Warning: payment processing p95 latency degraded ──────────────────
+      # Track the 95th percentile of payment processing duration from detection
+      # to confirmation. A 10-second threshold matches the README documentation
+      # for acceptable SLA.
+      - alert: PaymentProcessingLatencyHigh
+        expr: >
+          histogram_quantile(0.95, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le)) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payment processing p95 latency above 10s"
+          description: >
+            The 95th-percentile payment processing time (from transaction
+            detection to confirmation) has been above 10 seconds for 5 minutes
+            ({{ $value | printf "%.2f" }}s). Check Horizon polling latency
+            (horizon_request_duration_seconds) and the transaction retry queue
+            depth (queue_depth{queue="transaction-retry"}).

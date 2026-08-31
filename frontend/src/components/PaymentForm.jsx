@@ -329,14 +329,17 @@ export default function PaymentForm({ initialStudentId = "" }) {
                   {student.feePaid ? t("paymentForm.paid") : t("paymentForm.unpaid")}
                 </span>
               </InfoRow>
-              {instructions.minAmount !== undefined && instructions.maxAmount !== undefined && (
-                <InfoRow label={t("paymentForm.paymentLimits")}>
-                  {instructions.minAmount}
-                  <span style={{ marginLeft: "0.25rem", marginRight: "0.5rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
-                  —
-                  {instructions.maxAmount}
-                  <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
-                </InfoRow>
+              {instructions.paymentLimits && (
+                <>
+                  <InfoRow label={t("paymentForm.minAmount")}>
+                    {instructions.paymentLimits.min}
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                  </InfoRow>
+                  <InfoRow label={t("paymentForm.maxAmount")}>
+                    {instructions.paymentLimits.max}
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                  </InfoRow>
+                </>
               )}
 
               {/* #1344 — bookmarkable/shareable payment link for this student */}

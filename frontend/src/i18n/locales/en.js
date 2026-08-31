@@ -244,6 +244,8 @@ const en = {
     fee: "Fee",
     paid: "Paid",
     unpaid: "Unpaid",
+    minAmount: "Minimum Amount",
+    maxAmount: "Maximum Amount",
     linkCopied: "Link copied!",
     shareLink: "Share payment link",
     walletAddress: "Wallet Address",

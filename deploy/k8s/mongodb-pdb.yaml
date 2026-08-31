@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  # mongodb-statefulset.yaml runs replicas: 1 (single-node replica set) — require
+  # the pod to stay available during any voluntary disruption (node drain, cluster
+  # autoscaler scale-down, managed-cluster upgrade) so routine maintenance can
+  # never take the payment database offline.
+  # Once a three-node replica set overlay is available, update minAvailable to 2.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mongodb

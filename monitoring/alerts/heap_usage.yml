@@ -1,0 +1,21 @@
+groups:
+  - name: heap_usage
+    interval: 60s
+    rules:
+      # ── Critical: heap usage sustained above 85% ────────────────────────────
+      # Node.js heap_used_ratio is the ratio of used heap to total heap size.
+      # Above 0.85 for 10 minutes indicates sustained memory pressure and risk
+      # of out-of-memory crashes. Alert immediately.
+      - alert: NodeHeapUsageHigh
+        expr: >
+          nodejs_heap_used_ratio > 0.85
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node.js heap usage above 85%"
+          description: >
+            This instance's Node.js heap utilization has been above 85% for
+            10 minutes ({{ $value | printf "%.1%" }}). Memory pressure is high
+            and an out-of-memory crash is imminent. Check for memory leaks,
+            consider restarting the instance, or increase heap size limits.
