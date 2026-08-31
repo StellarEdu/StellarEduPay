@@ -791,6 +791,8 @@ const fr = {
     updateSuccess: "Élève mis à jour avec succès !",
     updateFailed: "Échec de la mise à jour de l'élève",
     saveChanges: "Enregistrer les modifications",
+    nameRequired: "Le nom est requis",
+    parentEmailInvalid: "Entrez une adresse e-mail valide",
   },
 };
 

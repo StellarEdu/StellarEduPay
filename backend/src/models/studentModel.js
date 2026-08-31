@@ -3,6 +3,7 @@
 const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
 const tenantScope = require('../plugins/tenantScope');
+const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
 
 const feeCategorySchema = new mongoose.Schema(
   {
@@ -40,9 +41,14 @@ const studentSchema = new mongoose.Schema(
      */
     creditAdjustments: { type: Number, default: 0 },
 
-    // Parent contact for fee reminders
+    // Parent contact for fee reminders — encrypted at rest (issue #1480), see
+    // pre('save')/post('init') hooks below and studentPiiEncryption.js.
     parentEmail: { type: String, default: null, trim: true, lowercase: true },
     parentPhone: { type: String, default: null, trim: true },
+    // Deterministic blind-index hash of parentEmail, used for exact-match
+    // lookups (e.g. suppression-list opt-out) since the encrypted value uses
+    // a random IV and isn't matchable across records.
+    parentEmailHash: { type: String, default: null, index: true, select: false },
 
     // Reminder tracking
     lastReminderSentAt: { type: Date, default: null },
@@ -120,6 +126,34 @@ studentSchema.index({ studentId: 1, version: 1 });
 studentSchema.index({ feePaid: 1, class: 1 });
 studentSchema.index({ totalPaid: 1 });
 studentSchema.index({ name: 'text', studentId: 'text' });
+
+// ── Parent contact PII encryption at rest — Issue #1480 ─────────────────────
+// Encrypt parentEmail/parentPhone before persisting, then decrypt them back
+// onto the in-memory document so callers (controllers, reminder/email
+// services) keep working with plaintext. Both operations are no-ops when
+// STUDENT_PII_ENCRYPTION_KEY is not set.
+
+studentSchema.pre('save', function (next) {
+  if (this.isModified('parentEmail') && this.parentEmail != null) {
+    this.parentEmailHash = hashParentEmail(this.parentEmail);
+    this.parentEmail = encryptStudentPii(this.parentEmail);
+  }
+  if (this.isModified('parentPhone') && this.parentPhone != null) {
+    this.parentPhone = encryptStudentPii(this.parentPhone);
+  }
+  next();
+});
+
+studentSchema.post('save', function () {
+  if (this.parentEmail != null) this.parentEmail = decryptStudentPii(this.parentEmail);
+  if (this.parentPhone != null) this.parentPhone = decryptStudentPii(this.parentPhone);
+});
+
+// Decrypt after loading from DB so callers always receive plaintext.
+studentSchema.post('init', function () {
+  if (this.parentEmail != null) this.parentEmail = decryptStudentPii(this.parentEmail);
+  if (this.parentPhone != null) this.parentPhone = decryptStudentPii(this.parentPhone);
+});
 
 studentSchema.pre('save', async function () {
   // Archive overflow fee entries before computing totals.

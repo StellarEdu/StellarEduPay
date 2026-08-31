@@ -95,10 +95,14 @@ async function list({ limit = 50, skip = 0 } = {}) {
 async function _optOutStudents(addr, reason) {
   try {
     const Student = require('../../models/studentModel');
+    const { hashParentEmail } = require('../studentPiiEncryption');
     // Cross-school infrastructure op: a suppressed address may belong to any
     // tenant, so we bypass tenant scoping (the address itself is the scope).
+    // parentEmail is encrypted at rest (issue #1480) with a random IV per
+    // record, so it can't be matched directly — match on its deterministic
+    // blind-index hash instead.
     const res = await Student.updateMany(
-      { $or: [{ parentEmail: addr }, { contactEmail: addr }], reminderOptOut: { $ne: true } },
+      { $or: [{ parentEmailHash: hashParentEmail(addr) }, { contactEmail: addr }], reminderOptOut: { $ne: true } },
       { $set: { reminderOptOut: true } },
       { _bypassTenantScope: true }
     );

@@ -6,6 +6,7 @@ const { get, set, del, KEYS, TTL } = require('../cache');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
 const { logAudit } = require('../services/auditService');
+const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
 
 async function registerStudent(req, res, next) {
   // Declared in the function scope (not inside try) so the 11000 duplicate-key
@@ -708,6 +709,8 @@ async function bulkImportStudents(req, res, next) {
         continue;
       }
 
+      const rawParentEmail = row.parentEmail ? row.parentEmail.trim().toLowerCase() : null;
+      const rawParentPhone = row.parentPhone ? row.parentPhone.trim() : null;
       validatedRows.push({
         index: i,
         schoolId,
@@ -715,8 +718,11 @@ async function bulkImportStudents(req, res, next) {
         name: row.name.trim(),
         class: row.class.trim(),
         feeAmount: assignedFee,
-        parentEmail: row.parentEmail ? row.parentEmail.trim().toLowerCase() : null,
-        parentPhone: row.parentPhone ? row.parentPhone.trim() : null,
+        // insertMany() below bypasses the model's pre('save') encryption
+        // hook (issue #1480), so parentEmail/parentPhone are encrypted here.
+        parentEmail: encryptStudentPii(rawParentEmail),
+        parentPhone: encryptStudentPii(rawParentPhone),
+        parentEmailHash: hashParentEmail(rawParentEmail),
       });
     }
 
@@ -808,7 +814,15 @@ async function getOverdueStudents(req, res, next) {
       feePaid: false,
       paymentDeadline: { $lt: now, $ne: null },
     }).lean();
-    res.json(students.map(s => ({ ...s, isOverdue: true })));
+    // .lean() bypasses the decrypt-on-load hook in studentModel.js, so
+    // parentEmail/parentPhone (encrypted at rest, issue #1480) must be
+    // decrypted explicitly here before they reach the API response.
+    res.json(students.map(s => ({
+      ...s,
+      parentEmail: decryptStudentPii(s.parentEmail),
+      parentPhone: decryptStudentPii(s.parentPhone),
+      isOverdue: true,
+    })));
   } catch (err) {
     next(err);
   }
