@@ -909,6 +909,8 @@ async function reconcileStudent(req, res, next) {
 }
 
 // GET /api/students/export
+const MAX_EXPORT_ROWS = 50000;
+
 async function exportStudents(req, res, next) {
   try {
     const { schoolId } = req;
@@ -936,9 +938,20 @@ async function exportStudents(req, res, next) {
       }
     }
 
+    const rowCount = await Student.countDocuments(filter);
+    if (rowCount > MAX_EXPORT_ROWS) {
+      return res.status(400).json({
+        error: `Export exceeds maximum of ${MAX_EXPORT_ROWS} rows. Current matching records: ${rowCount}. Please apply filters to reduce the result set.`,
+        code: 'EXPORT_TOO_LARGE',
+        maxRows: MAX_EXPORT_ROWS,
+        matchingRows: rowCount,
+      });
+    }
+
     const date = new Date().toISOString().slice(0, 10);
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="students-${date}.csv"`);
+    res.setHeader('Transfer-Encoding', 'chunked');
 
     const baseColumns = ['studentId', 'name', 'class', 'feeAmount', 'totalPaid', 'remainingBalance', 'feePaid', 'createdAt'];
     const columns = includeDeleted ? [...baseColumns, 'deletedAt'] : baseColumns;
