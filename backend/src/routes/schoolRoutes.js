@@ -8,6 +8,7 @@ const {
   getSchool,
   updateSchool,
   rotateStellarAddress,
+  rotateWebhookSecret,
   deactivateSchool,
   deactivateSchoolEndpoint,
   activateSchool,
@@ -30,6 +31,9 @@ router.delete('/:schoolId',     requireAdminAuth, auditContext, deactivateSchool
 
 // Dedicated wallet-rotation endpoint — step-up auth + mandatory reason (#1387)
 router.put('/:schoolId/stellar-address', requireAdminAuth, auditContext, rotateStellarAddress);
+
+// Dedicated webhookSecret rotation endpoint — step-up auth (#1412)
+router.put('/:schoolId/webhook-secret', requireAdminAuth, auditContext, rotateWebhookSecret);
 
 // Explicit activate / deactivate endpoints
 router.patch('/:schoolId/deactivate', requireAdminAuth, auditContext, deactivateSchoolEndpoint);

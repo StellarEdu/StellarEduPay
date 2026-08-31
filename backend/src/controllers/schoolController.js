@@ -429,6 +429,67 @@ async function rotateStellarAddress(req, res, next) {
   }
 }
 
+// PUT /api/schools/:schoolId/webhook-secret
+// Issue #1412: regenerating webhookSecret controls webhook signature
+// verification, so — like stellarAddress — it requires the same step-up
+// password confirmation before a new session-hijacked admin can silently
+// take over webhook delivery for a school.
+async function rotateWebhookSecret(req, res, next) {
+  try {
+    const { confirmPassword } = req.body || {};
+
+    const expectedPassword = process.env.ADMIN_PASSWORD;
+    const bufExpected = Buffer.from(expectedPassword || '');
+    const bufProvided = Buffer.from(confirmPassword || '');
+    const passwordOk =
+      !!expectedPassword &&
+      !!confirmPassword &&
+      bufExpected.length === bufProvided.length &&
+      crypto.timingSafeEqual(bufExpected, bufProvided);
+
+    if (!passwordOk) {
+      return res.status(403).json({
+        error: 'Password confirmation required for webhookSecret rotation',
+        code: 'STEP_UP_REQUIRED',
+      });
+    }
+
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true });
+    if (!school) {
+      const e = new Error('School not found');
+      e.code = 'NOT_FOUND';
+      return next(e);
+    }
+
+    const newSecret = crypto.randomBytes(32).toString('hex');
+    school.webhookSecret = newSecret;
+    await school.save();
+
+    schoolCache.invalidate(school);
+
+    if (req.auditContext) {
+      await logAudit({
+        schoolId: school.schoolId,
+        action: 'school_webhook_secret_rotated',
+        performedBy: req.auditContext.performedBy,
+        targetId: school.schoolId,
+        targetType: 'school',
+        details: { severity: 'high' },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    // The plaintext secret is only ever returned once, at rotation time — it
+    // is encrypted at rest (schoolModel's pre-save hook) and never included
+    // in getSchool()'s projection.
+    res.json({ webhookSecret: newSecret });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // DELETE /api/schools/:schoolSlug  (soft-delete)
 async function deactivateSchool(req, res, next) {
   try {
@@ -668,4 +729,4 @@ async function clearSchoolSetting(req, res, next) {
   }
 }
 
-module.exports = { createSchool, getAllSchools, getSchool, updateSchool, rotateStellarAddress, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };
+module.exports = { createSchool, getAllSchools, getSchool, updateSchool, rotateStellarAddress, rotateWebhookSecret, deactivateSchool, deactivateSchoolEndpoint, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };

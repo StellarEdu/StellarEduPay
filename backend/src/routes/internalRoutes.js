@@ -12,8 +12,10 @@ const express = require('express');
 const router = express.Router();
 const { backupHeartbeat } = require('../controllers/backupHeartbeatController');
 const { backupVerificationHeartbeat } = require('../controllers/backupVerificationHeartbeatController');
+const { backupRestoreTestHeartbeat } = require('../controllers/backupRestoreTestHeartbeatController');
 
 router.post('/backup-heartbeat', backupHeartbeat);
 router.post('/backup-verification-heartbeat', backupVerificationHeartbeat);
+router.post('/backup-restore-test-heartbeat', backupRestoreTestHeartbeat);
 
 module.exports = router;

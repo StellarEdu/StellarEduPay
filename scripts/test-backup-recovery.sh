@@ -23,6 +23,8 @@ MONGO_URI="${MONGO_URI:?MONGO_URI is required}"
 DB_NAME="${DB_NAME:-stellaredupay}"
 TEST_BACKUP_DIR="$(mktemp -d)"
 BACKUP_FILE="${TEST_BACKUP_DIR}/test-backup.gz"
+BACKEND_INTERNAL_URL="${BACKEND_INTERNAL_URL:-http://localhost:5000}"
+BACKUP_NOTIFY_TOKEN="${BACKUP_NOTIFY_TOKEN:-}"
 
 cleanup() { rm -rf "${TEST_BACKUP_DIR}"; }
 trap cleanup EXIT
@@ -125,6 +127,16 @@ echo ""
 if [[ "${FAILED}" -eq 0 ]]; then
   echo "✅  PASS — document count, indexes, and field-level content all match."
   echo "    The backup is safely restorable."
+  if [[ -n "${BACKUP_NOTIFY_TOKEN}" ]]; then
+    if ! curl -sf -X POST "${BACKEND_INTERNAL_URL}/api/internal/backup-restore-test-heartbeat" \
+        -H "Authorization: Bearer ${BACKUP_NOTIFY_TOKEN}" >/dev/null; then
+      echo "    WARNING: restore-test heartbeat to ${BACKEND_INTERNAL_URL} failed (metric may be stale)" >&2
+    else
+      echo "    Restore-test heartbeat sent to ${BACKEND_INTERNAL_URL}"
+    fi
+  else
+    echo "    WARNING: BACKUP_NOTIFY_TOKEN is not set — last_backup_restore_test_age_seconds will not be updated" >&2
+  fi
   exit 0
 else
   echo "❌  FAIL — the restored database does not faithfully match the source." >&2

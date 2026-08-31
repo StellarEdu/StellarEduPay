@@ -66,6 +66,26 @@ groups:
             BACKEND_INTERNAL_URL.
           runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
 
+      # ── Warning: weekly CI restore test has not succeeded within 8 days ──
+      # last_backup_restore_test_age_seconds is recomputed on every scrape by
+      # backend/src/metrics/index.js from the timestamp recorded via
+      # POST /api/internal/backup-restore-test-heartbeat, which the weekly
+      # backup-restore-test GitHub Actions job calls after
+      # scripts/test-backup-recovery.sh succeeds. See issue #1413.
+      - alert: BackupRestoreTestStale
+        expr: last_backup_restore_test_age_seconds > 691200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup restore CI test has not succeeded in over 8 days"
+          description: >
+            last_backup_restore_test_age_seconds is
+            {{ $value | humanizeDuration }} (threshold: 8 days). The
+            weekly backup-restore-test CI workflow may have failed
+            silently. Check the workflow run history in GitHub Actions.
+          runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
       # ── Warning: backup restore has not been verified within 8 days ──────
       # last_backup_verification_age_seconds is recomputed on every scrape by
       # backend/src/metrics/index.js from the timestamp recorded via
