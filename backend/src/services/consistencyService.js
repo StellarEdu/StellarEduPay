@@ -1,22 +1,27 @@
 'use strict';
 
-const { server } = require('../config/stellarConfig');
+const { horizonClient } = require('../config/stellarConfig');
+const { withStellarRetry } = require('../utils/withStellarRetry');
 const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const School = require('../models/schoolModel');
+const logger = require('../utils/logger').child('ConsistencyService');
 
 const CHAIN_PAGE_SIZE = 200;
 const CHAIN_MAX_PAGES = 50; // hard ceiling so a stuck cursor can't loop forever
 const DEFAULT_CHAIN_LOOKBACK_DAYS = parseInt(process.env.RECONCILIATION_CHAIN_LOOKBACK_DAYS, 10) || 90;
 
 /**
- * Fetch transactions for a given wallet address from Horizon, paging with a
- * cursor (consistent with transactionPollingService) instead of a single
- * 200-record page. Stops once transactions older than `lookbackDays` are
- * reached, so large, long-lived wallets don't get scanned back to genesis.
+ * Fetch transactions for a given wallet address from Horizon with full pagination
+ * support, routing through the rate-limited client infrastructure.
+ *
+ * Issue #1479: Use horizonClient.call() and withStellarRetry for rate limiting
+ * instead of calling server directly, and implement cursor-based pagination to
+ * cover complete transaction histories beyond the first 200 records.
  *
  * @param {string} walletAddress
  * @param {{ lookbackDays?: number }} [options] lookbackDays <= 0 disables the window.
+ * @returns {Promise<Array>} Array of all matching transactions
  */
 async function fetchChainTransactions(walletAddress, { lookbackDays = DEFAULT_CHAIN_LOOKBACK_DAYS } = {}) {
   const cutoff = lookbackDays > 0 ? Date.now() - lookbackDays * 24 * 60 * 60 * 1000 : null;
@@ -24,22 +29,47 @@ async function fetchChainTransactions(walletAddress, { lookbackDays = DEFAULT_CH
   let cursor = null;
 
   for (let page = 0; page < CHAIN_MAX_PAGES; page++) {
-    let builder = server.transactions().forAccount(walletAddress).order('desc').limit(CHAIN_PAGE_SIZE);
-    if (cursor) builder = builder.cursor(cursor);
+    // Issue #1479: Route through rate-limited horizonClient and withStellarRetry
+    const result = await withStellarRetry(
+      () => horizonClient.call(
+        (server) => {
+          let builder = server.transactions()
+            .forAccount(walletAddress)
+            .order('desc')
+            .limit(CHAIN_PAGE_SIZE);
+          if (cursor) builder = builder.cursor(cursor);
+          return builder.call();
+        }
+      ),
+      { label: 'FetchChainTransactions', context: `for account ${walletAddress}` }
+    );
 
-    const result = await builder.call();
     const batch = result.records || [];
     if (batch.length === 0) break;
 
     for (const tx of batch) {
       if (cutoff && new Date(tx.created_at).getTime() < cutoff) {
+        logger.info('Reached lookback cutoff', {
+          walletAddress,
+          lookbackDays,
+          recordsScanned: records.length,
+          cutoffTime: new Date(cutoff).toISOString(),
+        });
         return records; // reached the lookback boundary — stop paginating
       }
       records.push(tx);
       cursor = tx.paging_token;
     }
 
-    if (batch.length < CHAIN_PAGE_SIZE) break; // drained
+    if (batch.length < CHAIN_PAGE_SIZE) {
+      // Drained all available records
+      logger.info('Pagination complete', {
+        walletAddress,
+        totalRecords: records.length,
+        pagesScanned: page + 1,
+      });
+      break;
+    }
   }
 
   return records;
