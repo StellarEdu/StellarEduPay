@@ -612,9 +612,12 @@ function _recordBudgetMetrics(stats) {
 async function pollAllSchools() {
   if (!isPolling) return;
 
+  const cycleId = require('../utils/correlationId').generateId();
+  const cycleStartTime = Date.now();
+
   try {
     const schools = await School.find({ isActive: true });
-    
+
     if (schools.length === 0) {
       logger.debug('No active schools to poll');
       scheduleNextPoll();
@@ -705,15 +708,38 @@ async function pollAllSchools() {
       _markPollSuccess();
     }
 
+    const cycleDurationMs = Date.now() - cycleStartTime;
+    const budgetStats = pollBudget.getStats();
+
+    logger.info('Polling cycle summary', {
+      cycleId,
+      schoolsPolled: schools.length,
+      transactionsProcessed: summary.processed,
+      transactionsSkipped: summary.skipped,
+      newPayments: summary.processed,
+      durationMs: cycleDurationMs,
+      budgetPagesUsed: budgetStats.consumedThisCycle || 0,
+      errors: summary.errors,
+      rateLimited: summary.rateLimited,
+    });
+
+    // Emit polling cycle duration metric
+    try {
+      require('../metrics').pollingCycleDurationSeconds.observe(cycleDurationMs / 1000);
+    } catch (_) {
+      // metrics module unavailable
+    }
+
     if (summary.processed > 0 || summary.errors > 0) {
       logger.info('Polling cycle completed', summary);
     }
   } catch (error) {
+    const cycleDurationMs = Date.now() - cycleStartTime;
     consecutiveErrors++;
     _markPollFailure();
     const backoff = Math.min(SYNC_INTERVAL_MS * Math.pow(2, consecutiveErrors), POLL_MAX_BACKOFF_MS);
     currentIntervalMs = backoff;
-    logger.error('Error in polling cycle', { error: error.message, nextIntervalMs: currentIntervalMs });
+    logger.error('Error in polling cycle', { cycleId, durationMs: cycleDurationMs, error: error.message, nextIntervalMs: currentIntervalMs });
   }
 
   // Record heartbeat after every cycle (success or error) so the health check
