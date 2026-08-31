@@ -38,6 +38,22 @@ const syncDurationSeconds = new client.Histogram({
   registers: [registry],
 });
 
+// payment_processing_duration_seconds — latency of the full payment confirmation
+// pipeline from transaction detection to SUCCESS status (recorded in paymentConfirmationStateMachine)
+const paymentProcessingDurationSeconds = new client.Histogram({
+  name: 'payment_processing_duration_seconds',
+  help: 'Duration of payment processing from detection to confirmation in seconds',
+  buckets: [0.5, 1, 2, 5, 10, 30, 60, 120],
+  registers: [registry],
+});
+
+// nodejs_heap_used_ratio — heap utilization ratio from heapMonitoring.js
+const nodejsHeapUsedRatio = new client.Gauge({
+  name: 'nodejs_heap_used_ratio',
+  help: 'Node.js heap usage as a ratio of total heap size (0.0 to 1.0)',
+  registers: [registry],
+});
+
 // queue_depth{queue} — queried live from BullMQ on each scrape.
 // Tracks actionable (non-completed) jobs: waiting + active + delayed.
 new client.Gauge({
@@ -485,6 +501,8 @@ module.exports = {
   horizonPollRequestsTotal,
   horizonRateLimitedTotal,
   syncDurationSeconds,
+  paymentProcessingDurationSeconds,
+  nodejsHeapUsedRatio,
   httpRequestDurationSeconds,
   suspiciousPaymentFlagged,
   paymentLimitTriggeredTotal,
