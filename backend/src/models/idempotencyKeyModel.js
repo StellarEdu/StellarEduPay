@@ -41,6 +41,11 @@ const idempotencyKeySchema = new mongoose.Schema({
   // Not required: an in_progress reservation has no response yet.
   responseStatus: { type: Number, default: null },
   responseBody: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Schema version of the cached response. When the application version changes
+  // (e.g. a migration adds a required field to the response), a stale response
+  // with a different schemaVersion is evicted and the request is reprocessed.
+  // Derived from the application package.json version.
+  schemaVersion: { type: String, default: null },
   createdAt: { type: Date, default: Date.now, expires: TTL_SECONDS },
 });
 
