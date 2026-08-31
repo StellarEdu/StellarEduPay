@@ -30,6 +30,7 @@ const {
   isConfirmedOrAbove,
 } = require("./paymentConfirmationStateMachine");
 const logger = require("../utils/logger").child("StellarService");
+const { getEngineForSchool } = require("./feeAdjustmentEngine");
 
 // TTL for the per-student balance lock (#1026), shared with paymentController's
 // verifyPayment. Guards the read-aggregate-then-write sequence that computes
@@ -162,6 +163,54 @@ function validatePaymentAgainstFee(paymentAmount, expectedFee) {
     excessAmount: 0,
     message: "Payment matches the required fee",
   };
+}
+
+/**
+ * Calculate adjusted fee using the DynamicFeeAdjustmentEngine and validate payment.
+ * Issue #1474: Wires the fee adjustment engine into the live payment validation path.
+ *
+ * @param {string} schoolId - School ID for tenant isolation
+ * @param {number} paymentAmount - The amount the student paid
+ * @param {number} baseFee - The base fee amount
+ * @param {Object} context - Fee calculation context (promoCode, isEarly, etc.)
+ * @returns {Object} Validation result with status, finalFee, and adjustments
+ */
+function validatePaymentWithDynamicFee(schoolId, paymentAmount, baseFee, context = {}) {
+  try {
+    const engine = getEngineForSchool(schoolId);
+    const feeCalculation = engine.calculateFee({
+      baseAmount: baseFee,
+      schoolId,
+      ...context,
+    });
+
+    const finalFee = feeCalculation.finalFee;
+    const validation = validatePaymentAgainstFee(paymentAmount, finalFee);
+
+    return {
+      ...validation,
+      baseFee,
+      finalFee,
+      adjustments: feeCalculation.adjustments,
+      effectiveRate: feeCalculation.effectiveRate,
+    };
+  } catch (err) {
+    logger.error('Fee adjustment engine error', {
+      schoolId,
+      paymentAmount,
+      baseFee,
+      error: err.message,
+    });
+
+    // Fallback to non-adjusted fee validation on engine error
+    return {
+      ...validatePaymentAgainstFee(paymentAmount, baseFee),
+      baseFee,
+      finalFee: baseFee,
+      adjustments: [],
+      fallbackToBaseFee: true,
+    };
+  }
 }
 
 async function getLatestLedgerSequence(label) {
@@ -1083,6 +1132,7 @@ module.exports = {
   verifyTransaction,
   parseIncomingTransaction,
   validatePaymentAgainstFee,
+  validatePaymentWithDynamicFee,
   detectAsset,
   normalizeAmount,
   extractValidPayment,

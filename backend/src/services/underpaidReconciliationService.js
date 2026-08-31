@@ -24,6 +24,7 @@ const logger = require('../utils/logger');
 const lock = require('./distributedLock');
 const { logAudit } = require('./auditService');
 const { compareMoney } = require('../utils/money');
+const refundService = require('./refundService');
 
 // Shares the same TTL convention as the other callers of the per-student
 // balance lock (paymentController.verifyPayment, stellarService.syncPaymentsForSchool).
@@ -236,13 +237,20 @@ async function applyPartialCredit(paymentId, creditAmount, creditAppliedBy, scho
 }
 
 /**
- * Initiate refund for an underpaid payment
- * Marks payment as refund-eligible and creates audit trail
+ * Initiate refund for an underpaid payment using the safe, centralized refund service.
+ * Issue #1472: Consolidate refund mechanisms to use the approved refundService workflow.
+ *
+ * This function delegates to refundService.initiateRefund to ensure:
+ * - Distributed lock prevents concurrent refunds of the same payment
+ * - Maker-checker approval workflow enforces two-operator review
+ * - Duplicate refund guards prevent multiple refunds for one payment
+ *
  * @param {string} paymentId - Payment document ID or txHash
  * @param {string} refundInitiatedBy - User/admin initiating the refund
  * @param {string} schoolId - School ID for tenant scope
  * @param {string} refundNote - Optional note about the refund reason
- * @returns {Promise<object>} Updated payment document
+ * @returns {Promise<object>} Refund document created via refundService
+ * @throws Error if payment not found, not underpaid, or refund workflow fails
  */
 async function initiateRefund(paymentId, refundInitiatedBy, schoolId, refundNote = null) {
   // Find payment by ID or txHash (same isValid() guard as applyPartialCredit)
@@ -277,26 +285,34 @@ async function initiateRefund(paymentId, refundInitiatedBy, schoolId, refundNote
     );
   }
 
-  const now = new Date();
+  // Delegate to the safe refundService for the actual refund initiation workflow.
+  // This ensures:
+  //   - Distributed lock prevents concurrent refund attempts
+  //   - Maker-checker approval (two-operator review) is enforced
+  //   - Duplicate refunds are prevented by ACTIVE_REFUND_STATUSES guard
+  //   - Refund document is properly stored with audit trail
+  const reason = refundNote || 'Underpaid payment reconciliation';
+  const refund = await refundService.initiateRefund(
+    schoolId,
+    payment.txHash,
+    payment.studentId,
+    payment.amount,
+    reason,
+    refundInitiatedBy
+  );
 
-  // Mark as refund-initiated (actual refund transaction would update this to refund_completed)
-  payment.underpaidReconciliation.status = 'refund_initiated';
-  payment.underpaidReconciliation.refundInitiatedAt = now;
-  payment.underpaidReconciliation.refundNote = refundNote;
-  await payment.save();
-
-  logger.info('[UnderpaidReconciliation] Refund initiated', {
+  logger.info('[UnderpaidReconciliation] Refund initiated via refundService', {
     paymentId: payment._id,
     txHash: payment.txHash,
     schoolId: payment.schoolId,
     studentId: payment.studentId,
+    refundId: refund._id,
     amount: payment.amount,
     refundInitiatedBy,
-    refundNote,
-    timestamp: now.toISOString(),
+    reason,
   });
 
-  return payment;
+  return refund;
 }
 
 /**
