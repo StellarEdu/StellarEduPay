@@ -209,14 +209,18 @@ jobs:
         run: npm run migrate
       - run: npm test
 
-  # ── #1288: Test coverage measurement ───────────────────────────────────────
+  # ── #1389: Test coverage enforcement ───────────────────────────────────────
   # Collects backend (root jest config) and frontend coverage and uploads the
   # reports as downloadable artefacts on every PR, so reviewers can inspect
-  # exactly which code paths a change exercises. This job is intentionally
-  # NON-GATING for now: the suite is currently red (see issue #1288's blocked
-  # prerequisite), so a low/zero baseline must not block merges yet. Once the
-  # suite is green the per-directory thresholds in the jest configs and this
-  # job can be promoted to a required check.
+  # exactly which code paths a change exercises. Per-directory Jest
+  # coverageThreshold values are configured in package.json (backend) and
+  # frontend/jest.config.js (frontend). Jest exits non-zero when any threshold
+  # is breached, so this job is GATING via the ci-gate job below.
+  #
+  # Threshold ladder (raise incrementally as coverage improves):
+  #   - Start: global 46 % branches / 37 % functions / 51 % lines (backend)
+  #            global 47 % branches / 22 % functions / 39 % lines (frontend)
+  #   - Target: raise each value by ~5 pp per sprint until ≥ 80 % globally.
   coverage:
     name: Test coverage report
     runs-on: ubuntu-latest
@@ -344,3 +348,29 @@ jobs:
           docker tag stellaredupay/frontend:ci stellaredupay/frontend:${{ steps.meta.outputs.tag }}
           echo "Backend:  stellaredupay/backend:${{ steps.meta.outputs.tag }}"
           echo "Frontend: stellaredupay/frontend:${{ steps.meta.outputs.tag }}"
+
+  # ── #1389: Required gate ─────────────────────────────────────────────────
+  # A single job that every branch-protection rule needs to require. Add this
+  # job name ("CI gate") as the sole required status check in GitHub's branch
+  # protection settings for `main`. It fans in `test` and `coverage` so that
+  # a Jest coverage-threshold breach blocks the PR just like a test failure
+  # does. Add any other must-pass jobs to the `needs` list here rather than
+  # registering many individual required checks.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    needs:
+      - version-drift
+      - audit
+      - secret-scan
+      - secret-scan-repo
+      - migrations
+      - orphan-dirs
+      - k8s-ingress-tls
+      - lint-backend
+      - lint-frontend
+      - build-frontend
+      - test
+      - coverage
+    steps:
+      - run: echo "All required checks passed."
