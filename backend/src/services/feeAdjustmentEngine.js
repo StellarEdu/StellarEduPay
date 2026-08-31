@@ -227,10 +227,44 @@ class DynamicFeeAdjustmentEngine {
   }
 }
 
-// Export singleton instance
+// Multi-tenant engine registry (Issue #1475: prevent cross-tenant rule leakage)
+// Maps schoolId → engine instance, ensuring rules are isolated by school
+const enginesBySchool = new Map();
+
+/**
+ * Factory function to get or create a fee adjustment engine for a given school.
+ * Ensures that promotional rules created by one school do not leak to others.
+ *
+ * @param {string} schoolId - School ID for tenant isolation
+ * @returns {DynamicFeeAdjustmentEngine} - School-specific engine instance
+ */
+function getEngineForSchool(schoolId) {
+  if (!schoolId || typeof schoolId !== 'string') {
+    throw new Error('schoolId is required and must be a string');
+  }
+
+  if (!enginesBySchool.has(schoolId)) {
+    enginesBySchool.set(schoolId, new DynamicFeeAdjustmentEngine());
+  }
+
+  return enginesBySchool.get(schoolId);
+}
+
+/**
+ * Clear all cached engine instances (primarily for testing).
+ * Production code should not call this.
+ */
+function clearEngineCache() {
+  enginesBySchool.clear();
+}
+
+// For backward compatibility with tests, export the default singleton-style engine
+// (deprecated; new code should use getEngineForSchool)
 const feeEngine = new DynamicFeeAdjustmentEngine();
 
 module.exports = {
   DynamicFeeAdjustmentEngine,
-  feeEngine
+  feeEngine,
+  getEngineForSchool,
+  clearEngineCache,
 };
