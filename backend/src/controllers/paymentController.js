@@ -112,6 +112,8 @@ async function getPaymentInstructions(req, res, next) {
       memo: req.params.studentId,
       acceptedAssets: Object.values(ACCEPTED_ASSETS).map((a) => ({ code: a.code, type: a.type, displayName: a.displayName, issuer: a.issuer ?? null })),
       paymentLimits: { min: limits.min, max: limits.max },
+      minAmount: limits.min,
+      maxAmount: limits.max,
       feeAmount,
       feeCategory: feeCategory || null,
       categoryInfo,
