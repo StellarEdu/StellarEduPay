@@ -49,7 +49,14 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
     { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
   ]).session(session);
 
-  const cumulativeTotal = paymentAgg.length ? decimalFromMongo(paymentAgg[0].total) : toMoney(0);
+  const paymentTotal = paymentAgg.length ? decimalFromMongo(paymentAgg[0].total) : toMoney(0);
+
+  // Include creditAdjustments in the cumulative total (Issue #1473).
+  // creditAdjustments represent manual partial-credit overrides applied by admins
+  // and must be included in the expected total so they are never silently reverted
+  // by subsequent reconciliation or balance update runs.
+  const creditAdjustments = toMoney(student.creditAdjustments || 0);
+  const cumulativeTotal = toMoney(paymentTotal.plus(creditAdjustments));
   const classification = classifyFeePayment(cumulativeTotal, student.feeAmount);
 
   // Compute top-level student balance
