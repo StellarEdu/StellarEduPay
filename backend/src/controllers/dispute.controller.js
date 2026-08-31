@@ -14,7 +14,7 @@ const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
-const { fireWebhook, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
+const { fireWebhook, fireWebhookToEndpoints, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
 const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
@@ -98,16 +98,33 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
   // Route through the dispute.* notification helpers so the payload shape stays
   // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).
   try {
-    const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1 });
-    if (school && school.webhookUrl) {
-      const secret = school.webhookSecret || null;
-      if (eventName === 'dispute.created') {
-        await notifyDisputeCreated(school.webhookUrl, disputeDoc, secret);
-      } else if (holdLifted) {
-        await notifyDisputeResolved(school.webhookUrl, disputeDoc, secret);
-      } else {
-        // Intermediate transitions (under_review / reopened) keep their own event name.
-        await fireWebhook(school.webhookUrl, eventName, {
+    const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
+    const webhookUrl = school?.webhookUrl || null;
+    const secret = school?.webhookSecret || null;
+
+    // #1478: Route through both unified per-endpoint system and legacy single-URL
+    if (eventName === 'dispute.created') {
+      await notifyDisputeCreated(webhookUrl, disputeDoc, secret, schoolId);
+    } else if (holdLifted) {
+      await notifyDisputeResolved(webhookUrl, disputeDoc, secret, schoolId);
+    } else if (webhookUrl || school) {
+      // Intermediate transitions (under_review / reopened) keep their own event name.
+      // Still fire through unified system if school exists
+      if (school) {
+        const allowedFields = school.webhookPayloadConfig?.allowedFields || null;
+        await fireWebhookToEndpoints(schoolId, eventName, {
+          disputeId:  String(disputeDoc._id),
+          schoolId,
+          txHash:     disputeDoc.txHash,
+          studentId:  disputeDoc.studentId,
+          status:     disputeDoc.status,
+          resolvedBy: disputeDoc.resolvedBy,
+          updatedAt:  disputeDoc.updatedAt,
+        }, allowedFields);
+      }
+      // Fallback to legacy path
+      if (webhookUrl) {
+        await fireWebhook(webhookUrl, eventName, {
           disputeId:  String(disputeDoc._id),
           schoolId,
           txHash:     disputeDoc.txHash,

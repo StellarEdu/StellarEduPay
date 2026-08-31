@@ -12,6 +12,10 @@ const WEBHOOK_EVENTS = [
   'payment.failed',
   'payment.suspicious',
   'payment.refunded',
+  'dispute.created',
+  'dispute.resolved',
+  'refund.initiated',
+  'refund.completed',
 ];
 
 /**

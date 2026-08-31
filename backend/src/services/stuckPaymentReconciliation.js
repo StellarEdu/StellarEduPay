@@ -5,7 +5,12 @@ const { enqueueTransaction } = require('../queue/transactionQueue');
 const { resolveCorrelationId } = require('../utils/correlationId');
 const logger = require('../utils/logger').child('StuckPaymentReconciliation');
 
-const STUCK_PAYMENT_THRESHOLD_MS = parseInt(process.env.STUCK_PAYMENT_THRESHOLD_MS, 10) || 5 * 60 * 1000;
+// Issue #1477: Increased from 5 minutes to 15 minutes to account for legitimate poll
+// deferrals under Horizon rate-limit pressure. The poll-budget system explicitly
+// expects that confirmation checks may be deferred across multiple cycles under load.
+// A payment in SUBMITTED status for 5 minutes is likely just waiting for the next
+// poll cycle budget allocation, not genuinely stuck.
+const STUCK_PAYMENT_THRESHOLD_MS = parseInt(process.env.STUCK_PAYMENT_THRESHOLD_MS, 10) || 15 * 60 * 1000;
 const STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS = parseInt(process.env.STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS, 10) || 10 * 60 * 1000;
 const STUCK_PAYMENT_RECONCILIATION_MAX_BATCH = parseInt(process.env.STUCK_PAYMENT_RECONCILIATION_MAX_BATCH, 10) || 100;
 
