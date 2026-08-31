@@ -97,6 +97,9 @@ const softDelete = (schema) => {
   schema.pre('findOne', excludeDeleted);
   schema.pre('findOneAndUpdate', excludeDeleted);
   schema.pre('countDocuments', excludeDeleted);
+  schema.pre('updateMany', excludeDeleted);
+  schema.pre('deleteMany', excludeDeleted);
+  schema.pre('findOneAndDelete', excludeDeleted);
 };
 
 module.exports = softDelete;
