@@ -7,6 +7,7 @@ const net = require('net');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 
+const School = require('../models/schoolModel');
 const WebhookRetry = require('../models/webhookRetryModel');
 const WebhookEndpoint = require('../models/webhookEndpointModel');
 const WebhookDelivery = require('../models/webhookDeliveryModel');
@@ -819,15 +820,16 @@ function sendPaymentWebhook(url, data, secret = null) {
 
 /**
  * Notify external system that a dispute has been opened for a payment.
- * Fires the 'dispute.created' event so the school's webhook receiver can
- * take immediate action (e.g. pause settlement, alert staff).
+ * Fires the 'dispute.created' event through both the unified per-endpoint
+ * webhook system (#865) and the legacy single-URL mechanism.
  *
- * @param {string} webhookUrl - Registered webhook URL
+ * @param {string} webhookUrl - Registered webhook URL (legacy path)
  * @param {object} dispute - Dispute document from MongoDB
  * @param {string|null} [secret] - Per-school HMAC secret
+ * @param {string|null} [schoolId] - For routing to unified per-endpoint system
  */
-async function notifyDisputeCreated(webhookUrl, dispute, secret = null) {
-  return fireWebhook(webhookUrl, 'dispute.created', {
+async function notifyDisputeCreated(webhookUrl, dispute, secret = null, schoolId = null) {
+  const payload = {
     disputeId:  dispute._id.toString(),
     schoolId:   dispute.schoolId,
     txHash:     dispute.txHash,
@@ -837,20 +839,37 @@ async function notifyDisputeCreated(webhookUrl, dispute, secret = null) {
     status:     dispute.status,
     holdSet:    true,
     createdAt:  dispute.createdAt,
-  }, secret);
+  };
+
+  // #1478: route through unified per-endpoint webhook system first
+  const school = schoolId ? await School.findOne({ schoolId }) : null;
+  const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
+  if (schoolId) {
+    const results = await fireWebhookToEndpoints(schoolId, 'dispute.created', payload, allowedFields);
+    // If endpoints exist, don't fall back to legacy path
+    if (results.length > 0) return results;
+  }
+
+  // Fallback: legacy single-URL on the School document (backward compat)
+  if (webhookUrl) {
+    return fireWebhook(webhookUrl, 'dispute.created', payload, secret);
+  }
+
+  return null;
 }
 
 /**
  * Notify external system that a dispute has been resolved or rejected.
- * Fires the 'dispute.resolved' event so the school's webhook receiver can
- * resume normal processing for the affected payment/student.
+ * Fires the 'dispute.resolved' event through both the unified per-endpoint
+ * webhook system (#865) and the legacy single-URL mechanism.
  *
- * @param {string} webhookUrl - Registered webhook URL
+ * @param {string} webhookUrl - Registered webhook URL (legacy path)
  * @param {object} dispute - Updated Dispute document from MongoDB
  * @param {string|null} [secret] - Per-school HMAC secret
+ * @param {string|null} [schoolId] - For routing to unified per-endpoint system
  */
-async function notifyDisputeResolved(webhookUrl, dispute, secret = null) {
-  return fireWebhook(webhookUrl, 'dispute.resolved', {
+async function notifyDisputeResolved(webhookUrl, dispute, secret = null, schoolId = null) {
+  const payload = {
     disputeId:      dispute._id.toString(),
     schoolId:       dispute.schoolId,
     txHash:         dispute.txHash,
@@ -860,7 +879,23 @@ async function notifyDisputeResolved(webhookUrl, dispute, secret = null) {
     resolutionNote: dispute.resolutionNote,
     resolvedAt:     dispute.resolvedAt,
     holdLifted:     dispute.holdLifted ?? true,
-  }, secret);
+  };
+
+  // #1478: route through unified per-endpoint webhook system first
+  const school = schoolId ? await School.findOne({ schoolId }) : null;
+  const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
+  if (schoolId) {
+    const results = await fireWebhookToEndpoints(schoolId, 'dispute.resolved', payload, allowedFields);
+    // If endpoints exist, don't fall back to legacy path
+    if (results.length > 0) return results;
+  }
+
+  // Fallback: legacy single-URL on the School document (backward compat)
+  if (webhookUrl) {
+    return fireWebhook(webhookUrl, 'dispute.resolved', payload, secret);
+  }
+
+  return null;
 }
 
 // ── Module exports ────────────────────────────────────────────────────────────
