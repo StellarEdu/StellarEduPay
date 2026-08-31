@@ -1,0 +1,106 @@
+{
+  "title": "StellarEduPay — Payments",
+  "uid": "stellaredupay-payments",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["payments", "performance"],
+  "panels": [
+    {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "options": {
+        "mode": "markdown",
+        "content": "## Payment Processing Latency"
+      }
+    },
+    {
+      "id": 1,
+      "title": "Payment Processing Duration — p95 (seconds)",
+      "description": "95th percentile of payment processing time from transaction detection to confirmation. Target SLA is <10 seconds.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 1, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50 (median)"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": 0 },
+              { "color": "yellow", "value": 5 },
+              { "color": "red",    "value": 10 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50 (median)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "title": "Payment Processing Rate (payments/min)",
+      "description": "Rate of payments being processed and confirmed.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 1, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(payment_processing_duration_seconds_count[1m])",
+          "legendFormat": "payments/min"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Payment Processing Duration — Distribution (last 1h)",
+      "description": "Histogram of payment processing durations.",
+      "type": "heatmap",
+      "gridPos": { "x": 0, "y": 9, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    }
+  ]
+}
