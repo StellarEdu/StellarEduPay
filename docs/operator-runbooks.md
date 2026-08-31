@@ -2,6 +2,54 @@
 
 These runbooks cover the main operational failures for the async payment path: Redis or queue outage, Horizon outage, Mongo or database outage, stuck payments, key rotation, and restore.
 
+## Canary Deployment Rollout
+
+A canary deployment routes a small percentage of traffic to a new backend image tag before rolling out to all replicas. This allows validation of database migrations and payment pipeline changes without affecting 100% of production traffic.
+
+**Canary Deployment Procedure:**
+
+1. **Prepare the canary image:**
+   ```sh
+   docker build -t stellaredupay/backend:canary .
+   docker push stellaredupay/backend:canary
+   ```
+
+2. **Deploy the canary:**
+   ```sh
+   kubectl apply -k deploy/k8s/overlays/canary
+   ```
+   This deploys a single canary pod with the new image. The readiness probe (`/health/ready`) ensures the migration initContainer has completed before the pod is added to the load balancer.
+
+3. **Monitor canary health:**
+   ```sh
+   kubectl logs -f deployment/backend -l environment=canary
+   kubectl get pod -l environment=canary -w
+   ```
+   Watch for:
+   - Successful migration execution (initContainer logs should show "Migrations completed")
+   - /health/ready probe passing
+   - No error spikes in /metrics or logs
+
+4. **Validate payment pipeline:**
+   - Verify `/health` returns healthy
+   - Submit a test payment and confirm it progresses through polling
+   - Monitor /api/payments queries for latency or errors
+
+5. **Proceed to full rollout (if canary is healthy):**
+   ```sh
+   kubectl set image deployment/backend backend=stellaredupay/backend:canary
+   kubectl set env deployment/backend CANARY=false
+   ```
+
+6. **Rollback (if canary fails):**
+   ```sh
+   kubectl delete deployment backend -l environment=canary
+   kubectl set image deployment/backend backend=stellaredupay/backend:previous-tag
+   ```
+   Verify /health and /metrics return to baseline.
+
+**Readiness Probe:** The canary uses `/health/ready` (not `/health`) to ensure that database migrations complete before traffic is routed to the new pod. If migrations fail, the readiness probe fails, and the pod is not added to the load balancer.
+
 ## General Incident Steps
 
 1. Open an incident record with time, environment, reporter, and affected tenants.

@@ -6,7 +6,7 @@ metadata:
     app: mongodb
 spec:
   serviceName: mongodb
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: mongodb
@@ -44,7 +44,7 @@ spec:
                       if mongosh --quiet --eval 'try { if (rs.status().ok === 1 && db.hello().isWritablePrimary) { process.exit(0); } } catch (e) {} process.exit(1);'; then
                         exit 0
                       fi
-                      mongosh --quiet --eval 'try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-0.mongodb:27017" }] }); } catch (e) {}' >/dev/null 2>&1 || true
+                      mongosh --quiet --eval 'try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-0.mongodb:27017" }, { _id: 1, host: "mongodb-1.mongodb:27017" }, { _id: 2, host: "mongodb-2.mongodb:27017" }] }); } catch (e) {}' >/dev/null 2>&1 || true
                       sleep 2
                     done
                     exit 1
@@ -94,15 +94,20 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 10Gi
+            storage: 30Gi
 ---
 # Headless service for stable pod DNS (mongodb-0.mongodb.<namespace>.svc.cluster.local).
-# The pod runs a single-node replica set ("rs0") because multi-document
-# transactions require one — see docs/architecture.md "Replica Set Requirement".
+# The pods run a replica set ("rs0") because multi-document transactions require one —
+# see docs/architecture.md "Replica Set Requirement".
 # MONGO_URI in the stellaredupay Secret MUST therefore include the replica set:
 #   mongodb://mongodb-0.mongodb.<namespace>.svc.cluster.local:27017/stellaredupay?replicaSet=rs0
 # Or, to use MongoDB Atlas or another external managed service instead, omit
 # this StatefulSet and point MONGO_URI at the Atlas connection string.
+#
+# NOTE: This is the production-ready 3-node replica set for high availability.
+# For development and testing only, create a kustomization overlay that sets
+# replicas: 1 to reduce resource consumption. A single-replica StatefulSet
+# provides no failover protection but satisfies the transaction requirement.
 apiVersion: v1
 kind: Service
 metadata:
