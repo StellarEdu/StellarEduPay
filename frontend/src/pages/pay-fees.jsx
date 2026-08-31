@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { useRef } from "react";
 import PaymentForm from "../components/PaymentForm";
 import VerifyPayment from "../components/VerifyPayment";
 import SseDegradedBanner from "../components/SseDegradedBanner";
@@ -7,6 +8,7 @@ import { useTranslation } from "react-i18next";
 
 export default function PayFees() {
   const { t } = useTranslation();
+  const verifyPaymentRef = useRef(null);
 
   const STEPS = [
     { n: "1", title: t("payFees.step1Title"), desc: t("payFees.step1Desc") },
@@ -17,10 +19,14 @@ export default function PayFees() {
   // Surface degraded/reconnecting/failed banner (Issues #1054, #1078).
   const { degraded, connectionStatus } = usePaymentEvents();
 
+  const handleManualVerify = () => {
+    verifyPaymentRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
     <>
       <Head><title>{t("nav.payFees")} | {t("app.name")}</title></Head>
-      <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} />
+      <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} onManualVerify={handleManualVerify} />
 
       <div className="payfees-page">
         {/* Page header */}
@@ -49,7 +55,9 @@ export default function PayFees() {
         {/* Main content grid */}
         <div className="payfees-grid">
           <PaymentForm />
-          <VerifyPayment />
+          <div ref={verifyPaymentRef}>
+            <VerifyPayment />
+          </div>
         </div>
       </div>
     </>

@@ -29,6 +29,7 @@ resources:
   - backend-deployment.yaml
   - backend-hpa.yaml
   - backend-pdb.yaml
+  - mongodb-pdb.yaml
   - backend-networkpolicy.yaml
   - backend-service.yaml
   - frontend-deployment.yaml

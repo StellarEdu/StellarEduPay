@@ -144,12 +144,30 @@ async function onRefundStatusChanged(refundEvent) {
   }
 }
 
+// ── Processing duration subscriber ─────────────────────────────────────────
+
+async function onPaymentSavedRecordDuration(payment) {
+  try {
+    // Record payment processing duration (from detectedAt to confirmedAt)
+    if (payment.detectedAt && payment.confirmedAt) {
+      const durationSeconds = (new Date(payment.confirmedAt) - new Date(payment.detectedAt)) / 1000;
+      const metricsModule = require('../metrics');
+      if (metricsModule?.paymentProcessingDurationSeconds) {
+        metricsModule.paymentProcessingDurationSeconds.observe(durationSeconds);
+      }
+    }
+  } catch (err) {
+    logger.error('Payment duration recording failed', { txHash: payment.txHash, error: err.message });
+  }
+}
+
 // ── Registration ──────────────────────────────────────────────────────────────
 
 function registerPaymentSavedSubscribers() {
   paymentEvents.on('payment.saved', onPaymentSavedWebhook);
   paymentEvents.on('payment.saved', onPaymentSavedReceipt);
   paymentEvents.on('payment.saved', onPaymentSavedCancelReminder);
+  paymentEvents.on('payment.saved', onPaymentSavedRecordDuration);
   // #881 — increment pre-aggregated rollups on every confirmed payment
   paymentEvents.on('payment.saved', async (payment) => {
     try { await incrementPaymentMetrics(payment); }
@@ -164,5 +182,6 @@ module.exports = {
   onPaymentSavedWebhook,
   onPaymentSavedReceipt,
   onPaymentSavedCancelReminder,
+  onPaymentSavedRecordDuration,
   onRefundStatusChanged,
 };

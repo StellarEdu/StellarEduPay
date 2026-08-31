@@ -31,13 +31,14 @@ const studentSchema = new mongoose.Schema(
     remainingBalance: { type: Number, default: null },
 
     /**
-     * Cumulative amount of manual partial-credit adjustments applied by admins
-     * via applyPartialCredit(). This is a first-class ledger value: the
-     * consistency and reconciliation jobs must add it to the raw payment sum
-     * when computing the expected balance, so admin-applied credits are never
-     * treated as drift and silently reverted.
+     * Cumulative amount of manual partial-credit adjustments applied by admins.
+     * This is a first-class ledger value: the consistency and reconciliation
+     * jobs must add it to the raw payment sum when computing the expected
+     * balance, so admin-applied credits are never treated as drift and silently
+     * reverted. The running total is enforced to never be negative at the
+     * application level (see adjustStudentCredit endpoint).
      */
-    creditAdjustments: { type: Number, default: 0, min: [0, 'creditAdjustments cannot be negative'] },
+    creditAdjustments: { type: Number, default: 0 },
 
     // Parent contact for fee reminders
     parentEmail: { type: String, default: null, trim: true, lowercase: true },

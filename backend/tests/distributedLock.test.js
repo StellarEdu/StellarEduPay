@@ -275,6 +275,28 @@ describe('distributedLock', () => {
       const acquiredB = await lock.acquire('sync:lock:school-1', 5000);
       expect(acquiredB.fencingToken).toBe(2);
     });
+
+    it('allows re-acquisition after TTL expiry (Issue #1406 - correctness hole)', async () => {
+      jest.useFakeTimers();
+      const lock = loadLock();
+
+      // Holder A acquires the lock with a 1000ms TTL
+      const acquiredA = await lock.acquire('sync:lock:school-1', 1000);
+      expect(acquiredA).toBeTruthy();
+
+      // Advance time past the TTL expiry (but holder A is still running)
+      jest.advanceTimersByTime(1500);
+
+      // In a correctness hole scenario, holder B can now acquire the same lock
+      // This is the bug described in Issue #1406: in-process fallback does not
+      // protect against concurrent writers when TTL expires mid-operation.
+      const acquiredB = await lock.acquire('sync:lock:school-1', 1000);
+      expect(acquiredB).toBeTruthy();
+
+      // Both A and B now believe they hold the lock, breaking mutual exclusion.
+      // Protected resources must use fencing tokens to detect this situation.
+      expect(acquiredB.fencingToken).toBeGreaterThan(acquiredA.fencingToken);
+    });
   });
 
   describe('withLock helper', () => {
