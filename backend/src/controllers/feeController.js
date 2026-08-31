@@ -31,19 +31,30 @@ async function getAllFeeStructures(req, res, next) {
   try {
     const includeDeleted = req.query.includeDeleted === 'true';
     const isAdmin = Boolean(req.admin);
-    const cacheKey = KEYS.feesAll();
-
-    if (!includeDeleted && !isAdmin) {
-      const cached = get(cacheKey);
-      if (cached !== undefined) return res.json(cached);
-    }
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '20', 10)));
+    const skip = (page - 1) * limit;
 
     const filter = { schoolId: req.schoolId, ...(isAdmin ? {} : { isActive: true }), ...(includeDeleted ? {} : { deletedAt: null }) };
     const query = FeeStructure.find(filter);
     if (includeDeleted) query.includeDeleted();
-    const fees = await query.sort({ className: 1 });
-    if (!includeDeleted && !isAdmin) set(cacheKey, fees, TTL.FEES);
-    res.json(fees);
+
+    const [fees, total] = await Promise.all([
+      query.sort({ className: 1 }).skip(skip).limit(limit).lean(),
+      FeeStructure.countDocuments(filter),
+    ]);
+
+    res.json({
+      data: fees,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: skip + fees.length < total,
+        hasPrev: page > 1,
+      },
+    });
   } catch (err) { next(err); }
 }
 

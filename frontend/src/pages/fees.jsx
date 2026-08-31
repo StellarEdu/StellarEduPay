@@ -86,6 +86,7 @@ function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel })
 
 export default function FeesPage() {
   const [fees, setFees]             = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
@@ -116,11 +117,16 @@ export default function FeesPage() {
     }
   }, [createSuccess]);
 
-  function loadFees() {
+  function loadFees(page = 1) {
     setLoading(true);
     setError(null);
-    getFeeStructures()
-      .then(({ data }) => setFees(data))
+    getFeeStructures({ page, limit: pagination.limit })
+      .then(({ data }) => {
+        setFees(data.data || data);
+        if (data.pagination) {
+          setPagination(data.pagination);
+        }
+      })
       .catch(() => setError(t("fees.failedToLoad")))
       .finally(() => setLoading(false));
   }
@@ -174,10 +180,10 @@ export default function FeesPage() {
         ...(form.academicYear && { academicYear: form.academicYear }),
         ...(form.description.trim() && { description: form.description.trim() }),
       };
-      const { data } = await createFeeStructure(payload);
-      setFees((prev) => [...prev, data]);
+      await createFeeStructure(payload);
       setForm(EMPTY_FORM);
       setCreateSuccess(true);
+      loadFees(1);
     } catch (err) {
       setCreateError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
@@ -208,7 +214,7 @@ export default function FeesPage() {
     setPendingDelete(null);
     try {
       await deleteFeeStructure(fee.className);
-      setFees((prev) => prev.filter((f) => f.className !== fee.className));
+      loadFees(pagination.page);
     } catch (err) {
       setDeleteError(
         getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
@@ -391,7 +397,7 @@ export default function FeesPage() {
             <div className="card-title">{t("fees.existingTitle")}</div>
             {!loading && (
               <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-                {t("fees.count", { count: fees.length })}
+                {t("fees.count", { count: pagination.total })}
               </span>
             )}
           </div>
@@ -463,6 +469,29 @@ export default function FeesPage() {
                 </tbody>
               </table>
             </div>
+            {pagination.totalPages > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", padding: "1rem", borderTop: "1px solid var(--border)" }}>
+                <button
+                  onClick={() => loadFees(pagination.page - 1)}
+                  disabled={!pagination.hasPrev || loading}
+                  className="btn btn-sm btn-ghost"
+                  aria-label={t("actions.previousPage")}
+                >
+                  <IconChevronLeft size={16} />
+                </button>
+                <span style={{ fontSize: "0.875rem", color: "var(--text-muted)" }}>
+                  {t("pagination.page", { current: pagination.page, total: pagination.totalPages })}
+                </span>
+                <button
+                  onClick={() => loadFees(pagination.page + 1)}
+                  disabled={!pagination.hasNext || loading}
+                  className="btn btn-sm btn-ghost"
+                  aria-label={t("actions.nextPage")}
+                >
+                  <IconChevronRight size={16} />
+                </button>
+              </div>
+            )}
           )}
         </div>
       </div>
