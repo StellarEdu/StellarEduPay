@@ -22,6 +22,19 @@
  *     cause issues. Keep critical sections short relative to TTL.
  *   - Clock drift between Redis server and client nodes can affect TTL accuracy.
  *
+ * In-Process Fallback Limitations (Issue #1406):
+ *   When Redis is unavailable (REDIS_HOST not set), this module falls back to an
+ *   in-process Map. This fallback is safe ONLY in single-instance deployments
+ *   (REPLICA_COUNT=1 or unset). In multi-instance deployments, the fallback
+ *   provides NO cross-replica exclusion and undermines distributed safety:
+ *   - Two concurrent operations on the same resource may both acquire "the lock"
+ *     on their respective replicas, leading to race conditions and data corruption.
+ *   - If a lock holder runs past its TTL expiration (e.g. due to a long async
+ *     operation), a second caller can acquire the same lock while the first is
+ *     still writing, breaking mutual exclusion entirely.
+ *   Do not rely on the in-process fallback for production multi-instance workloads.
+ *   Always configure REDIS_HOST in production.
+ *
  * Semantics:
  *   acquire(key, ttlMs) -> { token, fencingToken } | null
  *     Atomically takes the lock via SET NX PX. Increments the fencing token counter.
@@ -163,6 +176,7 @@ async function acquire(key, ttlMs) {
   }
 
   // In-process fallback.
+  logger.warn('[Issue #1406] Distributed lock acquired via in-process fallback (Redis unavailable)', { key, ttlMs });
   const now = Date.now();
   const existing = localLocks.get(key);
   if (existing && existing.expiresAt > now) return null;
