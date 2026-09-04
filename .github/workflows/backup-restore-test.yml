@@ -1,0 +1,47 @@
+name: Backup restore test
+
+# Weekly scheduled verification that a backup produced by scripts/backup.sh
+# can actually be restored (document count + index + content-fingerprint
+# match). Runs scripts/test-backup-recovery.sh so a corrupted backup or a
+# broken restore procedure is caught in CI instead of only being discovered
+# during a real disaster-recovery event. See issue #1413.
+on:
+  schedule:
+    - cron: '0 3 * * 1' # every Monday at 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  backup-restore-test:
+    name: Run test-backup-recovery.sh
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 10s
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install MongoDB Database Tools (mongodump/mongorestore/mongosh)
+        run: |
+          curl -sSL https://downloads.mongodb.com/compass/mongodb-mongosh_2.2.7_amd64.deb -o mongosh.deb
+          curl -sSL https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.9.4.deb -o db-tools.deb
+          sudo apt-get update -y
+          sudo apt-get install -y ./mongosh.deb ./db-tools.deb
+
+      - name: Seed a small amount of test data
+        run: |
+          mongosh --quiet --eval "db.getSiblingDB('stellaredupay').restore_test_smoke.insertOne({ seededAt: new Date() })" mongodb://localhost:27017
+
+      - name: Run backup + restore verification
+        env:
+          MONGO_URI: mongodb://localhost:27017/stellaredupay
+          BACKEND_INTERNAL_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
+          BACKUP_NOTIFY_TOKEN: ${{ secrets.BACKUP_NOTIFY_TOKEN }}
+        run: bash scripts/test-backup-recovery.sh

@@ -24,7 +24,7 @@ function backupVerificationHeartbeat(req, res) {
 
   if (!provided || provided !== token) {
     logger.warn('backup-verification-heartbeat: unauthorised request (token mismatch or missing)');
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);

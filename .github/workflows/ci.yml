@@ -84,6 +84,13 @@ jobs:
       - uses: actions/checkout@v7
       - run: node scripts/check-orphan-dirs.js
 
+  error-response-shape:
+    name: Check 401/403 response shape
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: node scripts/check-error-response-shape.js
+
   k8s-ingress-tls:
     name: Verify Kubernetes ingress has TLS configuration
     runs-on: ubuntu-latest
@@ -349,6 +356,61 @@ jobs:
           echo "Backend:  stellaredupay/backend:${{ steps.meta.outputs.tag }}"
           echo "Frontend: stellaredupay/frontend:${{ steps.meta.outputs.tag }}"
 
+  docker-compose-smoke:
+    name: Docker Compose stack smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check whether compose/env files changed
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          CHANGED=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}" -- docker-compose.yml docker-compose.monitoring.yml backend/Dockerfile frontend/Dockerfile .env.example || true)
+          if [ -n "$CHANGED" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Full docker-compose stack (Mongo replica set, Redis, backend, frontend)
+      # brought up with `docker compose up --wait` so a breaking change to
+      # docker-compose.yml -- a missing env var, a renamed depends_on service,
+      # a broken init container -- fails CI instead of only surfacing on a
+      # developer's machine or in staging. See issue #1418.
+      - name: Bring up full stack
+        if: steps.changes.outputs.run == 'true'
+        env:
+          MONGO_ROOT_USERNAME: ci_root
+          MONGO_ROOT_PASSWORD: ci-compose-smoke-password
+          JWT_SECRET: ci-compose-smoke-secret
+          STELLAR_NETWORK: testnet
+          SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+          ADMIN_USERNAME: ci_admin
+          ADMIN_PASSWORD: ci-compose-smoke-admin-password
+        run: docker compose up -d --wait --wait-timeout 180 backend frontend redis mongo
+
+      - name: Verify backend /health is healthy
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health)
+          if [ "$status" != "200" ]; then
+            echo "Expected 200 ok from /health, got $status"
+            docker compose logs
+            exit 1
+          fi
+          echo "Backend /health returned 200 ok"
+
+      - name: Tear down stack
+        if: always() && steps.changes.outputs.run == 'true'
+        run: docker compose down -v
+
   # ── #1389: Required gate ─────────────────────────────────────────────────
   # A single job that every branch-protection rule needs to require. Add this
   # job name ("CI gate") as the sole required status check in GitHub's branch
@@ -366,6 +428,7 @@ jobs:
       - secret-scan-repo
       - migrations
       - orphan-dirs
+      - error-response-shape
       - k8s-ingress-tls
       - lint-backend
       - lint-frontend

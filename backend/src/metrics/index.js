@@ -494,6 +494,32 @@ function recordBackupVerificationSuccess(timestampSeconds = Math.floor(Date.now(
   _lastBackupVerificationSuccessAt = timestampSeconds;
 }
 
+// last_backup_restore_test_age_seconds — seconds since the weekly CI job
+// (.github/workflows/backup-restore-test.yml) last ran
+// scripts/test-backup-recovery.sh successfully, recorded via
+// POST /api/internal/backup-restore-test-heartbeat. Recomputed fresh on every
+// scrape since it is an age, not a timestamp. A large sentinel is reported
+// before the first successful run so the "not run within 8 days" alert fires
+// immediately. See issue #1413.
+let _lastBackupRestoreTestSuccessAt = 0; // unix seconds; 0 = never recorded
+const NEVER_RESTORE_TESTED_AGE_SECONDS = 30 * 24 * 3600; // sentinel: 30 days
+const lastBackupRestoreTestAgeSeconds = new client.Gauge({
+  name: 'last_backup_restore_test_age_seconds',
+  help: 'Seconds since test-backup-recovery.sh last succeeded in CI (large sentinel if never run)',
+  registers: [registry],
+  collect() {
+    this.set(
+      _lastBackupRestoreTestSuccessAt
+        ? Math.floor(Date.now() / 1000) - _lastBackupRestoreTestSuccessAt
+        : NEVER_RESTORE_TESTED_AGE_SECONDS
+    );
+  },
+});
+
+function recordBackupRestoreTestSuccess(timestampSeconds = Math.floor(Date.now() / 1000)) {
+  _lastBackupRestoreTestSuccessAt = timestampSeconds;
+}
+
 module.exports = {
   registry,
   mongoConnectionState,
@@ -528,4 +554,6 @@ module.exports = {
   leaderElectionTenureSeconds,
   lastBackupVerificationAgeSeconds,
   recordBackupVerificationSuccess,
+  lastBackupRestoreTestAgeSeconds,
+  recordBackupRestoreTestSuccess,
 };
