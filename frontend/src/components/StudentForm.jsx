@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 import { updateStudent } from "../services/api";
 import PaymentPlanForm from "./PaymentPlanForm";
 import { stripHtml } from "../utils/sanitizeInput";
+import { getErrorMessage } from "../utils/errorMessages";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function StudentForm({ student, onClose, onSave }) {
   const { t } = useTranslation();
@@ -16,6 +19,7 @@ export default function StudentForm({ student, onClose, onSave }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
 
   useEffect(() => {
     if (student) {
@@ -29,10 +33,26 @@ export default function StudentForm({ student, onClose, onSave }) {
     }
   }, [student]);
 
+  function validate() {
+    const errs = {};
+    if (!formData.name.trim()) errs.name = t("studentForm.nameRequired");
+    if (formData.parentEmail.trim() && !EMAIL_RE.test(formData.parentEmail.trim())) {
+      errs.parentEmail = t("studentForm.parentEmailInvalid");
+    }
+    return errs;
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     setSuccess("");
+
+    const validationErrors = validate();
+    if (Object.keys(validationErrors).length > 0) {
+      setFieldErrors(validationErrors);
+      return;
+    }
+    setFieldErrors({});
     setLoading(true);
 
     try {
@@ -43,7 +63,8 @@ export default function StudentForm({ student, onClose, onSave }) {
         if (onClose) onClose();
       }, 1000);
     } catch (err) {
-      setError(err.response?.data?.error || t("studentForm.updateFailed"));
+      const data = err.response?.data;
+      setError(getErrorMessage(data?.code, data?.error) || t("studentForm.updateFailed"));
     } finally {
       setLoading(false);
     }
@@ -162,16 +183,20 @@ export default function StudentForm({ student, onClose, onSave }) {
               name="name"
               value={formData.name}
               onChange={handleChange}
+              aria-invalid={!!fieldErrors.name}
               style={{
                 width: "100%",
                 padding: "0.75rem",
-                border: "1px solid var(--border)",
+                border: `1px solid ${fieldErrors.name ? "#f87171" : "var(--border)"}`,
                 borderRadius: "6px",
                 background: "var(--bg)",
                 color: "var(--text)",
                 boxSizing: "border-box",
               }}
             />
+            {fieldErrors.name && (
+              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
+            )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
@@ -216,16 +241,20 @@ export default function StudentForm({ student, onClose, onSave }) {
               name="parentEmail"
               value={formData.parentEmail}
               onChange={handleChange}
+              aria-invalid={!!fieldErrors.parentEmail}
               style={{
                 width: "100%",
                 padding: "0.75rem",
-                border: "1px solid var(--border)",
+                border: `1px solid ${fieldErrors.parentEmail ? "#f87171" : "var(--border)"}`,
                 borderRadius: "6px",
                 background: "var(--bg)",
                 color: "var(--text)",
                 boxSizing: "border-box",
               }}
             />
+            {fieldErrors.parentEmail && (
+              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
+            )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>

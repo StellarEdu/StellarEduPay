@@ -792,6 +792,8 @@ const en = {
     updateSuccess: "Student updated successfully!",
     updateFailed: "Failed to update student",
     saveChanges: "Save Changes",
+    nameRequired: "Name is required",
+    parentEmailInvalid: "Enter a valid email address",
   },
 };
 

@@ -7,11 +7,12 @@ import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
 import RequireAdmin from "../components/RequireAdmin";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
-import { getSyncStatus, getPaymentSummary, getStudents, getStudent } from "../services/api";
+import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
   IconUsers, IconCheck, IconAlertTriangle, IconDollarSign,
   IconSearch, IconChevronLeft, IconChevronRight,
 } from "../components/Icons";
+import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
 
 const PAGE_SIZE = 20;
 
@@ -47,6 +48,7 @@ function Dashboard() {
   const [search, setSearch]                   = useState("");
   const [statusFilter, setStatusFilter]       = useState("all");
   const [classFilter, setClassFilter]         = useState("");
+  const [classOptions, setClassOptions]       = useState(DEFAULT_CLASS_OPTIONS);
   const [error, setError]                     = useState(null);
   const [editingStudent, setEditingStudent]   = useState(null);
   const [editingStudentData, setEditingStudentData] = useState(null);
@@ -121,6 +123,7 @@ function Dashboard() {
       .then(({ data }) => setLastSyncAt(data.lastSyncAt))
       .catch(() => setError(t("dashboard.failedToLoadSyncStatus")));
     fetchSummary();
+    loadSchoolClassOptions(getSchool, setClassOptions);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -392,7 +395,7 @@ function Dashboard() {
                 }}
               >
                 <option value="">{t("dashboard.allClasses")}</option>
-                {["JSS1","JSS2","JSS3","SS1","SS2","SS3"].map(c => (
+                {classOptions.map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
