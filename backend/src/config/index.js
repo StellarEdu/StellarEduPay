@@ -10,7 +10,7 @@
  */
 
 // ── Required variables ────────────────────────────────────────────────────────
-const REQUIRED = ["MONGO_URI", "JWT_SECRET"];
+const REQUIRED = ["MONGO_URI", "JWT_SECRET", "RECEIPT_SIGNATURE_SECRET"];
 
 const missing = REQUIRED.filter((key) => !process.env[key]);
 if (missing.length) {
@@ -156,6 +156,17 @@ if (JWT_SECRET.length < JWT_SECRET_MIN_LENGTH) {
 }
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
+// ── Receipt Signatures ────────────────────────────────────────────────────────
+// Secret used to sign/verify payment receipts. Must be at least 32 characters.
+const RECEIPT_SIGNATURE_SECRET = process.env.RECEIPT_SIGNATURE_SECRET;
+const RECEIPT_SIGNATURE_SECRET_MIN_LENGTH = 32;
+if (RECEIPT_SIGNATURE_SECRET && RECEIPT_SIGNATURE_SECRET.length < RECEIPT_SIGNATURE_SECRET_MIN_LENGTH) {
+  throw new Error(
+    `[Config] RECEIPT_SIGNATURE_SECRET is too short (${RECEIPT_SIGNATURE_SECRET.length} chars; minimum ${RECEIPT_SIGNATURE_SECRET_MIN_LENGTH}). ` +
+    "Generate a strong secret with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
+  );
+}
+
 // ── Fee Reminders ─────────────────────────────────────────────────────────────
 // How often the scheduler checks for unpaid fees (default: 1 hour).
 // Schools are only processed during their configured send window, so a shorter
@@ -267,6 +278,7 @@ const config = Object.freeze({
   TRUSTED_PROXY_HOPS,
   JWT_SECRET,
   JWT_EXPIRES_IN,
+  RECEIPT_SIGNATURE_SECRET,
   REMINDER_INTERVAL_MS,
   REMINDER_COOLDOWN_HOURS,
   REMINDER_MAX_COUNT,
