@@ -141,7 +141,34 @@ async function getAllSchools(req, res, next) {
     }
 
     const query = includeInactive ? {} : { isActive: true };
-    const schools = await School.find(query).sort({ name: 1 }).lean();
+    const publicFields = {
+      schoolId: 1,
+      name: 1,
+      slug: 1,
+      stellarAddress: 1,
+      previousStellarAddress: 1,
+      network: 1,
+      isActive: 1,
+      adminEmail: 1,
+      address: 1,
+      contactEmail: 1,
+      localCurrency: 1,
+      timezone: 1,
+      suspiciousPaymentMultiplier: 1,
+      suspiciousAmountConfig: 1,
+      maxPaymentMultiplier: 1,
+      maxStudents: 1,
+      logoUrl: 1,
+      supportContact: 1,
+      primaryColor: 1,
+      emailLocale: 1,
+      maintenanceMode: 1,
+      webhookPayloadConfig: 1,
+      classOptions: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const schools = await School.find(query, publicFields).sort({ name: 1 }).lean();
     res.json(schools);
   } catch (err) {
     next(err);
@@ -158,6 +185,8 @@ async function getSchool(req, res, next) {
       jwtSecret: 0,
       webhookSecret: 0,
       internalNotes: 0,
+      mfaSecret: 0,
+      mfaBackupCodes: 0,
     }).lean();
     if (!school) {
       const e = new Error('School not found');

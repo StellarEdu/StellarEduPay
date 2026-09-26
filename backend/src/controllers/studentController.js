@@ -89,7 +89,7 @@ async function registerStudent(req, res, next) {
 
     const student = await Student.create({ schoolId, studentId, name, class: className, feeAmount: assignedFee, paymentDeadline: assignedDeadline, parentEmail: parentEmail || null, parentPhone: parentPhone || null });
 
-    del(KEYS.studentsAll());
+    del(KEYS.studentsAll(), KEYS.student(schoolId, studentId), KEYS.publicStudent(schoolId, studentId));
 
     // Audit log
     if (req.auditContext) {
@@ -226,7 +226,7 @@ async function deleteStudent(req, res, next) {
       { studentDeleted: true },
     );
 
-    del(KEYS.student(studentId));
+    del(KEYS.student(req.schoolId, studentId), KEYS.publicStudent(req.schoolId, studentId));
 
     await logAudit({
       schoolId: req.schoolId,
@@ -286,7 +286,7 @@ async function restoreStudent(req, res, next) {
       { studentDeleted: false },
     );
 
-    del(KEYS.student(studentId));
+    del(KEYS.student(req.schoolId, studentId), KEYS.publicStudent(req.schoolId, studentId));
 
     await logAudit({
       schoolId: req.schoolId,
@@ -406,7 +406,7 @@ async function updateStudent(req, res, next) {
       { new: true, runValidators: true },
     );
 
-    del(KEYS.student(studentId));
+    del(KEYS.student(req.schoolId, studentId), KEYS.publicStudent(req.schoolId, studentId));
 
     // Audit log
     if (req.auditContext) {
@@ -438,7 +438,7 @@ async function updateStudent(req, res, next) {
 async function getStudent(req, res, next) {
   try {
     const { studentId } = req.params;
-    const cacheKey = KEYS.student(studentId);
+    const cacheKey = KEYS.student(req.schoolId, studentId);
     const cached = get(cacheKey);
     if (cached !== undefined) return res.json(cached);
 
@@ -463,11 +463,11 @@ async function getStudent(req, res, next) {
 async function getPublicStudentInfo(req, res, next) {
   try {
     const { studentId } = req.params;
-    const cacheKey = `public_student_${studentId}`;
+    const cacheKey = KEYS.publicStudent(req.schoolId, studentId);
     const cached = get(cacheKey);
     if (cached !== undefined) return res.json(cached);
 
-    const student = await Student.findOne({ schoolId: req.schoolId, studentId }, {
+    const student = await Student.findOne({ schoolId: req.schoolId, studentId, deletedAt: null }, {
       name: 1,
       class: 1,
       feePaid: 1,
@@ -1132,7 +1132,7 @@ async function adjustStudentCredit(req, res, next) {
     student.creditAdjustments = newTotal;
     await student.save();
 
-    del(KEYS.student(studentId));
+    del(KEYS.student(schoolId, studentId), KEYS.publicStudent(schoolId, studentId));
 
     // Audit log
     if (req.auditContext) {

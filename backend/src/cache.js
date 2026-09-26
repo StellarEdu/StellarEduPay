@@ -24,10 +24,23 @@ const TTL = {
 // Cache key builders
 const KEYS = {
   acceptedAssets: () => 'accepted_assets',
-  feesAll: () => 'fees:all',
-  feeByClass: (className) => `fees:${className}`,
+  feesAll: (schoolId) => {
+    if (!schoolId) throw new Error('feesAll key builder requires schoolId');
+    return `fees:${schoolId}:all`;
+  },
+  feeByClass: (schoolId, className) => {
+    if (!schoolId) throw new Error('feeByClass key builder requires schoolId');
+    return `fees:${schoolId}:class:${className}`;
+  },
   studentsAll: () => 'students:all',
-  student: (studentId) => `student:${studentId}`,
+  student: (schoolId, studentId) => {
+    if (!schoolId) throw new Error('student key builder requires schoolId');
+    return `student:${schoolId}:${studentId}`;
+  },
+  publicStudent: (schoolId, studentId) => {
+    if (!schoolId) throw new Error('publicStudent key builder requires schoolId');
+    return `public_student:${schoolId}:${studentId}`;
+  },
   school: (schoolIdOrSlug) => `school:${schoolIdOrSlug}`,
   balance: (studentId) => `balance:${studentId}`,
   payments: (studentId) => `payments:${studentId}`,

@@ -10,7 +10,7 @@
  */
 
 // ── Required variables ────────────────────────────────────────────────────────
-const REQUIRED = ["MONGO_URI", "JWT_SECRET"];
+const REQUIRED = ["MONGO_URI", "JWT_SECRET", "RECEIPT_SIGNATURE_SECRET"];
 
 const missing = REQUIRED.filter((key) => !process.env[key]);
 if (missing.length) {
@@ -22,6 +22,7 @@ if (missing.length) {
 
 const PORT = parseInt(process.env.PORT || "5000", 10);
 const MONGO_URI = process.env.MONGO_URI;
+const RECEIPT_SIGNATURE_SECRET = process.env.RECEIPT_SIGNATURE_SECRET;
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || "testnet";
 const IS_TESTNET = STELLAR_NETWORK !== "mainnet";
 
@@ -242,6 +243,7 @@ const config = Object.freeze({
   EMAIL_PROVIDER_WEBHOOK_SECRET,
   PORT,
   MONGO_URI,
+  RECEIPT_SIGNATURE_SECRET,
   STELLAR_NETWORK,
   IS_TESTNET,
   HORIZON_URL,
