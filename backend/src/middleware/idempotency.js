@@ -98,7 +98,9 @@ function idempotency(opts = {}) {
       });
     }
 
-    const scope = req.path;
+    const scope = req.schoolId
+      ? `${req.schoolId}:${req.baseUrl}${req.path}`
+      : req.path;
     const canonicalKey = deriveIdempotencyKey(rawKey, scope);
     const fingerprint = fingerprintRequest(req.body);
 
