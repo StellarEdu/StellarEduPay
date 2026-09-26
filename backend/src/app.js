@@ -14,10 +14,16 @@ if (process.env.NODE_ENV !== 'production') {
   // Suppress ioredis verbose logging (connection/reconnection attempts)
   const redisDebug = require('debug');
   redisDebug.disable('*');
-  
+
   // Suppress Mongoose debug output
   mongoose.set('debug', false);
 }
+
+// Issue #1524: Enable filter sanitization globally as defence in depth
+// against operator injection like {class: {$ne: 'x'}}, even though the
+// query parser is set to 'simple' above. sanitizeFilter masks all values
+// matching the pattern of a MongoDB operator key (starting with $).
+mongoose.set('sanitizeFilter', true);
 
 const studentRoutes = require('./routes/studentRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
@@ -102,6 +108,12 @@ const app = express();
 // directly, so a malformed TRUSTED_PROXY_HOPS fails fast at config load
 // (see config/index.js) instead of silently becoming NaN here.
 app.set('trust proxy', config.TRUSTED_PROXY_HOPS);
+
+// Issue #1524: Prevent query-string operator injection like ?field[$ne]=value
+// by only parsing simple string and array values, not nested objects.
+// Nested operators like [$ne], [$regex], etc. become literal strings that fail
+// validation, preventing filter bypass attacks.
+app.set('query parser', 'simple');
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(cors({

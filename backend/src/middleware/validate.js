@@ -12,6 +12,12 @@ const {
   getPaymentInstructionsQuerySchema,
 } = require('./schemas/paymentQuerySchemas');
 
+const {
+  getAllStudentsQuerySchema,
+  exportStudentsQuerySchema,
+  getStudentFeeHistoryQuerySchema,
+} = require('./schemas/studentQuerySchemas');
+
 function validate(schema, source = 'body') {
   return (req, res, next) => {
     const { error, value } = schema.validate(req[source], {
@@ -143,6 +149,69 @@ function validateFeeStructure(req, res, next) {
   return next();
 }
 
+function validateGetAllStudentsQuery(req, res, next) {
+  const { error, value } = getAllStudentsQuerySchema.validate(req.query, {
+    abortEarly: false,
+    convert: true,
+  });
+
+  if (error) {
+    return res.status(400).json({
+      error: error.details[0].message,
+      code: 'VALIDATION_ERROR',
+      errors: error.details.map(detail => ({
+        field: detail.context?.key || detail.path.join('.') || 'unknown',
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.query = value;
+  return next();
+}
+
+function validateExportStudentsQuery(req, res, next) {
+  const { error, value } = exportStudentsQuerySchema.validate(req.query, {
+    abortEarly: false,
+    convert: true,
+  });
+
+  if (error) {
+    return res.status(400).json({
+      error: error.details[0].message,
+      code: 'VALIDATION_ERROR',
+      errors: error.details.map(detail => ({
+        field: detail.context?.key || detail.path.join('.') || 'unknown',
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.query = value;
+  return next();
+}
+
+function validateGetStudentFeeHistoryQuery(req, res, next) {
+  const { error, value } = getStudentFeeHistoryQuerySchema.validate(req.query, {
+    abortEarly: false,
+    convert: true,
+  });
+
+  if (error) {
+    return res.status(400).json({
+      error: error.details[0].message,
+      code: 'VALIDATION_ERROR',
+      errors: error.details.map(detail => ({
+        field: detail.context?.key || detail.path.join('.') || 'unknown',
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.query = value;
+  return next();
+}
+
 module.exports = {
   validate,
   validateCreatePaymentIntent,
@@ -153,4 +222,7 @@ module.exports = {
   validateTxHashParam,
   validateRegisterStudent,
   validateFeeStructure,
+  validateGetAllStudentsQuery,
+  validateExportStudentsQuery,
+  validateGetStudentFeeHistoryQuery,
 };

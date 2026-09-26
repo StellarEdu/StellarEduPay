@@ -21,7 +21,13 @@ const {
   adjustStudentCredit,
 } = require('../controllers/studentController');
 const { resubscribeReminders } = require('../controllers/reminderController');
-const { validateRegisterStudent, validateStudentIdParam } = require('../middleware/validate');
+const {
+  validateRegisterStudent,
+  validateStudentIdParam,
+  validateGetAllStudentsQuery,
+  validateExportStudentsQuery,
+  validateGetStudentFeeHistoryQuery,
+} = require('../middleware/validate');
 const { resolveSchool } = require('../middleware/schoolContext');
 const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
@@ -33,8 +39,8 @@ router.use(resolveSchool);
 // Admin-only routes
 router.post('/', requireAdminAuth, validateRegisterStudent, registerStudent);
 router.post('/bulk', requireAdminAuth, bulkImportLimiter, express.json({ limit: '1mb' }), streamingCsvUpload(), bulkImportStudents);
-router.get('/', requireAdminAuth, getAllStudents);
-router.get('/export', requireAdminAuth, exportStudents);
+router.get('/', requireAdminAuth, validateGetAllStudentsQuery, getAllStudents);
+router.get('/export', requireAdminAuth, validateExportStudentsQuery, exportStudents);
 
 // Authentication-required routes (Issue #1040: all student financial data requires auth)
 router.get('/summary', requireSchoolAuth(), getPaymentSummary);
@@ -53,7 +59,7 @@ router.get('/:studentId/payments/audit', requireAdminAuth, validateStudentIdPara
 router.post('/:studentId/reset-payment', requireAdminAuth, validateStudentIdParam, resetPayment);
 router.post('/:studentId/reconcile', requireAdminAuth, validateStudentIdParam, reconcileStudent);
 router.post('/:studentId/reminders/resubscribe', requireAdminAuth, validateStudentIdParam, resubscribeReminders);
-router.get('/:studentId/fee-history', requireAdminAuth, validateStudentIdParam, getFeeHistory);
+router.get('/:studentId/fee-history', requireAdminAuth, validateStudentIdParam, validateGetStudentFeeHistoryQuery, getFeeHistory);
 router.post('/:studentId/credit-adjustments', requireAdminAuth, validateStudentIdParam, auditContext, adjustStudentCredit);
 
 module.exports = router;
