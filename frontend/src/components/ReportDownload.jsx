@@ -76,6 +76,7 @@ export default function ReportDownload() {
   }
 
   async function handleCsv() {
+    if (csvLoading) return;
     const params = {};
     if (startDate) params.startDate = startDate;
     if (endDate)   params.endDate   = endDate;

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { verifyPayment } from "../services/api";
 import { parseStellarError } from "../utils/stellarErrors";
 import { getErrorMessage } from "../utils/errorMessages";
+import { validateStellarTxHash } from "../utils/stellarTxHash";
 import { IconAlertTriangle, IconCheck, IconExternalLink, IconShield } from "./Icons";
 
 const STATUS_BADGE = {
@@ -39,6 +40,7 @@ function InfoRow({ label, children, mono }) {
 export default function VerifyPayment() {
   const { t } = useTranslation();
   const [txHash, setTxHash]               = useState("");
+  const [fieldError, setFieldError]       = useState("");
   const [result, setResult]               = useState(null);
   const [error, setError]                 = useState("");
   const [stellarStatusUrl, setStellarStatusUrl] = useState(null);
@@ -47,9 +49,22 @@ export default function VerifyPayment() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setError(""); setResult(null); setStellarStatusUrl(null); setLoading(true);
+    setError(""); setResult(null); setStellarStatusUrl(null);
+
+    const validation = validateStellarTxHash(txHash);
+    if (!validation.valid) {
+      setFieldError(
+        validation.code === "REQUIRED"
+          ? (t("verifyPayment.txHashRequired") || validation.error)
+          : (t("verifyPayment.invalidTxHash") || validation.error)
+      );
+      return;
+    }
+    setFieldError("");
+    setLoading(true);
+
     try {
-      const res = await verifyPayment(txHash.trim());
+      const res = await verifyPayment(validation.normalized || txHash.trim());
       setResult(res.data);
     } catch (err) {
       const stellar = parseStellarError(err);
@@ -92,11 +107,34 @@ export default function VerifyPayment() {
               type="text"
               placeholder={t("verifyPayment.txHashPlaceholder")}
               value={txHash}
-              onChange={e => setTxHash(e.target.value)}
+              onChange={e => {
+                setTxHash(e.target.value);
+                if (fieldError) setFieldError("");
+              }}
               required
+              aria-invalid={!!fieldError}
+              aria-describedby={fieldError ? "txin-err" : undefined}
               className="form-input"
-              style={{ fontFamily: "monospace", fontSize: "0.85rem" }}
+              style={{
+                fontFamily: "monospace",
+                fontSize: "0.85rem",
+                borderColor: fieldError ? "var(--danger, #dc2626)" : undefined,
+              }}
             />
+            {fieldError && (
+              <span
+                id="txin-err"
+                role="alert"
+                style={{
+                  display: "block",
+                  color: "var(--danger, #dc2626)",
+                  fontSize: "0.78rem",
+                  marginTop: "0.3rem",
+                }}
+              >
+                {fieldError}
+              </span>
+            )}
           </div>
           <button
             type="submit"

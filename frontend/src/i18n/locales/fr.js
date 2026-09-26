@@ -262,6 +262,7 @@ const fr = {
     copyUri: "Copier l'URI de paiement",
     downloadQrAria: "Télécharger le code QR en PNG",
     downloadQr: "Télécharger le QR",
+    downloadQrFailed: "Échec du téléchargement du code QR. Veuillez réessayer.",
     acceptedAssets: "Actifs acceptés :",
     paymentHistory: "Historique des paiements",
     noPayments: "Aucun paiement enregistré pour le moment.",
@@ -274,6 +275,8 @@ const fr = {
     intro: "Confirmez qu'un paiement a été enregistré en saisissant son hash de transaction Stellar.",
     txHashLabel: "Hash de transaction",
     txHashPlaceholder: "ex. 3389e9f0f1a65f19…",
+    invalidTxHash: "Le hash de transaction doit être une chaîne hexadécimale de 64 caractères.",
+    txHashRequired: "Le hash de transaction est requis.",
     verifying: "Vérification…",
     submit: "Vérifier la transaction",
     verificationFailed: "Échec de la vérification. Vérifiez le hash de transaction et réessayez.",
@@ -318,6 +321,7 @@ const fr = {
 
   disputeForm: {
     title: "Soumettre un litige",
+    invalidTxHash: "Le hash de transaction doit être une chaîne hexadécimale valide de 64 caractères.",
     transactionPrefix: "Transaction : ",
     alreadyOpen: "Un litige est déjà ouvert pour ce paiement.",
     disputeIdLabel: "ID du litige :",

@@ -11,6 +11,7 @@ import { getErrorMessage } from "../utils/errorMessages";
 import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
 import { IconAlertTriangle, IconCheck, IconDollarSign } from "../components/Icons";
 import PageHero from "../components/PageHero";
+import DeleteConfirmModal from "../components/DeleteConfirmModal";
 
 const EMPTY_FORM = {
   className: "",
@@ -18,67 +19,6 @@ const EMPTY_FORM = {
   academicYear: new Date().getUTCFullYear().toString(),
   description: "",
 };
-
-// ── Delete-confirmation modal ─────────────────────────────────────────────────
-
-function DeleteConfirmModal({ feeStructure, studentCount, onConfirm, onCancel }) {
-  const { t } = useTranslation();
-  const cancelRef = useRef(null);
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", onKey);
-    cancelRef.current?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="del-modal-title"
-      aria-describedby="del-modal-desc"
-      style={overlayStyle}
-    >
-      <div style={modalStyle}>
-        <h2 id="del-modal-title" style={{ marginTop: 0, fontSize: "1.1rem" }}>
-          {t("fees.deleteTitle")}
-        </h2>
-        <p id="del-modal-desc" style={{ color: "var(--text)", lineHeight: 1.5 }}>
-          {t("fees.deleteIntro")}{" "}
-          <strong>{feeStructure.className}</strong>.
-          {studentCount > 0 && (
-            <>
-              {" "}{t("fees.deleteAffects")}{" "}
-              <strong>
-                {t("fees.studentCount", { count: studentCount })}
-              </strong>
-              .
-            </>
-          )}{" "}
-          {t("fees.deleteCannotUndo")}
-        </p>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.75rem",
-            justifyContent: "flex-end",
-            marginTop: "1.5rem",
-          }}
-        >
-          <button ref={cancelRef} onClick={onCancel} className="btn btn-ghost">
-            {t("actions.cancel")}
-          </button>
-          <button onClick={onConfirm} className="btn btn-danger">
-            {t("actions.delete")}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -488,24 +428,3 @@ export default function FeesPage() {
     </>
   );
 }
-
-// ── Overlay styles (kept local — not in global CSS) ───────────────────────────
-
-const overlayStyle = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.45)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-
-const modalStyle = {
-  background: "var(--card-bg)",
-  borderRadius: 10,
-  padding: "1.5rem",
-  maxWidth: 420,
-  width: "90%",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-};

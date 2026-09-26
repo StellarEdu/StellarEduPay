@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { createPaymentPlan, getPaymentPlan, cancelPaymentPlan } from "../services/api";
+import ConfirmationModal from "./ConfirmationModal";
 import { IconAlertTriangle, IconCheck, IconX } from "./Icons";
 
 export default function PaymentPlanForm({ student, onClose, onSave }) {
@@ -16,6 +17,7 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
   const [installmentCount, setInstallmentCount] = useState("3");
   const [installments, setInstallments] = useState([]);
   const [creating, setCreating] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   const loadPaymentPlan = useCallback(async () => {
     setLoading(true);
@@ -127,11 +129,12 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
     }
   }
 
-  async function handleCancelPlan() {
-    if (!window.confirm(t("paymentPlan.cancelConfirm"))) {
-      return;
-    }
+  function handleCancelPlan() {
+    setShowCancelModal(true);
+  }
 
+  async function confirmCancelPlan() {
+    setShowCancelModal(false);
     setError("");
     setSuccess("");
     setCreating(true);
@@ -479,6 +482,19 @@ export default function PaymentPlanForm({ student, onClose, onSave }) {
             </button>
           </div>
         </div>
+      )}
+
+      {showCancelModal && (
+        <ConfirmationModal
+          title={t("paymentPlan.confirmCancel") || "Cancel Payment Plan?"}
+          description={t("paymentPlan.cancelConfirm")}
+          confirmLabel={creating ? t("paymentPlan.cancelling") : t("paymentPlan.confirmCancel")}
+          cancelLabel={t("actions.cancel")}
+          confirmVariant="danger"
+          onConfirm={confirmCancelPlan}
+          onCancel={() => setShowCancelModal(false)}
+          loading={creating}
+        />
       )}
     </div>
   );

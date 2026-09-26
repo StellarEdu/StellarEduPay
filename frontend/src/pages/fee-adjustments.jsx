@@ -11,6 +11,7 @@ import { getErrorMessage } from "../utils/errorMessages";
 import { validateStellarAmount } from "../utils/stellarAmount";
 import { IconAlertTriangle, IconCheck } from "../components/Icons";
 import PageHero from "../components/PageHero";
+import ConfirmationModal from "../components/ConfirmationModal";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const RULE_TYPES = [
@@ -554,60 +555,44 @@ export default function FeeAdjustments() {
         </div>
 
         {deleteTarget && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="fa-delete-title"
-            style={{
-              position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-              display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
-            }}
+          <ConfirmationModal
+            title="Deactivate rule?"
+            confirmLabel={deleting ? "Deactivating…" : "Deactivate Rule"}
+            cancelLabel="Cancel"
+            confirmVariant="danger"
+            onConfirm={confirmDeactivate}
+            onCancel={cancelDeactivate}
+            loading={deleting}
           >
-            <div className="card" style={{ maxWidth: 440, width: "90%" }}>
-              <div className="card-header">
-                <div className="card-title" id="fa-delete-title">Deactivate rule?</div>
+            <p style={{ marginBottom: "0.75rem" }}>
+              This will deactivate <strong>&quot;{deleteTarget.name}&quot;</strong>. It will
+              no longer be applied to future payment verifications.
+            </p>
+            <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
+              {affectedCount === null
+                ? "Checking how many students this rule currently applies to…"
+                : `This rule currently applies to ${affectedCount} student${affectedCount !== 1 ? "s" : ""}.`}
+            </p>
+
+            {deleteError && (
+              <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
+                <IconAlertTriangle size={15} />
+                <span>{deleteError}</span>
               </div>
-              <div className="card-body">
-                <p style={{ marginBottom: "0.75rem" }}>
-                  This will deactivate <strong>&quot;{deleteTarget.name}&quot;</strong>. It will
-                  no longer be applied to future payment verifications.
-                </p>
-                <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
-                  {affectedCount === null
-                    ? "Checking how many students this rule currently applies to…"
-                    : `This rule currently applies to ${affectedCount} student${affectedCount !== 1 ? "s" : ""}.`}
-                </p>
+            )}
 
-                {deleteError && (
-                  <div role="alert" className="alert alert-danger" style={{ marginBottom: "1rem" }}>
-                    <IconAlertTriangle size={15} />
-                    <span>{deleteError}</span>
-                  </div>
-                )}
-
-                <div className="form-group">
-                  <label className="form-label" htmlFor="fa-delete-reason">Reason *</label>
-                  <input
-                    id="fa-delete-reason"
-                    className="form-input"
-                    value={deleteReason}
-                    onChange={e => setDeleteReason(e.target.value)}
-                    placeholder="Why is this rule being deactivated?"
-                    autoFocus
-                  />
-                </div>
-
-                <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-                  <button className="btn btn-ghost" onClick={cancelDeactivate} disabled={deleting}>
-                    Cancel
-                  </button>
-                  <button className="btn btn-danger" onClick={confirmDeactivate} disabled={deleting}>
-                    {deleting ? "Deactivating…" : "Deactivate Rule"}
-                  </button>
-                </div>
-              </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="fa-delete-reason">Reason *</label>
+              <input
+                id="fa-delete-reason"
+                className="form-input"
+                value={deleteReason}
+                onChange={e => setDeleteReason(e.target.value)}
+                placeholder="Why is this rule being deactivated?"
+                autoFocus
+              />
             </div>
-          </div>
+          </ConfirmationModal>
         )}
       </div>
     </>

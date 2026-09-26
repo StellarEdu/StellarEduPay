@@ -276,6 +276,8 @@ const en = {
     intro: "Confirm a payment was recorded by entering its Stellar transaction hash.",
     txHashLabel: "Transaction Hash",
     txHashPlaceholder: "e.g. 3389e9f0f1a65f19…",
+    invalidTxHash: "Transaction hash must be a 64-character hexadecimal string.",
+    txHashRequired: "Transaction hash is required.",
     verifying: "Verifying…",
     submit: "Verify Transaction",
     verificationFailed: "Verification failed. Check the transaction hash and try again.",
@@ -320,6 +322,7 @@ const en = {
 
   disputeForm: {
     title: "Raise a Dispute",
+    invalidTxHash: "Transaction hash must be a valid 64-character hexadecimal string.",
     transactionPrefix: "Transaction: ",
     alreadyOpen: "A dispute is already open for this payment.",
     disputeIdLabel: "Dispute ID:",

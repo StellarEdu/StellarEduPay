@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import RequireAdmin from "../components/RequireAdmin";
 import PageHero from "../components/PageHero";
+import ConfirmationModal from "../components/ConfirmationModal";
 import { IconAlertTriangle, IconCheck, IconX, IconPlus, IconRefresh } from "../components/Icons";
 import { useTranslation } from "react-i18next";
 
@@ -51,6 +52,8 @@ function WebhooksPage() {
   const [submitting, setSubmitting] = useState(false);
   const [testingId, setTestingId] = useState(null);
   const [testResults, setTestResults] = useState({});
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [deletingEndpoint, setDeletingEndpoint] = useState(false);
 
   useEffect(() => {
     fetchEndpoints();
@@ -115,13 +118,21 @@ function WebhooksPage() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm(t('webhooks.deleteConfirm'))) return;
+  const handleDelete = (id) => {
+    setPendingDeleteId(id);
+  };
+
+  const confirmDeleteEndpoint = async () => {
+    if (!pendingDeleteId) return;
+    setDeletingEndpoint(true);
     try {
-      await apiCall('DELETE', `/webhook-endpoints/${id}`);
+      await apiCall('DELETE', `/webhook-endpoints/${pendingDeleteId}`);
+      setPendingDeleteId(null);
       await fetchEndpoints();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setDeletingEndpoint(false);
     }
   };
 
@@ -346,6 +357,19 @@ function WebhooksPage() {
           </div>
         )}
       </div>
+
+      {pendingDeleteId && (
+        <ConfirmationModal
+          title={t('webhooks.deleteTitle') || "Delete Webhook Endpoint?"}
+          description={t('webhooks.deleteConfirm')}
+          confirmLabel={deletingEndpoint ? (t('actions.deleting') || "Deleting…") : (t('actions.delete') || "Delete")}
+          cancelLabel={t('actions.cancel') || "Cancel"}
+          confirmVariant="danger"
+          onConfirm={confirmDeleteEndpoint}
+          onCancel={() => setPendingDeleteId(null)}
+          loading={deletingEndpoint}
+        />
+      )}
 
       <style>{`
         .alert-sm {

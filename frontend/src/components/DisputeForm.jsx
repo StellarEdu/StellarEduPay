@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { flagDispute } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
+import { validateStellarTxHash } from "../utils/stellarTxHash";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -27,6 +28,10 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
     else if (raisedBy.trim().length > 200) e.raisedBy = t("disputeForm.nameTooLong");
     if (!reason.trim()) e.reason = t("disputeForm.reasonRequired");
     else if (reason.trim().length > 1000) e.reason = t("disputeForm.reasonTooLong");
+    const hashVal = validateStellarTxHash(txHash);
+    if (!hashVal.valid) {
+      e.txHash = t("disputeForm.invalidTxHash") || hashVal.error;
+    }
     return e;
   }
 
@@ -88,6 +93,12 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
       {serverError && (
         <div role="alert" style={{ background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 6, padding: "0.75rem", fontSize: "0.85rem", color: "#991b1b", marginBottom: "1rem" }}>
           {serverError}
+        </div>
+      )}
+
+      {errors.txHash && (
+        <div role="alert" style={{ background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 6, padding: "0.75rem", fontSize: "0.85rem", color: "#991b1b", marginBottom: "1rem" }}>
+          {errors.txHash}
         </div>
       )}
 

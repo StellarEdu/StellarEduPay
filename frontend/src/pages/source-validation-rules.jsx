@@ -7,6 +7,7 @@ import {
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck } from "../components/Icons";
 import PageHero from "../components/PageHero";
+import ConfirmationModal from "../components/ConfirmationModal";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 
 const EMPTY_FORM = { publicKey: "", label: "" };
@@ -31,6 +32,8 @@ export default function SourceValidationRules() {
   const [saving, setSaving]   = useState(false);
   const [formError, setFormError]     = useState(null);
   const [formSuccess, setFormSuccess] = useState(false);
+  const [pendingDeleteRule, setPendingDeleteRule] = useState(null);
+  const [deletingRule, setDeletingRule] = useState(false);
 
   const load = useCallback(() => {
     if (!schoolId) return;
@@ -80,13 +83,21 @@ export default function SourceValidationRules() {
     }
   }
 
-  async function handleDelete(rule) {
-    if (!confirm(`Remove trusted sender "${rule.name}"?`)) return;
+  function handleDelete(rule) {
+    setPendingDeleteRule(rule);
+  }
+
+  async function confirmDeleteRule() {
+    if (!pendingDeleteRule) return;
+    setDeletingRule(true);
     try {
-      await deleteSourceValidationRule(rule._id, schoolId);
+      await deleteSourceValidationRule(pendingDeleteRule._id, schoolId);
+      setPendingDeleteRule(null);
       load();
     } catch {
       setError("Could not remove rule.");
+    } finally {
+      setDeletingRule(false);
     }
   }
 
@@ -207,6 +218,19 @@ export default function SourceValidationRules() {
           </div>
         )}
       </div>
+
+      {pendingDeleteRule && (
+        <ConfirmationModal
+          title="Remove trusted sender?"
+          description={`Remove trusted sender "${pendingDeleteRule.name}"?`}
+          confirmLabel={deletingRule ? "Removing…" : "Remove"}
+          cancelLabel="Cancel"
+          confirmVariant="danger"
+          onConfirm={confirmDeleteRule}
+          onCancel={() => setPendingDeleteRule(null)}
+          loading={deletingRule}
+        />
+      )}
     </div>
   );
 }
