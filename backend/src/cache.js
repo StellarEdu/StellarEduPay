@@ -33,7 +33,14 @@ const KEYS = {
     return `fees:${schoolId}:class:${className}`;
   },
   studentsAll: () => 'students:all',
-  student: (studentId) => `student:${studentId}`,
+  student: (schoolId, studentId) => {
+    if (!schoolId) throw new Error('student key builder requires schoolId');
+    return `student:${schoolId}:${studentId}`;
+  },
+  publicStudent: (schoolId, studentId) => {
+    if (!schoolId) throw new Error('publicStudent key builder requires schoolId');
+    return `public_student:${schoolId}:${studentId}`;
+  },
   school: (schoolIdOrSlug) => `school:${schoolIdOrSlug}`,
   balance: (studentId) => `balance:${studentId}`,
   payments: (studentId) => `payments:${studentId}`,
