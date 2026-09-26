@@ -14,7 +14,10 @@ function generateReceiptSignature(receipt) {
     assetCode: receipt.assetCode,
     confirmedAt: receipt.confirmedAt.toISOString(),
   };
-  const secret = process.env.RECEIPT_SIGNATURE_SECRET || 'default-receipt-secret';
+  const secret = process.env.RECEIPT_SIGNATURE_SECRET;
+  if (!secret) {
+    throw new Error('RECEIPT_SIGNATURE_SECRET is not set. Cannot generate receipt signature.');
+  }
   return crypto.createHmac('sha256', secret).update(JSON.stringify(payload)).digest('hex');
 }
 
