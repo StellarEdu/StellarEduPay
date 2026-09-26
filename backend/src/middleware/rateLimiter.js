@@ -89,10 +89,14 @@ async function _redisBucketCount(redis, redisKeyPrefix, clientKey, bucket, ttlSe
 // counter (per replica) if Redis is unavailable, per docs/redis-dependency.md.
 // See docs/redis-dependency.md for what a Redis outage means for the
 // effective limit in a multi-replica deployment.
+//
+// The `name` option is required (#1523) to namespace keys per limiter,
+// preventing cross-limiter counter collisions. E.g., 'verify', 'sync', 'general'.
 function rl(windowMs, max, message = RL_MSG, opts = {}) {
   const memoryStore = _createFallbackStore(windowMs);
   const keyGenerator = opts.keyGenerator || ((req) => req.ip);
   const ttlSec = Math.ceil((windowMs * 2) / 1000) + 1;
+  const name = opts.name || 'rl';
 
   return async (req, res, next) => {
     const clientKey = keyGenerator(req) || 'unknown';
@@ -106,7 +110,7 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
       try {
         ({ currentCount, previousCount } = await _redisBucketCount(
           redis,
-          'rl',
+          name,
           clientKey,
           bucket,
           ttlSec
@@ -138,8 +142,8 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
   };
 }
 
-const generalLimiter       = rl(15 * 60 * 1000, 100);
-const strictLimiter        = rl(15 * 60 * 1000, 10);
+const generalLimiter       = rl(15 * 60 * 1000, 100, RL_MSG, { name: 'rl:general' });
+const strictLimiter        = rl(15 * 60 * 1000, 10, RL_MSG, { name: 'rl:strict' });
 
 // POST /api/payments/sync triggers a full Horizon sync for one school's wallet.
 // The global limiter is per IP, so one school scripting the endpoint could
@@ -163,20 +167,21 @@ const SYNC_RL_MSG = {
   },
 };
 const syncLimiter = rl(SYNC_INTERVAL_MS, 1, SYNC_RL_MSG, {
+  name: 'rl:sync',
   keyGenerator: (req) => (req.schoolId ? `sync:${req.schoolId}` : `sync-ip:${req.ip}`),
 });
-const verifyLimiter        = rl(60 * 1000, parseInt(process.env.VERIFY_RATE_LIMIT || '10', 10));
+const verifyLimiter        = rl(60 * 1000, parseInt(process.env.VERIFY_RATE_LIMIT || '10', 10), RL_MSG, { name: 'rl:verify' });
 const reminderTriggerLimiter = rl(
   60 * 1000,
   5,
   { error: 'Too many reminder requests. Please wait.', code: 'RATE_LIMIT_EXCEEDED' },
-  { keyGenerator: (req) => `reminders:${req.schoolId || 'unknown-tenant'}` }
+  { name: 'rl:reminders', keyGenerator: (req) => `reminders:${req.schoolId || 'unknown-tenant'}` }
 );
 const bulkImportLimiter    = rl(
   60 * 60 * 1000,
   parseInt(process.env.BULK_IMPORT_RATE_LIMIT, 10) || 5,
   { error: 'Maximum 5 bulk imports per hour.', code: 'RATE_LIMIT_EXCEEDED' },
-  { keyGenerator: (req) => req.schoolId || 'unknown-tenant' },
+  { name: 'rl:bulkimport', keyGenerator: (req) => req.schoolId || 'unknown-tenant' },
 );
 
 module.exports = {
