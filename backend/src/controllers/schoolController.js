@@ -148,11 +148,11 @@ async function getAllSchools(req, res, next) {
   }
 }
 
-// GET /api/schools/:schoolSlug
+// GET /api/schools/:schoolId
 async function getSchool(req, res, next) {
   try {
     const school = await School.findOne({
-      slug: req.params.schoolSlug.toLowerCase(),
+      schoolId: req.params.schoolId,
       isActive: true,
     }, {
       jwtSecret: 0,
@@ -262,7 +262,7 @@ async function updateSchool(req, res, next) {
       updates.classOptions = updates.classOptions.map(opt => opt.trim());
     }
 
-    const original = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }).lean();
+    const original = await School.findOne({ schoolId: req.params.schoolId, isActive: true }).lean();
     if (!original) {
       const e = new Error('School not found');
       e.code = 'NOT_FOUND';
@@ -277,7 +277,7 @@ async function updateSchool(req, res, next) {
     }
 
     const school = await School.findOneAndUpdate(
-      { slug: req.params.schoolSlug.toLowerCase(), isActive: true },
+      { schoolId: req.params.schoolId, isActive: true },
       updates,
       { new: true, runValidators: true }
     );
@@ -490,11 +490,11 @@ async function rotateWebhookSecret(req, res, next) {
   }
 }
 
-// DELETE /api/schools/:schoolSlug  (soft-delete)
+// DELETE /api/schools/:schoolId  (soft-delete)
 async function deactivateSchool(req, res, next) {
   try {
     const school = await School.findOneAndUpdate(
-      { slug: req.params.schoolSlug.toLowerCase() },
+      { schoolId: req.params.schoolId },
       { isActive: false },
       { new: true }
     );
@@ -528,11 +528,11 @@ async function deactivateSchool(req, res, next) {
   }
 }
 
-// PATCH /api/schools/:schoolSlug/deactivate
+// PATCH /api/schools/:schoolId/deactivate
 async function deactivateSchoolEndpoint(req, res, next) {
   try {
     const school = await School.findOneAndUpdate(
-      { slug: req.params.schoolSlug.toLowerCase() },
+      { schoolId: req.params.schoolId },
       { isActive: false },
       { new: true }
     );
@@ -563,11 +563,11 @@ async function deactivateSchoolEndpoint(req, res, next) {
   }
 }
 
-// PATCH /api/schools/:schoolSlug/activate
+// PATCH /api/schools/:schoolId/activate
 async function activateSchool(req, res, next) {
   try {
     const school = await School.findOneAndUpdate(
-      { slug: req.params.schoolSlug.toLowerCase() },
+      { schoolId: req.params.schoolId },
       { isActive: true },
       { new: true }
     );
@@ -645,11 +645,11 @@ async function registerWebhook(req, res, next) {
   }
 }
 
-// GET /api/schools/:schoolSlug/settings
+// GET /api/schools/:schoolId/settings
 async function getSchoolSettings(req, res, next) {
   try {
     const { getSchoolSettings } = require('../services/schoolSettingsService');
-    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true }, { schoolId: 1 }).lean();
     if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
     const settings = await getSchoolSettings(school.schoolId);
     res.json({ settings });
@@ -658,11 +658,11 @@ async function getSchoolSettings(req, res, next) {
   }
 }
 
-// PATCH /api/schools/:schoolSlug/settings
+// PATCH /api/schools/:schoolId/settings
 async function updateSchoolSettings(req, res, next) {
   try {
     const { setSchoolSetting, SETTING_KEYS } = require('../services/schoolSettingsService');
-    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true }, { schoolId: 1 }).lean();
     if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
 
     const updated = {};
@@ -694,11 +694,11 @@ async function updateSchoolSettings(req, res, next) {
   }
 }
 
-// DELETE /api/schools/:schoolSlug/settings/:key
+// DELETE /api/schools/:schoolId/settings/:key
 async function clearSchoolSetting(req, res, next) {
   try {
     const { clearSchoolSetting, SETTING_KEYS } = require('../services/schoolSettingsService');
-    const school = await School.findOne({ slug: req.params.schoolSlug.toLowerCase(), isActive: true }, { schoolId: 1 }).lean();
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true }, { schoolId: 1 }).lean();
     if (!school) return next(Object.assign(new Error('School not found'), { code: 'NOT_FOUND' }));
 
     const { key } = req.params;
@@ -723,7 +723,7 @@ async function clearSchoolSetting(req, res, next) {
       });
     }
 
-    res.json({ message: `Setting "${key}" cleared for school`, schoolSlug: req.params.schoolSlug });
+    res.json({ message: `Setting "${key}" cleared for school`, schoolId: req.params.schoolId });
   } catch (err) {
     next(err);
   }
