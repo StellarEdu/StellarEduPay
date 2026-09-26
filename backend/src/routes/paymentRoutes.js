@@ -163,11 +163,13 @@ router.get("/verify/:txHash", validateTxHashParam, verifyLimiter, verifyTransact
 
 // Validation runs BEFORE resolveSchool so missing-school requests still get
 // proper 400 validation errors when the body itself is invalid.
+// resolveSchool runs BEFORE idempotency so schoolId is available for tenant-scoped
+// idempotency keys, preventing cross-tenant intent replay (#1522).
 router.post(
   "/intent",
   validateCreatePaymentIntent,
-  idempotency,
   resolveSchool,
+  idempotency,
   createPaymentIntent,
 );
 router.post(
