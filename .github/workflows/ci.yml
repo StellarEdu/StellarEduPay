@@ -171,6 +171,7 @@ jobs:
       # Dummy secrets required by config/index.js validation before test files can set them.
       JWT_SECRET: ci-test-jwt-secret-not-used-in-production
       SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+      RECEIPT_SIGNATURE_SECRET: ci-test-receipt-signature-secret-not-used-in-production
     services:
       mongodb:
         image: mongo:7
@@ -236,6 +237,7 @@ jobs:
       MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
       JWT_SECRET: ci-test-jwt-secret-not-used-in-production
       SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+      RECEIPT_SIGNATURE_SECRET: ci-test-receipt-signature-secret-not-used-in-production
     services:
       mongodb:
         image: mongo:7

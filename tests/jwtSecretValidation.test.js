@@ -15,6 +15,7 @@ function loadConfig(env = {}) {
   const saved = { ...process.env };
   // Minimal required vars
   process.env.MONGO_URI = 'mongodb://localhost/test';
+  process.env.RECEIPT_SIGNATURE_SECRET = 'a-sufficiently-long-receipt-secret-1234567890';
   Object.assign(process.env, env);
   try {
     return require('../backend/src/config/index');

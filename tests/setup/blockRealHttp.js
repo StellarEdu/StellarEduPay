@@ -7,6 +7,9 @@
  * Excluded when STELLAR_INTEGRATION_TESTS=true.
  */
 
+// Ensure dummy secrets required by config/index.js validation are present in unit tests
+process.env.RECEIPT_SIGNATURE_SECRET = process.env.RECEIPT_SIGNATURE_SECRET || 'ci-test-receipt-signature-secret-32-chars-long';
+
 if (process.env.STELLAR_INTEGRATION_TESTS !== 'true') {
   const http = require('http');
   const https = require('https');
