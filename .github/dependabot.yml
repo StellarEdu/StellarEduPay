@@ -1,32 +1,33 @@
 version: 2
 updates:
   - package-ecosystem: "npm"
-    directory: "/frontend"
+    directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
-      next-react:
+      stellar-sdk:
         patterns:
-          - "next"
-          - "eslint-config-next"
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-      eslint:
-        patterns:
-          - "eslint"
-          - "eslint-*"
-          - "@typescript-eslint/*"
+          - "@stellar/*"
   - package-ecosystem: "npm"
     directory: "/backend"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
-      eslint:
+      stellar-sdk:
         patterns:
-          - "eslint"
-          - "eslint-*"
-          - "@typescript-eslint/*"
+          - "@stellar/*"
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      stellar-sdk:
+        patterns:
+          - "@stellar/*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
