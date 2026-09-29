@@ -17,32 +17,34 @@ const winston = require('winston');
 require('winston-daily-rotate-file');
 const { redactPii, stripQueryString } = require('./piiRedaction');
 
-const _fileTransports = [
+const path = require('path');
+
+const _fileTransports = process.env.LOG_TO_FILE === 'true' ? [
   new winston.transports.DailyRotateFile({
-    filename:    'logs/combined-%DATE%.log',
+    filename:    path.join(process.env.LOG_DIR || 'logs', 'combined-%DATE%.log'),
     datePattern: 'YYYY-MM-DD',
     maxSize:     process.env.LOG_MAX_SIZE  || '100m',
     maxFiles:    process.env.LOG_MAX_FILES || '14d',
   }),
   new winston.transports.DailyRotateFile({
-    filename:    'logs/error-%DATE%.log',
+    filename:    path.join(process.env.LOG_DIR || 'logs', 'error-%DATE%.log'),
     datePattern: 'YYYY-MM-DD',
     level:       'error',
     maxSize:     process.env.LOG_MAX_SIZE  || '100m',
     maxFiles:    process.env.LOG_MAX_FILES || '14d',
   }),
-];
+] : [];
 
 // Winston instance used solely for file rotation; console output is handled
 // by the existing structured logger below so the log format stays unchanged.
-const _winstonLogger = winston.createLogger({
+const _winstonLogger = _fileTransports.length > 0 ? winston.createLogger({
   level: 'debug',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.json(),
   ),
   transports: _fileTransports,
-});
+}) : null;
 
 const LOG_LEVELS = {
   ERROR: 0,
@@ -112,7 +114,7 @@ const logger = {
     if (shouldLog('ERROR')) {
       const entry = formatMessage('ERROR', message, ...args);
       console.error(JSON.stringify(entry));
-      _winstonLogger.error(message, entry);
+      if (_winstonLogger) _winstonLogger.error(message, entry);
     }
   },
 
@@ -120,7 +122,7 @@ const logger = {
     if (shouldLog('WARN')) {
       const entry = formatMessage('WARN', message, ...args);
       console.warn(JSON.stringify(entry));
-      _winstonLogger.warn(message, entry);
+      if (_winstonLogger) _winstonLogger.warn(message, entry);
     }
   },
 
@@ -128,7 +130,7 @@ const logger = {
     if (shouldLog('INFO')) {
       const entry = formatMessage('INFO', message, ...args);
       console.log(JSON.stringify(entry));
-      _winstonLogger.info(message, entry);
+      if (_winstonLogger) _winstonLogger.info(message, entry);
     }
   },
 
@@ -136,7 +138,7 @@ const logger = {
     if (shouldLog('DEBUG')) {
       const entry = formatMessage('DEBUG', message, ...args);
       console.log(JSON.stringify(entry));
-      _winstonLogger.debug(message, entry);
+      if (_winstonLogger) _winstonLogger.debug(message, entry);
     }
   },
 
