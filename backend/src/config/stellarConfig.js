@@ -121,6 +121,57 @@ function resolveAsset(assetCode) {
 const CONFIRMATION_THRESHOLD = config.CONFIRMATION_THRESHOLD;
 const FINALIZATION_THRESHOLD = config.FINALIZATION_THRESHOLD;
 
+/**
+ * Classify a Horizon `submitTransaction` error as either a definitive failure
+ * or an ambiguous outcome (#1562).
+ *
+ * Horizon's synchronous submit endpoint returns 504 Timeout when the
+ * transaction was accepted into the queue but not yet included in a ledger
+ * within Horizon's timeout. Stellar's documentation is explicit that a timeout
+ * is NOT a failure: the transaction may still succeed and the client must
+ * re-check by hash (or resubmit the identical envelope, which is idempotent).
+ * Network errors between the backend and Horizon have the same ambiguity.
+ *
+ * Only a definitive rejection — HTTP 400 carrying `extras.result_codes`
+ * (e.g. tx_bad_seq, tx_insufficient_balance, op_no_trust) — proves the
+ * transaction was not applied. Everything else (504, 5xx, network errors,
+ * and tx_too_late before timeBounds expiry) must be treated as ambiguous so
+ * the caller keeps the payment SUBMITTED and lets the poller resolve it by
+ * hash.
+ *
+ * @param {Error & { response?: { status?: number, data?: any } }} err
+ * @returns {{ definitive: boolean, resultCode: string|null, reason: string }}
+ */
+function classifySubmitError(err) {
+  const status = err && err.response && err.response.status;
+  const data = err && err.response && err.response.data;
+  const resultCodes = data && data.extras && data.extras.result_codes;
+  const txResultCode = resultCodes && resultCodes.transaction;
+
+  // Definitive: Horizon rejected the envelope outright (HTTP 400) and told us
+  // why via result_codes. The transaction was not applied.
+  if (status === 400 && txResultCode) {
+    return {
+      definitive: true,
+      resultCode: txResultCode,
+      reason: txResultCode,
+    };
+  }
+
+  // Ambiguous: 504 timeout, any 5xx, network errors, or a 400 without
+  // result_codes. The transaction may still be applied — do not mark FAILED.
+  const reason =
+    (data && data.detail) ||
+    (err && err.message) ||
+    'ambiguous_horizon_outcome';
+
+  return {
+    definitive: false,
+    resultCode: txResultCode || null,
+    reason,
+  };
+}
+
 module.exports = {
   server,
   horizonClient,
@@ -132,6 +183,7 @@ module.exports = {
   FINALIZATION_THRESHOLD,
   isAcceptedAsset,
   resolveAsset,
+  classifySubmitError,
   CB_FAILURE_THRESHOLD,
   CB_RESET_TIMEOUT_MS,
   CB_HALF_OPEN_SUCCESS_THRESHOLD,
