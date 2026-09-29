@@ -22,6 +22,7 @@
 
 const request = require('supertest');
 const app = require('../src/app');
+const { getAllStudents } = require('../src/controllers/studentController');
 const School = require('../src/models/schoolModel');
 const Payment = require('../src/models/paymentModel');
 const Student = require('../src/models/studentModel');
@@ -230,6 +231,26 @@ describe('Issues #1521, #1522, #1523, #1524 Integration Tests', () => {
         .set('X-School-ID', schoolId)
         .expect(400);
       expect(res.body.code).toBeDefined();
+    });
+
+    it('should reject non-string search values without crashing', async () => {
+      const req = {
+        schoolId,
+        query: { search: ['alpha', 'beta'] },
+      };
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      const next = jest.fn();
+
+      await getAllStudents(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'VALIDATION_ERROR',
+      }));
+      expect(next).not.toHaveBeenCalled();
     });
   });
 });
