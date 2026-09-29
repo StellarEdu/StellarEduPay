@@ -12,6 +12,10 @@ kind: Kustomization
 #      Promoting from testnet to mainnet is a one-line newTag change — reviewable in git.
 #      Example: newTag: sha-abc1234  (same SHA from testnet)
 #
+#      The frontend image is truly environment-agnostic (issue #1583): it reads
+#      stellarNetwork at runtime from GET /api/public-config rather than from a
+#      build-time env var, so the same image tag works for both testnet and mainnet.
+#
 #   3. Commit and deploy: kubectl apply -k deploy/k8s/overlays/mainnet
 #
 # Private Registry:

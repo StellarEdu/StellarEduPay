@@ -9,7 +9,7 @@
  *  3. Rate limit enforcement across simulated concurrent clients
  *     (the key scenario from issue #392)
  *  4. getStats() exposes the `distributed` flag correctly
- *  5. disconnect() closes the Redis connection in distributed mode
+ *  5. disconnect() leaves the shared Redis connection open
  */
 
 process.env.MONGO_URI = 'mongodb://localhost:27017/test';
@@ -125,17 +125,12 @@ describe('StellarRateLimitedClient – distributed mode (Redis injected)', () =>
     expect(client.getStats().distributed).toBe(client._usingRedis);
   });
 
-  test('disconnect() calls redis.quit() when _usingRedis is true', async () => {
+  test('disconnect() does not quit the shared Redis client', async () => {
     const fakeRedis = makeFakeRedisClient();
     const client = new StellarRateLimitedClient({ redisClient: fakeRedis });
 
-    if (client._usingRedis) {
-      await client.disconnect();
-      expect(fakeRedis.quit).toHaveBeenCalled();
-    } else {
-      // IORedisConnection not available in this env – skip assertion
-      await expect(client.disconnect()).resolves.toBeUndefined();
-    }
+    await expect(client.disconnect()).resolves.toBeUndefined();
+    expect(fakeRedis.quit).not.toHaveBeenCalled();
   });
 });
 

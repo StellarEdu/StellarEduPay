@@ -3,16 +3,44 @@ kind: ConfigMap
 metadata:
   name: stellaredupay
 data:
+  # ── Runtime environment ──────────────────────────────────────────────────
+  NODE_ENV: "production"
+  PORT: "5000"
+
+  # ── Stellar / blockchain ─────────────────────────────────────────────────
+  # Overridden per-overlay (testnet sets this to "testnet").
   STELLAR_NETWORK: "mainnet"
+
+  # ── Redis ────────────────────────────────────────────────────────────────
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
-  NODE_ENV: "production"
+
+  # ── Background jobs ──────────────────────────────────────────────────────
+  POLL_INTERVAL_MS: "30000"
+  RETRY_INTERVAL_MS: "60000"
+  RETRY_MAX_ATTEMPTS: "10"
+
+  # ── Server ───────────────────────────────────────────────────────────────
+  # SHUTDOWN_TIMEOUT_MS: keep in sync with terminationGracePeriodSeconds in
+  # backend-deployment.yaml (grace period = SHUTDOWN_TIMEOUT_MS + ~10 s margin).
+  SHUTDOWN_TIMEOUT_MS: "35000"
+  LOG_LEVEL: "info"
+  MAX_BODY_SIZE: "1mb"
+
+  # ── Security / rate limiting ──────────────────────────────────────────────
+  TRUSTED_PROXY_HOPS: "1"
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  VERIFY_RATE_LIMIT: "10"
+
+  # ── Webhook ───────────────────────────────────────────────────────────────
   # Date after which the deprecated V1 webhook signature is never sent (#1539).
   WEBHOOK_V1_SUNSET: "2027-02-28"
-  # Used by the Next.js server to proxy /api/* requests server-side to the
-  # backend pod (SSR and Next.js rewrites). Not exposed to the browser.
+
+  # ── Frontend proxy (Next.js SSR rewrites) ─────────────────────────────────
   BACKEND_PROXY_TARGET: "http://backend:5000"
-  # Public HTTPS base URL (frontend + /api via the ingress). Used for
-  # unsubscribe links and RFC 8058 List-Unsubscribe headers in emails.
-  # Required in production — the backend refuses to start without it.
+
+  # ── Public base URL ───────────────────────────────────────────────────────
+  # Required in production. Used for unsubscribe links and emails.
+  # Must be overridden in your overlay or via a patch.
   APP_URL: "https://YOUR_DOMAIN_HERE"

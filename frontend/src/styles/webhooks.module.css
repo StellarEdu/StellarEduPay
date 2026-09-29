@@ -1,0 +1,16 @@
+/* webhooks page — CSS Module (issue #1585) */
+
+.alertSm {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+  margin-bottom: 0;
+}
+
+.btnGroupSm :global(.btn) {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.gap2 {
+  gap: 0.5rem;
+}

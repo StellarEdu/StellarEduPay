@@ -91,6 +91,56 @@ const options = {
         BearerAuth: [],
       },
     ],
+    paths: {
+      '/payments/verify/{txHash}': {
+        get: {
+          tags: ['Payments'],
+          summary: 'Verify a payment by transaction hash',
+          description:
+            'Verifies a Stellar transaction hash. The hash must be a 64-character hex string; ' +
+            'other values are rejected with 400. Receipt verification lives at ' +
+            'GET /payments/receipts/{receiptId}/verify.',
+          parameters: [
+            {
+              name: 'txHash',
+              in: 'path',
+              required: true,
+              description: '64-character hex Stellar transaction hash',
+              schema: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+            },
+          ],
+          responses: {
+            200: { description: 'Transaction verification result' },
+            400: { description: 'Invalid transaction hash format' },
+            404: { description: 'Transaction not found' },
+          },
+        },
+      },
+      '/payments/receipts/{receiptId}/verify': {
+        get: {
+          tags: ['Payments'],
+          summary: 'Verify a payment receipt by receipt ID',
+          description:
+            'Confirms that a printed or emailed receipt is genuine. Returns a minimal ' +
+            'authenticity result only. This endpoint is distinct from ' +
+            'GET /payments/verify/{txHash} so that receipt IDs are not shadowed by the ' +
+            'transaction-hash route.',
+          parameters: [
+            {
+              name: 'receiptId',
+              in: 'path',
+              required: true,
+              description: 'Receipt identifier embedded in the receipt QR code',
+              schema: { type: 'string' },
+            },
+          ],
+          responses: {
+            200: { description: 'Receipt authenticity result' },
+            404: { description: 'Receipt not found' },
+          },
+        },
+      },
+    },
   },
   apis: [
     './backend/src/routes/*.js',

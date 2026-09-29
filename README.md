@@ -324,7 +324,7 @@ See [Environment Variables](#environment-variables) for the full reference.
 
 ```bash
 cp frontend/.env.local.example frontend/.env.local
-# Set NEXT_PUBLIC_API_URL=http://localhost:5000/api
+# Defaults to NEXT_PUBLIC_API_URL=/api (same-origin via the Next.js proxy)
 ```
 
 ### Running the Application

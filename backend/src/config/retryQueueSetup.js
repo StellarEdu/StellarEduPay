@@ -6,7 +6,6 @@
  */
 
 const bullMQRetryService = require('../services/bullMQRetryService');
-const retryQueueRoutes = require('../routes/retryQueueRoutes');
 const logger = require('../utils/logger').child('RetryQueueSetup');
 
 let isInitialized = false;
@@ -18,8 +17,11 @@ let initState = { status: 'not_started', error: null };
 
 /**
  * Initialize the retry queue system
+ *
+ * Routes are mounted synchronously in app.js; this function only wires up the
+ * BullMQ backend so no routes can be registered after the 404 handler.
  */
-async function initializeRetryQueue(app) {
+async function initializeRetryQueue() {
   if (isInitialized) {
     logger.info('Already initialized');
     return;
@@ -32,12 +34,6 @@ async function initializeRetryQueue(app) {
     await bullMQRetryService.initializeRetryQueue();
 
     logger.info('BullMQ queue system initialized');
-
-    // Register routes if app is provided
-    if (app) {
-      app.use('/api/retry-queue', retryQueueRoutes);
-      logger.info('Routes registered at /api/retry-queue');
-    }
 
     // Main application manages process signal handling to avoid duplicate shutdown paths.
     setupGracefulShutdown();

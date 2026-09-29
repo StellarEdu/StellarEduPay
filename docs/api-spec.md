@@ -1080,9 +1080,14 @@ Authorization: Bearer <token>
 
 All audit log routes require admin auth and school context.
 
+> **Note (Issue #1575):** The canonical mount point is `/api/audit`.
+> The legacy path `/api/audit-logs` still works for one release (returns a
+> `Deprecation: true` header) but will be removed in the next major version.
+> Update any integrations to use `/api/audit`.
+
 ### Get audit logs — admin only
 ```
-GET /api/audit-logs
+GET /api/audit
 Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
@@ -1108,7 +1113,7 @@ Returns a paginated list of audit log entries for the school.
 
 ### Get recent audit logs — admin only
 ```
-GET /api/audit-logs/recent
+GET /api/audit/recent
 Authorization: Bearer <token>
 X-School-ID: SCH-3F2A
 ```
@@ -1119,6 +1124,19 @@ X-School-ID: SCH-3F2A
 | `limit` | number | Number of entries to return (default: `10`) |
 
 **Response `200`** — array of the most recent audit log entries.
+
+### Verify audit chain integrity — admin only
+```
+GET /api/audit/verify-chain
+Authorization: Bearer <token>
+X-School-ID: SCH-3F2A
+```
+Verifies the cryptographic integrity of the audit log chain for the school.
+
+**Response `200`**
+```json
+{ "valid": true, "checkedEntries": 150 }
+```
 
 ---
 

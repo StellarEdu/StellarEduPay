@@ -49,9 +49,12 @@ const superAdminRoutes = require('./routes/superAdminRoutes');
 const cspReportRoutes = require('./routes/cspReportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const userRoutes = require('./routes/userRoutes');
+const academicPeriodRoutes = require('./routes/academicPeriodRoutes');
+const anchorRoutes = require('./routes/anchorRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
+const { startStreaming, stopStreaming } = require('./services/horizonStreamingService');
 const retrySelector = require('./services/retryServiceSelector');
 const { startConsistencyScheduler, stopConsistencyScheduler } = require('./services/consistencyScheduler');
 const { startReminderScheduler, stopReminderScheduler } = require('./services/reminderService');
@@ -67,8 +70,8 @@ const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outb
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
-const { close: closeReportCacheInvalidator } = require('./services/reportCacheInvalidator');
 const { closeQueue } = require('./queue/transactionQueue');
+const { closeRedisClients } = require('./config/redisClient');
 const bullMQRetryService = require('./services/bullMQRetryService');
 const { initializeRetryQueue, setupMonitoring } = require('./config/retryQueueSetup');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
@@ -126,7 +129,33 @@ app.set('query parser', 'simple');
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key'],
+  // Issue #1584: Include every request header the API reads so that browser
+  // preflight (OPTIONS) succeeds for cross-origin requests.
+  //
+  // X-School-Slug  — accepted by resolveSchool and required by MFA setup
+  //                  (mfaController returns 400 MISSING_SCHOOL_SLUG without it)
+  // X-Correlation-ID / X-Request-ID — client-generated tracing headers used by
+  //                  requestLogger and correlationId utils for end-to-end tracing
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-School-ID',
+    'X-School-Slug',
+    'Idempotency-Key',
+    'X-Correlation-ID',
+    'X-Request-ID',
+  ],
+  // Issue #1584: Expose response headers so the browser JS can read them.
+  // Rate-limit headers let the frontend back off gracefully; correlation IDs
+  // allow client-side tracing to be linked to server-side logs.
+  exposedHeaders: [
+    'Retry-After',
+    'RateLimit-Limit',
+    'RateLimit-Remaining',
+    'RateLimit-Reset',
+    'X-Correlation-ID',
+    'X-Request-ID',
+  ],
   credentials: true,
 }));
 app.use(cookieParser());
@@ -208,10 +237,28 @@ app.use('/api/webhook-deliveries', webhookDeliveryRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
+// Issue #1575 — alias /api/audit-logs → /api/audit for one release so
+// integrators following the old API spec docs get a 200 with a Deprecation
+// header rather than a hard 404.  Remove this alias in the next major version.
+app.use('/api/audit-logs', (req, res, next) => {
+  res.set('Deprecation', 'true');
+  res.set('Link', '</api/audit>; rel="successor-version"');
+  next();
+}, auditRoutes);
+// Issue #1575 — alias /api/audit-logs → /api/audit for one release so
+// integrators following the old API spec docs get a 200 with a Deprecation
+// header rather than a hard 404.  Remove this alias in the next major version.
+app.use('/api/audit-logs', (req, res, next) => {
+  res.set('Deprecation', 'true');
+  res.set('Link', '</api/audit>; rel="successor-version"');
+  next();
+}, auditRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/superadmin', superAdminRoutes);
 app.use('/api/csp-report', cspReportRoutes);
 app.use('/api', userRoutes);
+app.use('/api/academic-periods', academicPeriodRoutes);
+app.use('/api/anchor', anchorRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);
@@ -352,6 +399,7 @@ connectDatabase().then(async () => {
 
 // Always-start services (handle concurrency internally)
    startPolling();
+   startStreaming();
    retrySelector.start();
    startTxQueueWorker();
    registerPaymentSavedSubscribers();
@@ -431,15 +479,16 @@ async function shutdown(signal) {
     await stopAcceptingNewWork();
     await drainWorkers();
     await notifySSEClients();
-    await closeQueues();
   } catch (err) {
     logger.error('Error during shutdown', { error: err.message });
   }
 
-  // (1) Stop accepting new connections; (2) wait for in-flight requests to finish;
-  // (3) only then close the database connection.
+  // Keep shared clients alive until in-flight requests finish, then close queue
+  // resources, Redis, and MongoDB in ownership order.
   server.close(async () => {
     try {
+      await closeQueues();
+      await closeRedisClients();
       await mongoose.disconnect();
       logger.info('MongoDB disconnected — clean exit');
       clearTimeout(forceExitTimer);

@@ -151,32 +151,82 @@ function idempotency(opts = {}) {
               return resolveExisting(reservation.record);
             }
 
-            // We own the reservation. Intercept res.json to persist the outcome.
+            // We own the reservation. Persist the outcome regardless of how the
+            // response is ultimately sent (res.json, res.send, res.end,
+            // res.sendStatus, res.redirect, streams, ...).
+            let capturedBody;
+            let bodyCaptured = false;
+            let settled = false;
+
             const originalJson = res.json.bind(res);
+            const originalSend = res.send.bind(res);
+
             res.json = function (body) {
+              if (!bodyCaptured) {
+                capturedBody = body;
+                bodyCaptured = true;
+              }
+              return originalJson(body);
+            };
+
+            res.send = function (body) {
+              if (!bodyCaptured) {
+                capturedBody = body;
+                bodyCaptured = true;
+              }
+              return originalSend(body);
+            };
+
+            function completeReservation() {
+              if (settled) return;
+              settled = true;
               // Cache 2xx-3xx and 4xx (except 404) responses.
               // 404 is excluded because it can be transient (e.g., transaction not yet visible on Horizon).
               // Caching a transient 404 prevents successful retries when the resource becomes available.
               // 5xx is never cached — release the reservation so the client can retry.
               if (res.statusCode < 500 && res.statusCode !== 404) {
                 idempotencyStore
-                    .complete(canonicalKey, {
-                      scope,
-                      responseStatus: res.statusCode,
-                      responseBody: body,
-                      fingerprint,
-                    })
-                    .catch((err) => {
-                      logger.error('Failed to cache response', { error: err.message });
-                    });
+                  .complete(canonicalKey, {
+                    scope,
+                    responseStatus: res.statusCode,
+                    responseBody: capturedBody,
+                    fingerprint,
+                  })
+                  .catch((err) => {
+                    logger.error('Failed to cache response', { error: err.message });
+                    if (typeof idempotencyStore.recordCompletionFailure === 'function') {
+                      idempotencyStore.recordCompletionFailure();
+                    }
+                  });
               } else {
                 // 5xx or 404 — release the reservation so the client can retry.
                 idempotencyStore.release(canonicalKey).catch((err) => {
                   logger.debug('[Idempotency] release missed', { error: err.message });
                 });
               }
-              return originalJson(body);
-            };
+            }
+
+            function releaseReservation() {
+              if (settled) return;
+              settled = true;
+              idempotencyStore.release(canonicalKey).catch((err) => {
+                logger.debug('[Idempotency] release missed', { error: err.message });
+              });
+            }
+
+            // `finish` fires once the response has been fully flushed to the
+            // client, no matter which method produced it.
+            res.on('finish', completeReservation);
+            // `close` fires when the underlying connection is closed. If it
+            // fires without `finish` the client aborted before we responded, so
+            // release the reservation instead of leaving the key in progress.
+            res.on('close', () => {
+              if (res.writableFinished) {
+                completeReservation();
+              } else {
+                releaseReservation();
+              }
+            });
 
             next();
           });
@@ -185,14 +235,13 @@ function idempotency(opts = {}) {
         logger.error('store operation failed', { error: err.message });
         // For critical payment endpoints, reject the request (fail-closed) to ensure
         // duplicate-protection is never bypassed during outages. For other endpoints,
-        // fail-open to allow the request through (backwards compatible behavior).
+        // fail-open to allow the request through.
         if (failClosed || criticalPaymentEndpoints) {
           return res.status(503).json({
-            error: 'Idempotency service temporarily unavailable',
-            code: 'IDEMPOTENCY_STORE_UNAVAILABLE',
+            error: 'Idempotency service unavailable',
+            code: 'IDEMPOTENCY_SERVICE_UNAVAILABLE',
           });
         }
-        // Fail open — let the request through rather than blocking the user.
         next();
       });
   };

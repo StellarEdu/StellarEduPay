@@ -2,58 +2,26 @@
 'use strict';
 
 /**
- * Migration CLI
+ * Thin delegate for local development.
  *
- * Usage:
- *   node scripts/migrate.js          # run all pending migrations
- *   node scripts/migrate.js rollback # roll back the last applied migration
+ * The canonical migration CLI lives in backend/scripts/migrate.js because it is
+ * included in the production image and used by Docker/Kubernetes deploy flows.
+ * The repo-root script exists only to preserve the existing local workflow and
+ * to forward to the backend entrypoint without duplicating logic.
  */
 
-require('dotenv').config({ path: require('path').join(__dirname, '../backend/.env') });
+const path = require('path');
+const { spawnSync } = require('child_process');
 
-const mongoose = require('mongoose');
-const { runMigrations, rollback } = require('../backend/src/services/migrationRunner');
-
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) {
-  console.error('MONGO_URI is not set');
-  process.exit(1);
-}
-
-const POOL_CONFIG = {
-  maxPoolSize: parseInt(process.env.MONGODB_POOL_SIZE || process.env.DB_MAX_POOL_SIZE || '20', 10),
-  minPoolSize: parseInt(process.env.DB_MIN_POOL_SIZE || '10', 10),
-  maxIdleTimeMS: parseInt(process.env.DB_MAX_IDLE_TIME_MS || '30000', 10),
-  connectTimeoutMS: parseInt(process.env.DB_CONNECT_TIMEOUT_MS || '10000', 10),
-  socketTimeoutMS: parseInt(process.env.DB_SOCKET_TIMEOUT_MS || '45000', 10),
-  serverSelectionTimeoutMS: parseInt(process.env.DB_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
-};
-
-async function main() {
-  await mongoose.connect(MONGO_URI, {
-    maxPoolSize: POOL_CONFIG.maxPoolSize,
-    minPoolSize: POOL_CONFIG.minPoolSize,
-    maxIdleTimeMS: POOL_CONFIG.maxIdleTimeMS,
-    connectTimeoutMS: POOL_CONFIG.connectTimeoutMS,
-    socketTimeoutMS: POOL_CONFIG.socketTimeoutMS,
-    serverSelectionTimeoutMS: POOL_CONFIG.serverSelectionTimeoutMS,
-    retryWrites: true,
-    retryReads: true,
-    w: 'majority',
-    readPreference: 'primaryPreferred',
-  });
-
-  const command = process.argv[2];
-  if (command === 'rollback') {
-    await rollback();
-  } else {
-    await runMigrations();
-  }
-
-  await mongoose.disconnect();
-}
-
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
+const backendScript = path.join(__dirname, '../backend/scripts/migrate.js');
+const result = spawnSync(process.execPath, [backendScript, ...process.argv.slice(2)], {
+  stdio: 'inherit',
+  env: process.env,
 });
+
+if (result.error) {
+  console.error('[migrate] Failed to launch backend migration CLI:', result.error);
+  process.exit(1);
+}
+
+process.exit(result.status === null ? 1 : result.status);

@@ -755,6 +755,29 @@ the single best one instead of stacking all of them.
 
 ---
 
+## Frontend ↔ API Topologies
+
+Every client call in the frontend — the axios instance, `/auth/me` and
+`/auth/logout` in `useAdminAuth`, the SSE stream in `usePaymentEvents` and CSV
+report downloads — derives its URL from **one** value: `API_BASE_URL` in
+`frontend/src/config/apiBase.js`. It defaults to the relative base `/api` and
+only honours `NEXT_PUBLIC_API_URL` as an explicit override (#1578).
+
+Auth cookies are `HttpOnly; SameSite=Strict` with no `Domain`, so they are only
+sent on first-party requests to the host that issued them. The supported
+topologies are:
+
+| Topology | `NEXT_PUBLIC_API_URL` | How `/api` reaches the backend | Extra config |
+|----------|-----------------------|--------------------------------|--------------|
+| Same host via Ingress (Kubernetes) | `/api` (default) | `deploy/k8s/ingress.yaml` routes `/api` to the backend service | none |
+| Same host via Next rewrite (Docker Compose, local dev, Codespaces) | `/api` (default) | `next.config.js` `rewrites()` proxies `/api/*` to `BACKEND_PROXY_TARGET` | `BACKEND_PROXY_TARGET` (build-time; `http://backend:5000` in Compose, `http://localhost:5000` locally) |
+| Cross host (UI and API on different hosts) | absolute, e.g. `https://api.school.example/api` | browser calls the API host directly | backend must issue cookies with `SameSite=None; Secure` and a shared parent `Domain`, allow the UI origin in CORS; the API origin is added to CSP `connect-src` automatically |
+
+Prefer one of the same-host topologies: they need no CORS preflights, no CSP
+widening and keep cookies first-party.
+
+---
+
 ## Content Security Policy (CSP) Strategy
 
 CSP is enforced at two distinct layers, each appropriate to what it serves.
@@ -770,7 +793,7 @@ The browser-facing CSP is configured in `frontend/next.config.js` via the `heade
 | `style-src` | `'self'` | No inline styles |
 | `img-src` | `'self' data:` | Allows base64 data URIs for QR codes |
 | `font-src` | `'self'` | Same-origin fonts only |
-| `connect-src` | `'self' https://horizon-testnet.stellar.org https://horizon.stellar.org` | Allows fetch to the backend API and Stellar Horizon |
+| `connect-src` | `'self' https://horizon-testnet.stellar.org https://horizon.stellar.org` | Allows fetch to the same-origin `/api` and Stellar Horizon (the API origin is appended only for a cross-host `NEXT_PUBLIC_API_URL`) |
 | `object-src` | `'none'` | Blocks Flash and plugins |
 | `frame-ancestors` | `'none'` | Prevents clickjacking |
 | `base-uri` | `'self'` | Prevents base tag injection |

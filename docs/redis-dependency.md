@@ -74,11 +74,23 @@ everywhere (previously each client set its own ad-hoc options):
   attempts (stop reconnecting).
 - `reconnectOnError` reconnects only on transient codes (`ECONNREFUSED`,
   `ENOTFOUND`, `ETIMEDOUT`, `EHOSTUNREACH`).
-- Consumers needing blocking commands (BullMQ Worker/QueueEvents, pub/sub
-  subscriber, lock client) override `maxRetriesPerRequest: null` while inheriting
-  the rest of the shared policy.
+- `getRedisClient()` returns the process-wide command client used by locks,
+  idempotency, publishers, rate limiting, and BullMQ queues.
+- `getRedisSubscriber()` returns one process-wide duplicate shared by SSE and
+  cache invalidation subscribers. Pub/sub requires a dedicated connection, but
+  consumers no longer create one each.
+- BullMQ workers and QueueEvents may create dedicated blocking duplicates
+  internally; queue modules pass the shared command client rather than creating
+  their own ioredis clients.
 
 Pinned by `backend/tests/redisReconnectionPolicy.test.js`.
+
+## Redis connection ownership
+
+`config/redisClient.js` owns the command client and shared subscriber for the
+process. Services may add channel subscriptions and event handlers but must not
+quit either client. Queue shutdown closes BullMQ resources first; application
+shutdown then closes both shared Redis clients centrally.
 
 ## High availability
 

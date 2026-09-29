@@ -6,6 +6,7 @@ import TestnetBanner from "./TestnetBanner";
 import { useTheme } from "../pages/_app";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 import { SUPPORTED_LOCALES, LOCALE_NAMES } from "../i18n";
+import styles from "../styles/Navbar.module.css";
 
 const PUBLIC_LINKS = [
   { href: "/pay-fees",  i18nKey: "nav.payFees" },
@@ -42,185 +43,31 @@ export default function Navbar() {
   const { t, i18n } = useTranslation();
   const { dark, toggle } = useTheme();
   const { isAdmin, logout } = useAdminAuthContext();
-  const links = isAdmin ? [...PUBLIC_LINKS, ...ADMIN_LINKS] : PUBLIC_LINKS;
+  // #1580 — same navigation source as the AppLayout sidebar.
+  const links = getNavItems({ isAdmin });
+  // On sidebar routes the desktop sidebar already shows these links, so the top
+  // bar only shows them where the sidebar is hidden (narrow screens).
+  const hasSidebar = usesAppLayout(pathname);
 
   useEffect(() => { setOpen(false); }, [pathname]);
 
   return (
     <>
-      <style>{`
-        .nav {
-          background: #0e1424;
-          background-image: radial-gradient(600px 120px at 18% 0%, rgba(16,185,129,0.20), transparent 70%);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-          position: sticky;
-          top: 0;
-          z-index: 200;
-          backdrop-filter: saturate(140%);
-        }
-        .nav-inner {
-          max-width: 1280px;
-          margin: 0 auto;
-          padding: 0 1.5rem;
-          height: 60px;
-          display: flex;
-          align-items: center;
-          gap: 1.5rem;
-        }
-        .nav-brand {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          text-decoration: none;
-          flex-shrink: 0;
-          margin-right: 0.5rem;
-        }
-        .nav-logo {
-          width: 32px; height: 32px;
-          background: linear-gradient(135deg, #34d399 0%, #059669 55%, #0d9488 100%);
-          border-radius: 9px;
-          display: flex; align-items: center; justify-content: center;
-          font-weight: 900; font-size: 0.85rem; color: #fff;
-          flex-shrink: 0;
-          letter-spacing: -0.05em;
-          box-shadow: 0 4px 14px -2px rgba(5,150,105,0.6);
-        }
-        .nav-name {
-          color: #f1f5f9;
-          font-weight: 700;
-          font-size: 0.9375rem;
-          letter-spacing: -0.02em;
-          white-space: nowrap;
-        }
-        .nav-links {
-          display: flex;
-          align-items: center;
-          gap: 0.125rem;
-          flex: 1;
-        }
-        .nav-link {
-          color: rgba(255, 255, 255, 0.5);
-          text-decoration: none;
-          font-size: 0.8375rem;
-          font-weight: 500;
-          padding: 0.375rem 0.7rem;
-          border-radius: 6px;
-          transition: color 0.12s, background 0.12s;
-          white-space: nowrap;
-        }
-        .nav-link:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
-        .nav-link.active { color: #fff; background: rgba(255, 255, 255, 0.1); font-weight: 600; }
-        .nav-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
-        .nav-theme-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 32px; height: 32px;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 8px;
-          color: rgba(255, 255, 255, 0.6);
-          cursor: pointer;
-          transition: background 0.12s, border-color 0.12s, color 0.12s;
-        }
-        .nav-theme-btn:hover {
-          background: rgba(255, 255, 255, 0.12);
-          border-color: rgba(255, 255, 255, 0.2);
-          color: #fff;
-        }
-        .nav-pill {
-          display: inline-flex; align-items: center;
-          background: transparent;
-          border: 1.5px solid rgba(255, 255, 255, 0.14);
-          border-radius: 7px;
-          color: rgba(255, 255, 255, 0.65);
-          cursor: pointer;
-          font: 500 0.8rem/1 inherit;
-          padding: 0.375rem 0.875rem;
-          transition: all 0.12s;
-          text-decoration: none;
-          white-space: nowrap;
-        }
-        .nav-pill:hover {
-          border-color: rgba(255, 255, 255, 0.3);
-          color: #fff;
-          background: rgba(255, 255, 255, 0.06);
-        }
-        .nav-pill-accent {
-          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
-          border: none;
-          color: #fff;
-          font-weight: 700;
-          box-shadow: 0 4px 14px -3px rgba(5,150,105,0.6);
-        }
-        .nav-pill-accent:hover {
-          filter: brightness(1.08);
-          color: #fff;
-          background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
-        }
-        .nav-lang {
-          appearance: none;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          border-radius: 7px;
-          color: rgba(255, 255, 255, 0.8);
-          font: 500 0.8rem/1 inherit;
-          padding: 0.4rem 0.55rem;
-          cursor: pointer;
-          outline: none;
-        }
-        .nav-lang:hover {
-          background: rgba(255, 255, 255, 0.12);
-          border-color: rgba(255, 255, 255, 0.22);
-        }
-        .nav-hamburger {
-          display: none;
-          align-items: center;
-          justify-content: center;
-          width: 32px; height: 32px;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 7px;
-          cursor: pointer;
-          color: rgba(255, 255, 255, 0.7);
-          font-size: 1.1rem;
-          line-height: 1;
-        }
-        .nav-mobile {
-          display: none;
-          flex-direction: column;
-          background: #0c1525;
-          border-top: 1px solid rgba(255, 255, 255, 0.06);
-          padding: 0.5rem 1rem 1rem;
-          gap: 0.125rem;
-        }
-        .nav-mobile.open { display: flex; }
-        .nav-mobile-divider {
-          height: 1px;
-          background: rgba(255,255,255,0.07);
-          margin: 0.5rem 0;
-        }
-        @media (max-width: 720px) {
-          .nav-links { display: none; }
-          .nav-hamburger { display: flex; }
-          .nav-lang { max-width: 130px; }
-        }
-      `}</style>
 
       <TestnetBanner />
-      <nav className="nav" aria-label={t("nav.mainNavAria")}>
-        <div className="nav-inner">
-          <Link href="/" className="nav-brand">
-            <div className="nav-logo">S</div>
-            <span className="nav-name">StellarEduPay</span>
+      <nav className={styles.nav} aria-label={t("nav.mainNavAria")}>
+        <div className={styles.inner}>
+          <Link href="/" className={styles.brand}>
+            <div className={styles.logo}>S</div>
+            <span className={styles.name}>StellarEduPay</span>
           </Link>
 
-          <div className="nav-links">
+          <div className={styles.links}>
             {links.map(({ href, i18nKey }) => (
               <Link
                 key={href}
                 href={href}
-                className={`nav-link${pathname === href ? " active" : ""}`}
+                className={`${styles.link}${pathname === href ? " " + styles.linkActive : ""}`}
                 aria-current={pathname === href ? "page" : undefined}
               >
                 {t(i18nKey)}
@@ -228,9 +75,9 @@ export default function Navbar() {
             ))}
           </div>
 
-          <div className="nav-right">
+          <div className={styles.right}>
             <select
-              className="nav-lang"
+              className={styles.lang}
               value={i18n.resolvedLanguage || "en"}
               onChange={(e) => i18n.changeLanguage(e.target.value)}
               aria-label={t("nav.language")}
@@ -240,18 +87,18 @@ export default function Navbar() {
               ))}
             </select>
             <button
-              className="nav-theme-btn"
+              className={styles.themeBtn}
               onClick={toggle}
               aria-label={dark ? t("nav.switchToLight") : t("nav.switchToDark")}
             >
               {dark ? <SunIcon /> : <MoonIcon />}
             </button>
             {isAdmin
-              ? <button className="nav-pill" onClick={logout}>{t("actions.signOut")}</button>
-              : <Link href="/login" className="nav-pill nav-pill-accent">{t("nav.adminLogin")}</Link>
+              ? <button className={styles.pill} onClick={logout}>{t("actions.signOut")}</button>
+              : <Link href="/login" className={`${styles.pill} ${styles.pillAccent}`}>{t("nav.adminLogin")}</Link>
             }
             <button
-              className="nav-hamburger"
+              className={styles.hamburger}
               onClick={() => setOpen(o => !o)}
               aria-expanded={open}
               aria-label={open ? t("nav.closeMenu") : t("nav.openMenu")}
@@ -262,21 +109,21 @@ export default function Navbar() {
         </div>
       </nav>
 
-      <div className={`nav-mobile${open ? " open" : ""}`} aria-hidden={!open}>
+      <div className={`${styles.mobile}${open ? " " + styles.mobileOpen : ""}`} aria-hidden={!open}>
         {links.map(({ href, i18nKey }) => (
           <Link
             key={href}
             href={href}
-            className={`nav-link${pathname === href ? " active" : ""}`}
+            className={`${styles.link}${pathname === href ? " " + styles.linkActive : ""}`}
             onClick={() => setOpen(false)}
           >
             {t(i18nKey)}
           </Link>
         ))}
-        <div className="nav-mobile-divider" />
+        <div className={styles.mobileDivider} />
         {isAdmin
-          ? <button className="nav-pill" onClick={() => { logout(); setOpen(false); }} style={{ marginTop: "0.25rem", width: "fit-content" }}>{t("actions.signOut")}</button>
-          : <Link href="/login" className="nav-pill nav-pill-accent" style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>{t("nav.adminLogin")}</Link>
+          ? <button className={styles.pill} onClick={() => { logout(); setOpen(false); }} style={{ marginTop: "0.25rem", width: "fit-content" }}>{t("actions.signOut")}</button>
+          : <Link href="/login" className={`${styles.pill} ${styles.pillAccent}`} style={{ marginTop: "0.25rem", width: "fit-content" }} onClick={() => setOpen(false)}>{t("nav.adminLogin")}</Link>
         }
       </div>
     </>

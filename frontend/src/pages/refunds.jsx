@@ -3,8 +3,8 @@ import { getSchoolRefunds, approveRefund } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck, IconChevronLeft, IconChevronRight } from "../components/Icons";
 import PageHero from "../components/PageHero";
-import RequireAdmin from "../components/RequireAdmin";
 import { useTranslation } from "react-i18next";
+import { usePermissions } from "../hooks/usePermissions";
 
 const STATUS_META = {
   approval_pending: { cls: "badge-warning",  labelKey: "status.refund.approval_pending", color: "var(--warning)" },
@@ -15,6 +15,7 @@ const STATUS_META = {
 };
 
 function StatusBadge({ status }) {
+  const { t } = useTranslation();
   const meta = STATUS_META[status] || { cls: "badge-neutral", label: status };
   return (
     <span className={`badge ${meta.cls}`} style={{ textTransform: "none" }}>
@@ -25,11 +26,14 @@ function StatusBadge({ status }) {
 
 function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
   const { t } = useTranslation();
+  const can = usePermissions();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [note, setNote] = useState("");
 
-  const canApprove = refund.initiatedBy !== user?.email && refund.status === "approval_pending";
+  // #1581 — only owners may approve (mirrors requireSchoolAuth(['owner'])).
+  const hasRole = can("refunds.write");
+  const canApprove = hasRole && refund.initiatedBy !== user?.email && refund.status === "approval_pending";
 
   async function handleApprove(e) {
     e.preventDefault();
@@ -57,7 +61,9 @@ function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
         fontSize: "0.8125rem",
         color: "var(--text-muted)",
       }}>
-        {refund.initiatedBy === user?.email
+        {!hasRole
+          ? t("refunds.notAuthorized")
+          : refund.initiatedBy === user?.email
           ? t("refunds.youInitiated")
           : refund.status !== "approval_pending"
           ? t("refunds.cannotApproveStatus", { status: refund.status })
@@ -299,7 +305,7 @@ function Refunds() {
   const pendingCount = refunds.filter(r => r.status === "approval_pending").length;
 
   return (
-    <RequireAdmin>
+    <>
       <PageHero
         title={t("refunds.title")}
         subtitle={t("refunds.subtitle")}
@@ -452,7 +458,7 @@ function Refunds() {
           )}
         </>
       )}
-    </RequireAdmin>
+    </>
   );
 }
 

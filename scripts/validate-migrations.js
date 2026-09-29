@@ -1,48 +1,41 @@
 #!/usr/bin/env node
 
 /**
- * Migration Numbering Validation Script
+ * Migration validation script.
  *
- * Ensures all migration files have unique, strictly increasing numeric prefixes.
- * Prevents the issues described in #1037 where duplicate migration numbers
- * created ambiguous execution ordering.
- *
- * As of #1290 it also fails when any file in the repository requires/imports a
- * migration path that does not resolve (e.g. a test pinned to an ordinal that was
- * later renumbered). This catches the gap that the migration-numbering check
- * could not: a dangling reference to a migration by number.
+ * This enforces the repo policy that schema/data changes only happen through the
+ * versioned runner in backend/migrations/, and that ad-hoc scripts in the root
+ * scripts/ directory are forbidden.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const MIGRATIONS_DIR = path.join(__dirname, '../backend/migrations');
-const REPO_ROOT = path.join(__dirname, '..');
+const DEFAULT_REPO_ROOT = path.resolve(__dirname, '..');
+const MIGRATIONS_DIR = path.join(DEFAULT_REPO_ROOT, 'backend/migrations');
+const ROOT_SCRIPTS_DIR = path.join(DEFAULT_REPO_ROOT, 'scripts');
 
-// Directories that are never sources of migration references we want to lint.
 const IGNORED_DIRS = new Set(['node_modules', 'coverage', '.git', 'dist', 'build', '.next']);
 
-function validateMigrations() {
-  const files = fs.readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.js'));
+function validateMigrations(opts = {}) {
+  const repoRoot = path.resolve(opts.repoRoot || DEFAULT_REPO_ROOT);
+  const migrationsDir = path.join(repoRoot, 'backend/migrations');
+  const scriptsDir = path.join(repoRoot, 'scripts');
+
+  const issues = [];
+  const files = fs.existsSync(migrationsDir) ? fs.readdirSync(migrationsDir).filter(f => f.endsWith('.js')) : [];
 
   const migrations = {};
-  const issues = [];
-
   for (const file of files) {
-    // Match files like 001_name.js or unnumbered files
     const match = file.match(/^(\d{3})_(.+)\.js$/);
-
     if (!match) {
-      // Unnumbered files should not exist (unless legacy allowed)
       if (!file.match(/^\d{3}_/)) {
         issues.push(`❌ Unnumbered migration file found: ${file}`);
       }
       continue;
     }
 
-    const [, number, name] = match;
-
-    // Check for duplicate numbers
+    const [, number] = match;
     if (migrations[number]) {
       issues.push(
         `❌ Duplicate migration number ${number}:\n` +
@@ -54,7 +47,6 @@ function validateMigrations() {
     }
   }
 
-  // Check that numbers are sequential (no gaps)
   const numbers = Object.keys(migrations)
     .map(n => parseInt(n, 10))
     .sort((a, b) => a - b);
@@ -62,8 +54,6 @@ function validateMigrations() {
   if (numbers.length > 0) {
     const firstNum = numbers[0];
     const lastNum = numbers[numbers.length - 1];
-
-    // Check for gaps
     for (let i = firstNum; i <= lastNum; i++) {
       const padded = String(i).padStart(3, '0');
       if (!migrations[padded]) {
@@ -72,9 +62,8 @@ function validateMigrations() {
     }
   }
 
-  // A reference to a migration that no longer resolves is just as bad as a
-  // numbering collision: it produces a red suite that looks like a code defect.
-  issues.push(...findDanglingMigrationReferences());
+  issues.push(...findDanglingMigrationReferences(repoRoot));
+  issues.push(...findForbiddenMigrateScripts(scriptsDir));
 
   if (issues.length > 0) {
     console.error('❌ Migration validation failed!\n');
@@ -84,27 +73,34 @@ function validateMigrations() {
     console.error('  • Migration numbers must be unique');
     console.error('  • Migration numbers should be sequential (001, 002, 003, ...)');
     console.error('  • No file may require/import a migration path that does not resolve');
-    process.exit(1);
+    console.error('  • Root scripts/migrate-* files are forbidden; only scripts/migrate.js is allowed');
+    throw new Error(issues.join('\n'));
   }
 
   console.log(`✅ Migration validation passed! (${numbers.length} migrations found)`);
   console.log('   Migrations are properly numbered and sequenced.');
-  console.log('   No dangling migration references detected.');
-  process.exit(0);
+  console.log('   Ad-hoc root migrate-* scripts are not present.');
+  return true;
 }
 
-/**
- * Walk the repository for `require(...)` / `import ... from '...'` literals that
- * reference a migration file by path, and fail if any of those paths do not
- * resolve. References are matched by the `NNN_` prefix segment so the check is
- * independent of directory depth. Bare module specifiers (e.g. `'qrcode.react'`)
- * and dynamic `require(variable)` calls are ignored.
- *
- * @returns {string[]} Human-readable failure messages (empty when clean)
- */
-function findDanglingMigrationReferences() {
+function findForbiddenMigrateScripts(scriptsDir) {
   const problems = [];
-  const files = walk(REPO_ROOT);
+  if (!fs.existsSync(scriptsDir)) return problems;
+
+  for (const file of fs.readdirSync(scriptsDir)) {
+    if (!file.endsWith('.js')) continue;
+    if (file === 'migrate.js') continue;
+    if (/^migrate(?:-.+)?\.js$/.test(file)) {
+      problems.push(`❌ Forbidden ad-hoc migration script found in scripts/: ${file}`);
+    }
+  }
+
+  return problems;
+}
+
+function findDanglingMigrationReferences(repoRoot) {
+  const problems = [];
+  const files = walk(repoRoot);
   const requireRe = /require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
   const importRe = /import\s+(?:[^'"`]+\s+from\s+)?['"`]([^'"`]+)['"`]/g;
 
@@ -116,7 +112,7 @@ function findDanglingMigrationReferences() {
       if (!isMigrationRef(ref)) continue;
       if (!resolves(ref, path.dirname(file))) {
         problems.push(
-          `❌ Dangling migration reference in ${path.relative(REPO_ROOT, file)}:\n` +
+          `❌ Dangling migration reference in ${path.relative(repoRoot, file)}:\n` +
           `   '${ref}' does not resolve to a migration file`
         );
       }
@@ -142,8 +138,6 @@ function isMigrationRef(p) {
 }
 
 function resolves(p, fromDir) {
-  // Only relative path references (starting with '.' or '/') point at a file we
-  // can stat. Bare specifiers like 'qrcode.react' are skipped.
   if (!p.startsWith('.') && !p.startsWith('/')) return true;
   const abs = path.resolve(fromDir, p);
   return (
@@ -166,4 +160,14 @@ function walk(dir) {
   return out;
 }
 
-validateMigrations();
+if (require.main === module) {
+  try {
+    validateMigrations();
+    process.exit(0);
+  } catch (err) {
+    console.error(err && err.message ? err.message : err);
+    process.exit(1);
+  }
+}
+
+module.exports = { validateMigrations, findDanglingMigrationReferences, findForbiddenMigrateScripts };

@@ -107,11 +107,14 @@ async function onPaymentSavedCancelReminder(payment) {
 
 async function onRefundStatusChanged(refundEvent) {
   try {
-    if (refundEvent.newStatus === 'confirmed') {
+    // Fire webhooks on significant terminal state transitions.
+    if (refundEvent.newStatus === 'confirmed' || refundEvent.newStatus === 'rejected') {
       const school = await School.findOne({ schoolId: refundEvent.schoolId });
       const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
       const { buildWebhookPayload } = require('../utils/buildWebhookPayload');
       const { fireWebhookToEndpoints } = require('./webhookService');
+
+      const eventType = refundEvent.newStatus === 'confirmed' ? 'payment.refunded' : 'payment.refund_rejected';
 
       const rawPayload = {
         originalTxHash: refundEvent.originalTxHash,
@@ -124,7 +127,7 @@ async function onRefundStatusChanged(refundEvent) {
         ts: new Date().toISOString(),
       };
 
-      const results = await fireWebhookToEndpoints(refundEvent.schoolId, 'payment.refunded', rawPayload, allowedFields);
+      const results = await fireWebhookToEndpoints(refundEvent.schoolId, eventType, rawPayload, allowedFields);
 
       // Fallback to legacy single-URL
       if (results.length === 0) {
@@ -132,13 +135,16 @@ async function onRefundStatusChanged(refundEvent) {
         if (!webhookUrl) return;
         const secret = school ? school.webhookSecret : null;
         const filteredPayload = buildWebhookPayload(rawPayload, allowedFields);
-        const { notifyPaymentRefunded } = require('./webhookService');
-        await notifyPaymentRefunded(webhookUrl, { ...refundEvent, ...filteredPayload }, null, secret);
+        if (refundEvent.newStatus === 'confirmed') {
+          const { notifyPaymentRefunded } = require('./webhookService');
+          await notifyPaymentRefunded(webhookUrl, { ...refundEvent, ...filteredPayload }, null, secret);
+        }
       }
     }
   } catch (err) {
     logger.error('Refund webhook subscriber failed', {
       originalTxHash: refundEvent.originalTxHash,
+      newStatus: refundEvent.newStatus,
       error: err.message,
     });
   }

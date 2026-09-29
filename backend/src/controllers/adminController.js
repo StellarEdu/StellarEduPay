@@ -2,6 +2,8 @@
 
 const logger = require('../utils/logger');
 const { logAudit } = require('../services/auditService');
+const SystemConfig = require('../models/systemConfigModel');
+const { invalidateMaintenanceCache } = require('../middleware/maintenanceMode');
 
 const VALID_LEVELS = ['debug', 'info', 'warn', 'error'];
 
@@ -48,4 +50,58 @@ async function setLogLevel(req, res) {
   res.json({ previous, current });
 }
 
-module.exports = { setLogLevel };
+/**
+ * PUT /api/admin/maintenance
+ * Body: { enabled: boolean, message?: string }
+ * Requires super-admin auth. Toggles global maintenance mode and invalidates
+ * the in-memory cache used by the maintenanceMode middleware.
+ */
+async function setMaintenanceMode(req, res, next) {
+  try {
+    const { enabled, message } = req.body || {};
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        error: 'Invalid maintenance flag. "enabled" must be a boolean.',
+        code: 'INVALID_MAINTENANCE_FLAG',
+      });
+    }
+
+    const previous = await SystemConfig.get('maintenanceMode');
+    const previousEnabled = !!(previous && previous.enabled);
+
+    const value = { enabled };
+    if (typeof message === 'string') {
+      value.message = message;
+    }
+
+    await SystemConfig.set('maintenanceMode', value);
+    invalidateMaintenanceCache();
+
+    logger.info('Global maintenance mode changed', {
+      previous: previousEnabled,
+      current: enabled,
+      changedBy: req.admin?.email || req.admin?.userId,
+    });
+
+    if (req.auditContext) {
+      await logAudit({
+        schoolId: 'system',
+        action: 'maintenance_mode_change',
+        performedBy: req.auditContext.performedBy,
+        targetId: 'maintenanceMode',
+        targetType: 'system_config',
+        details: { previous: previousEnabled, current: enabled },
+        result: 'success',
+        ipAddress: req.auditContext.ipAddress,
+        userAgent: req.auditContext.userAgent,
+      });
+    }
+
+    res.json({ previous: previousEnabled, current: enabled });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { setLogLevel, setMaintenanceMode };

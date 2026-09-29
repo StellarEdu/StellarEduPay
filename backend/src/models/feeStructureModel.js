@@ -11,6 +11,17 @@ const feeStructureSchema = new mongoose.Schema(
     feeAmount:    { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
     description:  { type: String, default: '' },
     academicYear: { type: String, default: () => new Date().getUTCFullYear().toString() },
+    /**
+     * Optional reference to an AcademicPeriod (Issue #1569).
+     * When set, this fee structure belongs to the named term/period so
+     * reports and balances can be filtered per period.
+     */
+    periodId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AcademicPeriod',
+      default: null,
+      index: true,
+    },
     isActive:        { type: Boolean, default: true, index: true },
     paymentDeadline: { type: Date, default: null },
   },

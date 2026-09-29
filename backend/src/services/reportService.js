@@ -7,6 +7,99 @@ const FeeStructure = require('../models/feeStructureModel');
 const { POOL_CONFIG } = require('../config/database');
 
 /**
+ * Convert a local calendar date string (YYYY-MM-DD) and an IANA timezone to a
+ * UTC Date representing the **start** of that calendar day in that timezone.
+ *
+ * Uses the Intl API to find the UTC offset at that local midnight, so it handles
+ * DST transitions correctly (e.g. on the day clocks go forward/back, the
+ * calendar day is shorter/longer than 24 h).
+ *
+ * Issue #1572 — replaces the old pattern of appending 'T00:00:00.000Z' which
+ * forced UTC boundaries regardless of the school's timezone.
+ *
+ * @param {string} dateStr   YYYY-MM-DD local calendar date
+ * @param {string} timezone  IANA timezone (e.g. 'Pacific/Port_Moresby', 'America/New_York')
+ * @returns {Date}           UTC Date for the start of that local day
+ */
+function localDayStartUTC(dateStr, timezone) {
+  // Parse the local date parts
+  const [year, month, day] = dateStr.split('-').map(Number);
+
+  // Build a reference instant: treat the date as UTC midnight first, then use
+  // Intl to find what UTC offset applies in the target timezone at that time.
+  // We iterate once because the offset itself can change near midnight.
+  let approxUtc = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+
+  // Determine the UTC offset (in minutes) that the timezone has at this moment.
+  // We use Intl.DateTimeFormat to format the same instant in the target timezone
+  // and in UTC, then diff the two representations.
+  for (let pass = 0; pass < 2; pass++) {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    });
+    // Format the approxUtc instant in the target timezone
+    const parts = fmt.formatToParts(new Date(approxUtc));
+    const get = (type) => parseInt(parts.find(p => p.type === type).value, 10);
+    const localYear  = get('year');
+    const localMonth = get('month');
+    const localDay   = get('day');
+    const localHour  = get('hour') % 24; // guard against 24:00 representation
+    const localMin   = get('minute');
+    const localSec   = get('second');
+
+    // Compute how far off we are from local midnight
+    const localMsFromMidnight = (localHour * 3600 + localMin * 60 + localSec) * 1000;
+    // Also adjust if the date shifted (can happen near DST transitions)
+    const dateDiff = Date.UTC(year, month - 1, day) -
+                     Date.UTC(localYear, localMonth - 1, localDay);
+
+    approxUtc = approxUtc - localMsFromMidnight + dateDiff;
+  }
+
+  return new Date(approxUtc);
+}
+
+/**
+ * UTC Date for the **exclusive** end of a local calendar day: i.e. the start
+ * of the next calendar day in the timezone. Used in half-open interval queries:
+ *   confirmedAt >= localDayStartUTC(startDate)
+ *   confirmedAt <  localDayEndUTC(endDate)
+ *
+ * A half-open interval avoids the '23:59:59.999' millisecond edge case.
+ *
+ * @param {string} dateStr   YYYY-MM-DD local calendar date
+ * @param {string} timezone  IANA timezone
+ * @returns {Date}
+ */
+function localDayEndUTC(dateStr, timezone) {
+  // End of day = start of the *next* calendar day
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1)); // safe — Date handles overflow
+  const nextStr = next.toISOString().slice(0, 10);           // YYYY-MM-DD of next day
+  return localDayStartUTC(nextStr, timezone);
+}
+
+/**
+ * Build a confirmedAt range filter using timezone-aware boundaries (Issue #1572).
+ * Returns an object suitable for spreading into a $match.confirmedAt constraint,
+ * or an empty object if neither bound is supplied.
+ *
+ * Uses a half-open interval [start, end) to avoid edge cases at 23:59:59.999.
+ *
+ * @param {{ startDate?: string, endDate?: string, timezone?: string }} opts
+ * @returns {object} e.g. { $gte: Date, $lt: Date }
+ */
+function buildDateRangeFilter({ startDate, endDate, timezone = 'UTC' }) {
+  const filter = {};
+  if (startDate) filter.$gte = localDayStartUTC(startDate, timezone);
+  if (endDate)   filter.$lt  = localDayEndUTC(endDate, timezone);
+  return filter;
+}
+
+/**
  * Get the data version for cache key generation.
  * Returns the timestamp of the most recent confirmed payment for a school,
  * which can be used to invalidate cached reports when data changes.
@@ -26,15 +119,32 @@ async function getDataVersion(schoolId) {
 /**
  * Aggregate confirmed payments grouped by date (YYYY-MM-DD), scoped to a school.
  *
- * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string }} options
+ * @param {{ schoolId: string, startDate?: string, endDate?: string, timezone?: string, periodId?: string }} options
  */
-async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC' } = {}) {
+async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC', periodId } = {}) {
   const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
 
+  // Issue #1572 — use timezone-aware boundaries so a report for 'YYYY-MM-DD to
+  // YYYY-MM-DD' captures exactly the payments whose local confirmation date
+  // falls in that range, regardless of the school's UTC offset.
   if (startDate || endDate) {
-    match.confirmedAt = {};
-    if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
-    if (endDate)   match.confirmedAt.$lte = new Date(endDate   + 'T23:59:59.999Z');
+    match.confirmedAt = buildDateRangeFilter({ startDate, endDate, timezone });
+  }
+
+  // Issue #1569 — optional period-scoped filter: if periodId is supplied,
+  // narrow the date range to the period's startsAt/endsAt boundaries.
+  if (periodId) {
+    const AcademicPeriod = require('../models/academicPeriodModel');
+    const period = await AcademicPeriod.findOne({ _id: periodId, schoolId }).lean();
+    if (period) {
+      if (!match.confirmedAt) match.confirmedAt = {};
+      if (!match.confirmedAt.$gte || period.startsAt > match.confirmedAt.$gte) {
+        match.confirmedAt.$gte = period.startsAt;
+      }
+      if (!match.confirmedAt.$lte || period.endsAt < match.confirmedAt.$lte) {
+        match.confirmedAt.$lte = period.endsAt;
+      }
+    }
   }
 
   const rows = await Payment.aggregate([
@@ -104,9 +214,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
   // Count students who have fully paid within the period
   const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
   if (startDate || endDate) {
-    match.confirmedAt = {};
-    if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
-    if (endDate)   match.confirmedAt.$lte = new Date(endDate   + 'T23:59:59.999Z');
+    // Issue #1572 — consistent with aggregateByDate: use timezone-aware boundaries.
+    match.confirmedAt = buildDateRangeFilter({ startDate, endDate, timezone });
   }
 
   const paidStudentIds = await Payment.distinct('studentId', match);
@@ -136,10 +245,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
           },
           {
             $match: startDate || endDate ? {
-              confirmedAt: {
-                ...(startDate ? { $gte: new Date(startDate + 'T00:00:00.000Z') } : {}),
-                ...(endDate ? { $lte: new Date(endDate + 'T23:59:59.999Z') } : {}),
-              },
+              // Issue #1572 — timezone-aware boundaries for the $lookup sub-pipeline.
+              confirmedAt: buildDateRangeFilter({ startDate, endDate, timezone }),
             } : {},
           },
         ],
@@ -484,4 +591,8 @@ module.exports = {
   ACCOUNTING_SCHEMA_VERSION,
   getDashboardMetrics,
   getDataVersion,
+  // Exported for testing (Issue #1572)
+  localDayStartUTC,
+  localDayEndUTC,
+  buildDateRangeFilter,
 };

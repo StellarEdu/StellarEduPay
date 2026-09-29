@@ -1,0 +1,84 @@
+/* dashboard page — CSS Module (issue #1585) */
+
+.wrap {
+  animation: dashFadeUp 0.35s ease both;
+}
+
+@keyframes dashFadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.statRow {
+  --stat-accent: var(--c);
+}
+
+/* Search input with left icon */
+.search {
+  position: relative;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+  display: flex;
+}
+
+.search input {
+  padding-left: 2.125rem !important;
+}
+
+/* Student table cells */
+.studentName {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.studentId {
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.studentClass {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.studentFee {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.875rem;
+}
+
+/* Stat card */
+.statCardInner {
+  display: flex;
+  flex-direction: column;
+}
+
+.statCardIconWrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.875rem;
+  flex-shrink: 0;
+}
+
+/* Skeleton pulse */
+.skelBlock {
+  border-radius: 4px;
+  background: var(--border);
+  animation: skelPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes skelPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

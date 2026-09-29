@@ -1,19 +1,20 @@
 import { useState, useEffect } from "react";
-import RequireAdmin from "../components/RequireAdmin";
 import PageHero from "../components/PageHero";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { IconAlertTriangle, IconCheck, IconX, IconPlus, IconRefresh } from "../components/Icons";
 import { useTranslation } from "react-i18next";
+import styles from "../styles/webhooks.module.css";
 
+// #1578 — use the shared axios client so the single API base, credentials,
+// school header and token refresh apply to webhook calls too.
 async function apiCall(method, path, body = null) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`/api${path}`, opts);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  try {
+    const res = await api.request({ method, url: path, ...(body && { data: body }) });
+    return res.data;
+  } catch (err) {
+    const status = err.response?.status;
+    throw new Error(err.response?.data?.error || (status ? `HTTP ${status}` : err.message));
   }
-  return res.json();
 }
 
 function timeAgo(iso, t) {
@@ -172,7 +173,7 @@ function WebhooksPage() {
   };
 
   return (
-    <RequireAdmin>
+    <>
       <div className="page">
         <PageHero title={t("webhooks.title")} subtitle={t("webhooks.subtitle")} />
 
@@ -370,21 +371,6 @@ function WebhooksPage() {
           loading={deletingEndpoint}
         />
       )}
-
-      <style>{`
-        .alert-sm {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.85rem;
-          margin-bottom: 0;
-        }
-        .btn-group-sm .btn {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.85rem;
-        }
-        .gap-2 {
-          gap: 0.5rem;
-        }
-      `}</style>
     </RequireAdmin>
   );
 }

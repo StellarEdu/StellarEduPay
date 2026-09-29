@@ -14,9 +14,15 @@ spec:
       labels:
         app: frontend
     spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       # imagePullSecrets is used for private registries.
       # Reference it in your Kustomize overlay:
       #   imagePullSecrets:
@@ -27,6 +33,16 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
           env:
             - name: BACKEND_PROXY_TARGET
               valueFrom:
@@ -56,3 +72,8 @@ spec:
             limits:
               cpu: "1000m"
               memory: "512Mi"
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}

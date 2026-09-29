@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
-import { getStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds } from "../services/api";
+import { getStudent, getPublicStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
@@ -48,7 +48,7 @@ function InfoRow({ label, children }) {
   );
 }
 
-export default function PaymentForm({ initialStudentId = "" }) {
+export default function PaymentForm({ initialStudentId = "", publicMode = false }) {
   const [studentId, setStudentId]             = useState(initialStudentId);
   const [shareCopied, setShareCopied]         = useState(false);
   const [student, setStudent]                 = useState(null);
@@ -107,40 +107,65 @@ export default function PaymentForm({ initialStudentId = "" }) {
     setPaymentsLoading(true);
     try {
       const signal = controller.signal;
-      const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
-        getStudent(id, { signal }),
-        getPaymentInstructions(id, { signal }),
-        getStudentPayments(id, { signal }),
-        getStudentBalance(id, { signal }).catch((err) => {
-          // Propagate abort so the outer catch can detect it; surface other errors.
-          if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") throw err;
-          setBalanceError(true);
-          return null;
-        }),
-        getPaymentPlan(id, { signal }).catch(() => null),
-      ]);
-      setStudent(stuRes.data);
-      setInstructions(instrRes.data);
-      const paymentsList = payRes.data?.payments ?? payRes.data ?? [];
-      setPayments(paymentsList);
-      setHasDeletedPayments(balRes?.data?.hasDeletedPayments === true);
-      // Fetch refunds for each payment
-      const newRefunds = {};
-      for (const p of paymentsList) {
-        if (p.txHash) {
-          try {
-            const refundsRes = await getPaymentRefunds(p.txHash);
-            const refundList = Array.isArray(refundsRes.data) ? refundsRes.data : refundsRes.data?.refunds || [];
-            if (refundList.length > 0) {
-              newRefunds[p.txHash] = refundList[0]; // Get the most recent refund
+
+      if (publicMode) {
+        // Public (unauthenticated) flow: only fetch masked student info and
+        // payment instructions. Skip admin-only endpoints (getStudent,
+        // getStudentPayments, getStudentBalance) — issue #1573.
+        const [stuRes, instrRes] = await Promise.allSettled([
+          getPublicStudent(id, { signal }),
+          getPaymentInstructions(id, { signal }),
+        ]);
+        if (stuRes.status === "rejected") {
+          const err = stuRes.reason;
+          if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
+          setError(
+            getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
+            t("paymentForm.studentNotFound")
+          );
+          errorRef.current?.focus();
+          return;
+        }
+        setStudent(stuRes.value?.data ?? null);
+        setInstructions(instrRes.status === "fulfilled" ? instrRes.value?.data : null);
+        setPayments([]);
+      } else {
+        const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
+          getStudent(id, { signal }),
+          getPaymentInstructions(id, { signal }),
+          getStudentPayments(id, { signal }),
+          getStudentBalance(id, { signal }).catch((err) => {
+            // Propagate abort so the outer catch can detect it; surface other errors.
+            if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") throw err;
+            setBalanceError(true);
+            return null;
+          }),
+          getPaymentPlan(id, { signal }).catch(() => null),
+        ]);
+        setStudent(stuRes.value?.data ?? null);
+        setInstructions(instrRes.value?.data ?? null);
+        const paymentsList = payRes.value?.data?.payments ?? payRes.value?.data ?? [];
+        setPayments(paymentsList);
+        setHasDeletedPayments(balRes?.value?.data?.hasDeletedPayments === true);
+        // Fetch refunds for each payment
+        const newRefunds = {};
+        for (const p of paymentsList) {
+          if (p.txHash) {
+            try {
+              const refundsRes = await getPaymentRefunds(p.txHash);
+              const refundList = Array.isArray(refundsRes.data) ? refundsRes.data : refundsRes.data?.refunds || [];
+              if (refundList.length > 0) {
+                newRefunds[p.txHash] = refundList[0]; // Get the most recent refund
+              }
+            } catch (e) {
+              // Silently skip if refund fetch fails for this payment
             }
-          } catch (e) {
-            // Silently skip if refund fetch fails for this payment
           }
         }
-      }
-      if (Object.keys(newRefunds).length > 0) {
-        setRefunds(newRefunds);
+        if (Object.keys(newRefunds).length > 0) {
+          setRefunds(newRefunds);
+        }
+        if (planRes.value?.data) setPaymentPlan(planRes.value.data);
       }
     } catch (err) {
       // Axios names aborted requests "CanceledError" (axios ≥ 1.x) with code
@@ -160,7 +185,7 @@ export default function PaymentForm({ initialStudentId = "" }) {
         setPaymentsLoading(false);
       }
     }
-  }, [t]);
+  }, [t, publicMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #1344 — a bookmarked/shared /pay/:studentId URL pre-fills the lookup so a
   // parent doesn't have to retype the student ID on every visit.

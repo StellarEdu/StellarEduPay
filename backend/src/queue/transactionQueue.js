@@ -433,10 +433,6 @@ async function closeQueue() {
        logger.info('[TransactionQueue] Queue closed');
      }
 
-     if (connection && typeof connection.quit === 'function') {
-       await connection.quit();
-       logger.info('[TransactionQueue] Redis connection closed');
-     }
    } catch (err) {
      logger.error('[TransactionQueue] Failed to close queue', { error: err.message });
    }

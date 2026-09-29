@@ -28,7 +28,15 @@ async function resolveSchool(req, res, next) {
     const schoolId   = req.headers['x-school-id'];
     const schoolSlug = req.headers['x-school-slug'];
 
-    if (!schoolId && !schoolSlug) {
+    // Issue #1574 — EventSource cannot send custom headers, so the SSE
+    // /payments/events endpoint passes schoolId as a query parameter.
+    // Accept req.query.schoolId as a fallback *only* for that route so
+    // every other route continues to enforce the header requirement.
+    const querySid = req.query.schoolId;
+    const isSSERoute = req.path === '/events' || req.path.endsWith('/payments/events');
+    const effectiveId = schoolId || (isSSERoute && querySid ? querySid : null);
+
+    if (!effectiveId && !schoolSlug) {
       res.set('Cache-Control', 'no-store');
       return res.status(400).json({
         error: 'School context is required. Provide X-School-ID or X-School-Slug header.',
@@ -36,13 +44,13 @@ async function resolveSchool(req, res, next) {
       });
     }
 
-    const lookupKey = schoolId ? schoolId : schoolSlug.toLowerCase().trim();
+    const lookupKey = effectiveId ? effectiveId : schoolSlug.toLowerCase().trim();
     const cacheKey = cache.KEYS.school ? cache.KEYS.school(lookupKey) : `school:${lookupKey}`;
 
     let school = cache.get(cacheKey);
 
     if (!school) {
-      const query = schoolId ? { schoolId } : { slug: lookupKey };
+      const query = effectiveId ? { schoolId: effectiveId } : { slug: lookupKey };
       school = await School.findOne(query).lean();
       if (school && school.isActive) {
         const ttl = cache.TTL.SCHOOL || 300;

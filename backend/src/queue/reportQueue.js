@@ -145,13 +145,13 @@ function startReportWorker(processor) {
 
 async function closeQueue() {
   try {
-    if (reportQueue) {
-      await reportQueue.close();
-      reportQueue = null;
-    }
     if (worker) {
       await worker.close();
       worker = null;
+    }
+    if (reportQueue) {
+      await reportQueue.close();
+      reportQueue = null;
     }
   } catch (err) {
     logger.error('[ReportQueue] Failed to close queue', { error: err.message });

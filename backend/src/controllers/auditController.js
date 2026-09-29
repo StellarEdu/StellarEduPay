@@ -126,17 +126,12 @@ async function exportAuditLogsEndpoint(req, res, next) {
 /**
  * GET /api/audit/verify-chain
  *
- * Verifies the integrity of the audit hash chain. Because audit entries are
- * archived (never hard-deleted) and may be offloaded to cold storage, the
- * oldest entries still present in the collection may not reach genesis. In
- * that case verification starts from a signed checkpoint (the last archived
- * hash) so the chain can still be validated across retention boundaries.
+ * Walks the per-school audit hash chain and reports any breaks. The chain is
+ * ordered by the monotonic `seq` assigned at append time (see auditService),
+ * not by `_id`, so concurrent writes cannot produce false positives.
  *
  * Query parameters:
  *   - limit: max entries to verify (default: 1000, max: 5000)
- *   - fromCheckpoint: when 'true', trust the stored signed checkpoint as the
- *     starting point instead of requiring the first entry's prevHash to be
- *     the genesis hash.
  */
 async function verifyChainEndpoint(req, res, next) {
   try {

@@ -1,24 +1,21 @@
 FROM node:20-alpine
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# tini: init process for PID 1 — forwards signals to Node and reaps zombies
+# node healthcheck: inline Node script replaces curl (smaller attack surface)
+RUN apk add --no-cache tini
 
-# Create a non-root user to run the app
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Fixed UID/GID 1001 so runAsUser in K8s matches file ownership
+RUN addgroup -S -g 1001 appgroup && adduser -S -u 1001 -G appgroup appuser
+
+# Default to production so the app doesn't serve Swagger, skips insecure
+# branches, and sets secure cookie flags even without an explicit override.
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Install dependencies first (layer cache)
 COPY package*.json ./
-RUN npm ci --omit=dev
 
-# Copy source
-COPY src/ ./src/
-
-# Copy database migrations and the deploy-time migration CLI. These MUST be in
-# the image: the migration runner fails loudly if migrations/ is absent, and
-# the deployment runs `npm run migrate` before serving traffic (see
-# deploy/k8s/backend-deployment.yaml initContainer and docs/migrations.md).
+# Migrations and the deploy-time migration CLI must be in the image.
 COPY migrations/ ./migrations/
 COPY scripts/ ./scripts/
 
@@ -27,9 +24,15 @@ RUN chown -R appuser:appgroup /app
 
 USER appuser
 
-EXPOSE 5000
+COPY . .
 
+# Use a tiny Node one-liner instead of curl: same result, no extra package.
+# Checks /health/live (process-alive probe, no external calls).
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-5000}/health || exit 1
+  CMD node -e \
+  "const h=require('http');h.get('http://localhost:'+process.env.PORT||5000+'/health/live',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 
-CMD ["npm", "start"]
+# tini as PID 1: forwards SIGTERM/SIGINT to Node and reaps zombie processes.
+# Node is invoked directly (not via npm) so it receives signals reliably.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "src/app.js"]

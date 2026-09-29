@@ -2,48 +2,30 @@
 
 const cache = require('../cache');
 const logger = require('../utils/logger').child('ReportCacheInvalidator');
+const { getRedisClient, getRedisSubscriber } = require('../config/redisClient');
 
 const CHANNEL = 'report:invalidate';
 
 const redisEnabled = Boolean(process.env.REDIS_HOST);
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  lazyConnect: true,
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-};
+const publisher = redisEnabled ? getRedisClient() : null;
+const subscriber = redisEnabled ? getRedisSubscriber() : null;
 
-let publisher = null;
-let subscriber = null;
-
-if (redisEnabled) {
-  const Redis = require('ioredis');
-  publisher = new Redis(redisConfig);
-  subscriber = new Redis(redisConfig);
-
-  for (const [name, conn] of [['publisher', publisher], ['subscriber', subscriber]]) {
-    conn.on('error', (err) => logger.error(`Redis ${name} error`, { error: err.message }));
-    conn.connect().catch((err) =>
-      logger.error(`Redis ${name} connect failed`, { error: err.message })
-    );
-  }
-
+if (subscriber) {
+  subscriber.on('message', onMessage);
   subscriber.subscribe(CHANNEL).catch((err) =>
     logger.error('Report invalidation subscribe failed', { error: err.message })
   );
+}
 
-  subscriber.on('message', (channel, message) => {
-    if (channel !== CHANNEL) return;
-    try {
-      const { schoolId } = JSON.parse(message);
-      dropSchoolReports(schoolId);
-    } catch (err) {
-      logger.error('Failed to handle report invalidation message', { error: err.message, message });
-    }
-  });
+function onMessage(channel, message) {
+  if (channel !== CHANNEL) return;
+  try {
+    const { schoolId } = JSON.parse(message);
+    dropSchoolReports(schoolId);
+  } catch (err) {
+    logger.error('Failed to handle report invalidation message', { error: err.message, message });
+  }
 }
 
 function dropSchoolReports(schoolId) {
@@ -72,11 +54,12 @@ function invalidate(schoolId) {
 }
 
 async function close() {
+  if (!subscriber) return;
+  subscriber.removeListener('message', onMessage);
   try {
-    if (subscriber) await subscriber.quit();
-    if (publisher) await publisher.quit();
+    await subscriber.unsubscribe(CHANNEL);
   } catch (err) {
-    logger.error('Error closing report invalidation Redis connections', { error: err.message });
+    logger.error('Error unsubscribing report invalidation listener', { error: err.message });
   }
 }
 

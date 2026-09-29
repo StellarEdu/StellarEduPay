@@ -4,7 +4,6 @@ import { QRCodeSVG } from "qrcode.react";
 import { setupUserMfa, verifyUserMfa } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import PageHero from "../components/PageHero";
-import RequireAdmin from "../components/RequireAdmin";
 import { useTranslation } from "react-i18next";
 
 // #1356 — Shown when REQUIRE_MFA=true and the logged-in admin has not yet
@@ -106,10 +105,4 @@ function MfaSetupContent() {
   );
 }
 
-export default function MfaSetupPage() {
-  return (
-    <RequireAdmin>
-      <MfaSetupContent />
-    </RequireAdmin>
-  );
-}
+export default MfaSetupContent;

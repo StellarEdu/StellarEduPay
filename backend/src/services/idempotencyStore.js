@@ -17,6 +17,7 @@
 
 const IdempotencyKey = require('../models/idempotencyKeyModel');
 const logger = require('../utils/logger').child('IdempotencyStore');
+const { getRedisClient } = require('../config/redisClient');
 
 const TTL_SECONDS = IdempotencyKey.TTL_SECONDS;
 const REDIS_PREFIX = 'idem:';
@@ -34,23 +35,7 @@ const IN_FLIGHT_TTL_MS = parseInt(
 );
 
 const redisEnabled = Boolean(process.env.REDIS_HOST);
-
-let redis = null;
-if (redisEnabled) {
-  const Redis = require('ioredis');
-  redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-    lazyConnect: true,
-    maxRetriesPerRequest: null,
-    enableOfflineQueue: false,
-  });
-  redis.on('error', (err) => logger.error('Redis idempotency client error', { error: err.message }));
-  redis.connect().catch((err) =>
-    logger.error('Redis idempotency client connect failed', { error: err.message })
-  );
-}
+const redis = redisEnabled ? getRedisClient() : null;
 
 async function redisGet(key) {
   if (!redis) return null;

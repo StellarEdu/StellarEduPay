@@ -29,51 +29,34 @@
 
 const cache = require('../cache');
 const logger = require('../utils/logger').child('SchoolCacheInvalidator');
+const { getRedisClient, getRedisSubscriber } = require('../config/redisClient');
 
 const CHANNEL = 'school:invalidate';
 
 // Only enabled when REDIS_HOST is set (mirrors sseService / distributedLock).
-// A subscriber connection cannot issue regular commands such as PUBLISH, so two
-// dedicated connections are required.
+// The shared subscriber cannot issue commands such as PUBLISH, so publishing
+// uses the process-wide command client.
 const redisEnabled = Boolean(process.env.REDIS_HOST);
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  lazyConnect: true,
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-};
+const publisher = redisEnabled ? getRedisClient() : null;
+const subscriber = redisEnabled ? getRedisSubscriber() : null;
 
-let publisher = null;
-let subscriber = null;
-
-if (redisEnabled) {
-  const Redis = require('ioredis');
-  publisher = new Redis(redisConfig);
-  subscriber = new Redis(redisConfig);
-
-  for (const [name, conn] of [['publisher', publisher], ['subscriber', subscriber]]) {
-    conn.on('error', (err) => logger.error(`Redis ${name} error`, { error: err.message }));
-    conn.connect().catch((err) =>
-      logger.error(`Redis ${name} connect failed`, { error: err.message })
-    );
-  }
-
-  subscriber.on('message', (channel, message) => {
-    if (channel !== CHANNEL) return;
-    try {
-      const { schoolId, slug } = JSON.parse(message);
-      dropLocal(schoolId, slug);
-    } catch (err) {
-      logger.error('Failed to handle invalidation message', { error: err.message, message });
-    }
-  });
+if (subscriber) {
+  subscriber.on('message', onMessage);
 
   subscriber
     .subscribe(CHANNEL)
     .catch((err) => logger.error('School invalidation subscribe failed', { error: err.message }));
+}
+
+function onMessage(channel, message) {
+  if (channel !== CHANNEL) return;
+  try {
+    const { schoolId, slug } = JSON.parse(message);
+    dropLocal(schoolId, slug);
+  } catch (err) {
+    logger.error('Failed to handle invalidation message', { error: err.message, message });
+  }
 }
 
 /**
@@ -114,14 +97,15 @@ function invalidate(school) {
 }
 
 /**
- * Close Redis connections during graceful shutdown.
+ * Release this service's subscription; Redis clients are closed centrally.
  */
 async function close() {
+  if (!subscriber) return;
+  subscriber.removeListener('message', onMessage);
   try {
-    if (subscriber) await subscriber.quit();
-    if (publisher) await publisher.quit();
+    await subscriber.unsubscribe(CHANNEL);
   } catch (err) {
-    logger.error('Error closing school invalidation Redis connections', { error: err.message });
+    logger.error('Error unsubscribing school invalidation listener', { error: err.message });
   }
 }
 

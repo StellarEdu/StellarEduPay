@@ -32,6 +32,17 @@ Then check health status:
 docker-compose ps
 ```
 
+## How the Frontend Reaches the API
+
+The frontend image is built with `NEXT_PUBLIC_API_URL=/api` (same-origin) and
+`BACKEND_PROXY_TARGET=http://backend:5000`. The browser only talks to
+`http://localhost:3000`; Next.js proxies `/api/*` to the backend container, so
+login, token refresh, the live payment stream (SSE) and CSV downloads all work
+with first-party cookies and no extra configuration. Both values are build
+args — rebuild the frontend (`docker-compose build frontend`) after changing
+them. See [Frontend ↔ API Topologies](architecture.md#frontend--api-topologies)
+for Kubernetes and cross-host setups.
+
 ## Verifying Services
 
 ### Check All Services

@@ -20,7 +20,7 @@ module.exports = [
       'require-await': 'error',
       'no-console': 'error',
       'n/exports-style': 'off',
-      'n/no-extraneous-require': 'off',
+      'n/no-extraneous-require': 'error',
       'n/no-process-exit': 'off',
     },
   },

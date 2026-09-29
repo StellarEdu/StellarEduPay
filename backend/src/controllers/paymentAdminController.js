@@ -13,7 +13,7 @@ const { finalizeConfirmedPayments } = require('../services/stellarService');
 const { logAudit } = require('../services/auditService');
 const { syncDurationSeconds } = require('../metrics');
 const { syncPaymentsForSchool } = require('../services/stellarService');
-const { initiateRefund, approveRefund, getRefundsByPayment, getRefundsBySchool } = require('../services/refundService');
+const { initiateRefund, approveRefund, rejectRefund, completeRefund, buildPrincipal, getRefundsByPayment, getRefundsBySchool } = require('../services/refundService');
 const { generateReconciliationReport } = require('../services/reconciliationService');
 const lock = require('../services/distributedLock');
 const { ADMIN_PAYMENT_STATUS_TRANSITIONS, PAYMENT_STATUS } = require('../constants/paymentStatus');
@@ -550,7 +550,7 @@ async function initiatePaymentRefund(req, res, next) {
   try {
     const { schoolId } = req;
     const { txHash } = req.params;
-    const { reason } = req.body;
+    const { reason, amount } = req.body;
 
     if (!reason) return res.status(400).json({ error: 'reason is required', code: 'VALIDATION_ERROR' });
 
@@ -559,22 +559,42 @@ async function initiatePaymentRefund(req, res, next) {
       return res.status(404).json({ error: 'Confirmed payment not found', code: 'NOT_FOUND' });
     }
 
+    // Build a stable principal object for two-person approval (#1565).
+    let principal;
+    try {
+      principal = buildPrincipal(req.auditContext, req.admin);
+    } catch (principalErr) {
+      return res.status(403).json({ error: principalErr.message, code: principalErr.code });
+    }
+
+    // #1567 — default to full payment amount when no partial amount is given.
+    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : payment.amount;
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number', code: 'VALIDATION_ERROR' });
+    }
+
     const refund = await initiateRefund(
       schoolId,
       txHash,
       payment.studentId,
-      payment.amount,
+      refundAmount,
       reason,
-      req.auditContext?.performedBy || 'unknown'
+      principal,
     );
 
     await logAudit({
       schoolId,
       action: 'refund_initiated',
-      performedBy: req.auditContext?.performedBy || 'unknown',
+      performedBy: principal.displayName,
       targetId: txHash,
       targetType: 'refund',
-      details: { refundId: refund._id.toString(), amount: payment.amount },
+      details: {
+        refundId: refund._id.toString(),
+        amount: refundAmount,
+        originalAmount: payment.amount,
+        isPartial: refundAmount < payment.amount,
+        initiatedBy: principal,
+      },
       result: 'success',
       ipAddress: req.auditContext?.ipAddress,
       userAgent: req.auditContext?.userAgent,
@@ -582,6 +602,12 @@ async function initiatePaymentRefund(req, res, next) {
 
     res.status(201).json(refund);
   } catch (err) {
+    if (err.code === 'AMOUNT_EXCEEDS_REFUNDABLE') {
+      return res.status(400).json({ error: err.message, code: err.code, refundable: err.refundable });
+    }
+    if (err.code === 'REFUND_ALREADY_EXISTS') {
+      return res.status(409).json({ error: err.message, code: err.code, refundId: err.refundId });
+    }
     next(err);
   }
 }
@@ -590,21 +616,27 @@ async function approvePaymentRefund(req, res, next) {
   try {
     const { schoolId } = req;
     const { refundId } = req.params;
-    const approvedBy = req.auditContext?.performedBy || 'unknown';
 
-    const refund = await approveRefund(refundId, approvedBy);
+    let principal;
+    try {
+      principal = buildPrincipal(req.auditContext, req.admin);
+    } catch (principalErr) {
+      return res.status(403).json({ error: principalErr.message, code: principalErr.code });
+    }
+
+    const refund = await approveRefund(refundId, principal);
 
     await logAudit({
       schoolId,
       action: 'refund_approved',
-      performedBy: approvedBy,
+      performedBy: principal.displayName,
       targetId: refund._id.toString(),
       targetType: 'refund',
       details: {
         refundId: refund._id.toString(),
         originalTxHash: refund.originalTxHash,
         initiatedBy: refund.initiatedBy,
-        approvedBy,
+        approvedBy: principal,
         amount: refund.amount,
       },
       result: 'success',
@@ -616,6 +648,121 @@ async function approvePaymentRefund(req, res, next) {
   } catch (err) {
     if (err.code === 'SELF_APPROVAL_NOT_ALLOWED' || err.code === 'INVALID_STATE') {
       return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'UNKNOWN_PRINCIPAL') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
+    next(err);
+  }
+}
+
+/**
+ * POST /api/payments/refunds/:refundId/reject
+ *
+ * Reject a refund that is in approval_pending status (#1567 / #1564).
+ * The rejector must be a different user from the initiator (same two-person rule).
+ * The original payment is restored to SUCCESS.
+ */
+async function rejectPaymentRefund(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { refundId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) return res.status(400).json({ error: 'reason is required', code: 'VALIDATION_ERROR' });
+
+    let principal;
+    try {
+      principal = buildPrincipal(req.auditContext, req.admin);
+    } catch (principalErr) {
+      return res.status(403).json({ error: principalErr.message, code: principalErr.code });
+    }
+
+    const refund = await rejectRefund(refundId, principal, reason);
+
+    await logAudit({
+      schoolId,
+      action: 'refund_rejected',
+      performedBy: principal.displayName,
+      targetId: refund._id.toString(),
+      targetType: 'refund',
+      details: {
+        refundId: refund._id.toString(),
+        originalTxHash: refund.originalTxHash,
+        initiatedBy: refund.initiatedBy,
+        rejectedBy: principal,
+        rejectionReason: reason,
+        amount: refund.amount,
+      },
+      result: 'success',
+      ipAddress: req.auditContext?.ipAddress,
+      userAgent: req.auditContext?.userAgent,
+    });
+
+    res.json(refund);
+  } catch (err) {
+    if (err.code === 'SELF_APPROVAL_NOT_ALLOWED' || err.code === 'INVALID_STATE') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'UNKNOWN_PRINCIPAL') {
+      return res.status(403).json({ error: err.message, code: err.code });
+    }
+    next(err);
+  }
+}
+
+/**
+ * POST /api/payments/refunds/:refundId/complete
+ *
+ * Record a completed on-chain refund (#1564).
+ * Accepts the Stellar transaction hash of the actual refund payment,
+ * confirms the refund, marks the payment REFUNDED, and recalculates student
+ * balances. This is the manual execution path.
+ */
+async function completePaymentRefund(req, res, next) {
+  try {
+    const { schoolId } = req;
+    const { refundId } = req.params;
+    const { refundTxHash } = req.body;
+
+    if (!refundTxHash) {
+      return res.status(400).json({ error: 'refundTxHash is required', code: 'VALIDATION_ERROR' });
+    }
+
+    let principal;
+    try {
+      principal = buildPrincipal(req.auditContext, req.admin);
+    } catch (principalErr) {
+      return res.status(403).json({ error: principalErr.message, code: principalErr.code });
+    }
+
+    const refund = await completeRefund(refundId, refundTxHash, principal);
+
+    await logAudit({
+      schoolId,
+      action: 'refund_completed',
+      performedBy: principal.displayName,
+      targetId: refund._id.toString(),
+      targetType: 'refund',
+      details: {
+        refundId: refund._id.toString(),
+        originalTxHash: refund.originalTxHash,
+        refundTxHash,
+        amount: refund.amount,
+        completedBy: principal,
+      },
+      result: 'success',
+      ipAddress: req.auditContext?.ipAddress,
+      userAgent: req.auditContext?.userAgent,
+    });
+
+    res.json(refund);
+  } catch (err) {
+    if (err.code === 'INVALID_STATE') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'UNKNOWN_PRINCIPAL') {
+      return res.status(403).json({ error: err.message, code: err.code });
     }
     next(err);
   }
@@ -802,6 +949,8 @@ module.exports = {
   streamPaymentEvents,
   initiatePaymentRefund,
   approvePaymentRefund,
+  rejectPaymentRefund,
+  completePaymentRefund,
   getPaymentRefunds,
   getSchoolRefunds,
   verifyReceipt,

@@ -6,7 +6,6 @@ import {
   IconChevronLeft, IconChevronRight, IconSearch,
 } from "../components/Icons";
 import PageHero from "../components/PageHero";
-import RequireAdmin from "../components/RequireAdmin";
 import { useTranslation } from "react-i18next";
 
 const STATUS_META = {
@@ -376,10 +375,4 @@ function DisputesContent() {
   );
 }
 
-export default function DisputesPage() {
-  return (
-    <RequireAdmin>
-      <DisputesContent />
-    </RequireAdmin>
-  );
-}
+export default DisputesContent;
