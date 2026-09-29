@@ -6,14 +6,50 @@ const Payment = require('../models/paymentModel');
 const School = require('../models/schoolModel');
 const ReconciliationReport = require('../models/reconciliationReportModel');
 const ReconciliationCursor = require('../models/reconciliationCursorModel');
+const SystemConfig = require('../models/systemConfigModel');
 const { checkSchoolConsistency, fetchChainTransactions } = require('./consistencyService');
 const cache = require('../cache');
 const logger = require('../utils/logger').child('ReconciliationService');
 
 const INTERVAL_MS = parseInt(process.env.RECONCILIATION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const CHECK_INTERVAL_MS = parseInt(process.env.RECONCILIATION_CHECK_INTERVAL_MS, 10) || 5 * 60 * 1000;
 const CHAIN_TOTAL_TTL_SEC = parseInt(process.env.RECONCILIATION_CHAIN_TOTAL_TTL_SEC, 10) || 300;
 const chainTotalCacheKey = (schoolId) => `reconciliation:chain_total:${schoolId}`;
+const LAST_RUN_KEY = 'reconciliation:lastRunAt';
 let _timer = null;
+
+/**
+ * Read the persisted last successful run timestamp for the reconciliation job.
+ * @returns {Promise<number>} epoch ms, or 0 if never run
+ */
+async function getLastRunAt() {
+  try {
+    const doc = await SystemConfig.findOne({ key: LAST_RUN_KEY }).lean();
+    if (doc && doc.value) {
+      const ts = new Date(doc.value).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    }
+  } catch (err) {
+    logger.error('Failed to read reconciliation lastRunAt', { error: err.message });
+  }
+  return 0;
+}
+
+/**
+ * Persist the last successful run timestamp for the reconciliation job.
+ * @param {Date} [at]
+ */
+async function setLastRunAt(at = new Date()) {
+  try {
+    await SystemConfig.findOneAndUpdate(
+      { key: LAST_RUN_KEY },
+      { key: LAST_RUN_KEY, value: at.toISOString() },
+      { upsert: true, new: true },
+    );
+  } catch (err) {
+    logger.error('Failed to persist reconciliation lastRunAt', { error: err.message });
+  }
+}
 
 /**
  * Reconcile students in batches using cursor-based pagination.
@@ -152,9 +188,41 @@ async function reconcileAll(schoolId) {
   }
 }
 
+/**
+ * Run the reconciliation job if it is due (now - lastRunAt >= INTERVAL_MS).
+ * Persists lastRunAt on success so restarts and leader changes do not reset
+ * the schedule. Exposes job_last_success_timestamp_seconds for alerting.
+ *
+ * @returns {Promise<boolean>} true if the job ran
+ */
+async function runReconciliationIfDue() {
+  const lastRunAt = await getLastRunAt();
+  const now = Date.now();
+  if (lastRunAt && now - lastRunAt < INTERVAL_MS) {
+    return false;
+  }
+  try {
+    await reconcileAll();
+    const completedAt = new Date();
+    await setLastRunAt(completedAt);
+    if (typeof metrics !== 'undefined' && metrics && typeof metrics.setJobLastSuccess === 'function') {
+      metrics.setJobLastSuccess('reconciliation', completedAt.getTime() / 1000);
+    }
+    return true;
+  } catch (err) {
+    logger.error('Scheduled reconciliation failed', { error: err.message });
+    return false;
+  }
+}
+
 function startReconciliationScheduler() {
   if (_timer) return;
-  _timer = setInterval(async () => { try { await reconcileAll(); } catch (err) { logger.error('Scheduler error', { error: err.message }); } }, INTERVAL_MS);
+  // Run immediately on start (catch-up after restart / leader change), then
+  // poll on a short interval so a due job is picked up promptly.
+  runReconciliationIfDue().catch((err) => logger.error('Scheduler initial run error', { error: err.message }));
+  _timer = setInterval(() => {
+    runReconciliationIfDue().catch((err) => logger.error('Scheduler error', { error: err.message }));
+  }, CHECK_INTERVAL_MS);
   if (_timer.unref) _timer.unref();
 }
 
@@ -232,32 +300,20 @@ async function generateReconciliationReport(schoolId) {
 
     return report;
   } catch (err) {
-    logger.error('Error generating reconciliation report', { schoolId, error: err.message });
+    logger.error('Failed to generate reconciliation report', {
+      schoolId,
+      error: err.message,
+    });
     throw err;
   }
 }
 
-async function generateAllReconciliationReports() {
-  const schools = await School.find({ isActive: true }).lean();
-  const reports = [];
-
-  for (const school of schools) {
-    try {
-      const report = await generateReconciliationReport(school.schoolId);
-      if (report) reports.push(report);
-    } catch (err) {
-      logger.error('Failed to generate report for school', { schoolId: school.schoolId, error: err.message });
-    }
-  }
-
-  logger.info('All reconciliation reports generated', { count: reports.length });
-  return reports;
-}
-
 module.exports = {
   reconcileAll,
+  runReconciliationIfDue,
   startReconciliationScheduler,
   stopReconciliationScheduler,
   generateReconciliationReport,
-  generateAllReconciliationReports,
+  getLastRunAt,
+  setLastRunAt,
 };

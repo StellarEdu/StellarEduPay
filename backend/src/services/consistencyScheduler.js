@@ -4,9 +4,9 @@ const { checkConsistency } = require('./consistencyService');
 const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('ConsistencyScheduler');
 const { ping, markStarted, markStopped, WORKER_NAMES } = require('./workerHeartbeat');
+const { createScheduledJob } = require('./scheduledJob');
 
 const INTERVAL_MS = parseInt(process.env.CONSISTENCY_CHECK_INTERVAL_MS, 10) || 5 * 60 * 1000;
-let _timer = null;
 
 async function runCheck() {
   try {
@@ -29,19 +29,20 @@ async function runCheck() {
   }
 }
 
+const job = createScheduledJob({
+  name: 'consistencyScheduler',
+  intervalMs: INTERVAL_MS,
+  run: runCheck,
+});
+
 function startConsistencyScheduler() {
-  if (_timer) return;
   markStarted(WORKER_NAMES.CONSISTENCY_SCHEDULER);
-  runCheck();
-  _timer = setInterval(runCheck, INTERVAL_MS);
+  job.start();
 }
 
 function stopConsistencyScheduler() {
-  if (_timer) {
-    clearInterval(_timer);
-    _timer = null;
-    markStopped(WORKER_NAMES.CONSISTENCY_SCHEDULER);
-  }
+  markStopped(WORKER_NAMES.CONSISTENCY_SCHEDULER);
+  return job.stop();
 }
 
 module.exports = { startConsistencyScheduler, stopConsistencyScheduler };

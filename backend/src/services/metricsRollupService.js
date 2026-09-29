@@ -167,10 +167,73 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
 }
 
 // ── Scheduled full reconciliation ─────────────────────────────────────────────
-// Runs once every 6 hours; rebuilds the last 32 days to self-heal any drift.
+// #1607 — A plain setInterval(24h) never fires when the process restarts or
+// leadership moves more often than the interval. Persist the last successful
+// run per job and, on start plus a short check interval, run the job when
+// `now - lastRunAt >= interval`. This guarantees the daily job runs once per
+// day regardless of restarts/leader changes, and exposes
+// job_last_success_timestamp_seconds{job} for overdue alerting.
 
 const RECONCILE_INTERVAL_MS = parseInt(process.env.METRICS_RECONCILE_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
+const CHECK_INTERVAL_MS = parseInt(process.env.SCHEDULER_CHECK_INTERVAL_MS || String(5 * 60 * 1000), 10);
+const JOB_NAME = 'metrics_rollup_reconcile';
+
 let _timer = null;
+let _running = false;
+
+/**
+ * Persist the last successful run timestamp for a scheduled job.
+ * Uses SystemConfig when available; falls back to an in-memory value so the
+ * scheduler still works in environments without the model.
+ */
+const _memoryLastRun = {};
+
+async function _getLastRunAt(jobName) {
+  try {
+    const SystemConfig = require('../models/systemConfigModel');
+    const doc = await SystemConfig.findOne({ key: `scheduler:${jobName}:lastRunAt` }).lean();
+    if (doc && doc.value) return new Date(doc.value);
+  } catch (err) {
+    logger.warn('SCHEDULER_LAST_RUN_READ_FAILED', { job: jobName, error: err.message });
+  }
+  return _memoryLastRun[jobName] || null;
+}
+
+async function _setLastRunAt(jobName, when) {
+  _memoryLastRun[jobName] = when;
+  try {
+    const SystemConfig = require('../models/systemConfigModel');
+    await SystemConfig.findOneAndUpdate(
+      { key: `scheduler:${jobName}:lastRunAt` },
+      { $set: { key: `scheduler:${jobName}:lastRunAt`, value: when.toISOString() } },
+      { upsert: true },
+    );
+  } catch (err) {
+    logger.warn('SCHEDULER_LAST_RUN_WRITE_FAILED', { job: jobName, error: err.message });
+  }
+}
+
+/**
+ * Expose job_last_success_timestamp_seconds{job} for overdue alerting.
+ * Best-effort: uses the metrics registry if present, otherwise logs.
+ */
+function _recordJobSuccess(jobName, when) {
+  const seconds = Math.floor(when.getTime() / 1000);
+  try {
+    const metrics = require('../utils/metrics');
+    if (metrics && typeof metrics.setGauge === 'function') {
+      metrics.setGauge('job_last_success_timestamp_seconds', seconds, { job: jobName });
+      return;
+    }
+    if (metrics && metrics.jobLastSuccessTimestampSeconds && typeof metrics.jobLastSuccessTimestampSeconds.set === 'function') {
+      metrics.jobLastSuccessTimestampSeconds.set({ job: jobName }, seconds);
+      return;
+    }
+  } catch (err) {
+    // metrics module optional — fall through to log
+  }
+  logger.info('JOB_LAST_SUCCESS_TIMESTAMP_SECONDS', { job: jobName, value: seconds });
+}
 
 async function _runScheduledReconciliation() {
   const School = require('../models/schoolModel');
@@ -186,9 +249,37 @@ async function _runScheduledReconciliation() {
   }
 }
 
+/**
+ * Run the job if it is due (now - lastRunAt >= interval). Persists the last
+ * successful run and records the success metric. Safe to call on start and
+ * from the short check interval; guarded against overlapping runs.
+ */
+async function _runIfDue() {
+  if (_running) return;
+  _running = true;
+  try {
+    const lastRunAt = await _getLastRunAt(JOB_NAME);
+    const now = Date.now();
+    if (lastRunAt && now - lastRunAt.getTime() < RECONCILE_INTERVAL_MS) return;
+
+    await _runScheduledReconciliation();
+
+    const completedAt = new Date();
+    await _setLastRunAt(JOB_NAME, completedAt);
+    _recordJobSuccess(JOB_NAME, completedAt);
+  } catch (err) {
+    logger.error('METRICS_RECONCILE_SCHEDULER_FAILED', { error: err.message });
+  } finally {
+    _running = false;
+  }
+}
+
 function startMetricsRollupScheduler() {
   if (_timer) return;
-  _timer = setInterval(_runScheduledReconciliation, RECONCILE_INTERVAL_MS);
+  // Run immediately on start (catch-up after restart/leader change), then
+  // check frequently so a missed interval is picked up promptly.
+  _runIfDue();
+  _timer = setInterval(_runIfDue, CHECK_INTERVAL_MS);
   _timer.unref();
 }
 

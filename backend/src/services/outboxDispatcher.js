@@ -1,109 +1,124 @@
 'use strict';
 
-const Outbox = require('../models/outboxModel');
-const paymentEvents = require('../events/paymentEvents');
-const logger = require('../utils/logger').child('OutboxDispatcher');
+const OutboxEvent = require('../models/OutboxEvent');
+const logger = require('../utils/logger');
+const { createScheduledJob } = require('../utils/scheduledJob');
 
-const BATCH_SIZE = 100;
-const MAX_RETRIES = parseInt(process.env.OUTBOX_MAX_RETRIES, 10) || 3;
-const DISPATCH_INTERVAL_MS = parseInt(process.env.OUTBOX_DISPATCH_INTERVAL_MS, 10) || 5000;
-let _dispatchTimer = null;
+const DEFAULT_INTERVAL_MS = 5000;
+const DEFAULT_BATCH_SIZE = 50;
+const DEFAULT_MAX_ATTEMPTS = 5;
 
-async function deadLetterOutboxEvent(event, retryCount, errorMessage) {
-  logger.error('Outbox event exceeded max retries', {
-    eventId: event.eventId,
-    eventType: event.eventType,
-    error: errorMessage,
-    retryCount,
-    maxRetries: MAX_RETRIES,
-  });
+/**
+ * Dispatches pending outbox events to their handlers.
+ *
+ * The interval loop is wrapped in createScheduledJob so a slow dispatch
+ * (large backlog, slow downstream) can never overlap with the next tick.
+ * Records are also claimed atomically before processing so correctness does
+ * not depend on the re-entrancy guard alone.
+ */
+class OutboxDispatcher {
+  constructor(options = {}) {
+    this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS;
+    this.batchSize = options.batchSize || DEFAULT_BATCH_SIZE;
+    this.maxAttempts = options.maxAttempts || DEFAULT_MAX_ATTEMPTS;
+    this.handlers = options.handlers || new Map();
+    this.job = null;
+  }
 
-  await Outbox.findByIdAndUpdate(event._id, {
-    retryCount,
-    lastError: errorMessage,
-    deadLettered: true,
-    deadLetteredAt: new Date(),
-    deadLetterReason: 'max_retries_exhausted',
-  });
-}
+  registerHandler(eventType, handler) {
+    this.handlers.set(eventType, handler);
+  }
 
-async function dispatchOutboxEvents() {
-  try {
-    const batch = await Outbox.find({ processed: false, deadLettered: { $ne: true } }).limit(BATCH_SIZE).sort({ createdAt: 1 });
+  async dispatchBatch() {
+    const now = new Date();
+    const events = await OutboxEvent.find({
+      status: 'pending',
+      nextAttemptAt: { $lte: now },
+    })
+      .sort({ createdAt: 1 })
+      .limit(this.batchSize);
 
-    for (const event of batch) {
-      try {
-        if ((event.retryCount || 0) >= MAX_RETRIES) {
-          await deadLetterOutboxEvent(event, event.retryCount || 0, event.lastError || 'Retry budget exhausted');
-          continue;
-        }
+    for (const event of events) {
+      // Atomically claim the event so concurrent dispatchers (or a retried
+      // tick) cannot process the same record twice.
+      const claimed = await OutboxEvent.findOneAndUpdate(
+        { _id: event._id, status: 'pending' },
+        { $set: { status: 'processing', processingAt: new Date() } },
+        { new: true }
+      );
 
-        const results = await paymentEvents.asyncEmit(event.eventType, event.payload);
-
-        // If any listener failed (rejected), treat the whole dispatch as
-        // failed so the event gets retried or dead-lettered rather than
-        // being permanently marked processed with unprocessed side-effects.
-        const rejected = results.filter((r) => r.status === 'rejected');
-        if (rejected.length > 0) {
-          const messages = rejected.map((r) => r.reason?.message || String(r.reason));
-          throw new Error(`Listener(s) rejected: ${messages.join('; ')}`);
-        }
-
-        await Outbox.findByIdAndUpdate(event._id, {
-          processed: true,
-          processedAt: new Date(),
-        });
-      } catch (err) {
-        const retryCount = (event.retryCount || 0) + 1;
-
-        if (retryCount >= MAX_RETRIES) {
-          await deadLetterOutboxEvent(event, retryCount, err.message);
-        } else {
-          await Outbox.findByIdAndUpdate(event._id, {
-            retryCount,
-            lastError: err.message,
-          });
-        }
+      if (!claimed) {
+        continue;
       }
+
+      await this.processEvent(claimed);
     }
 
-    if (batch.length > 0) {
-      logger.debug('Dispatched outbox events', { count: batch.length });
-    }
-  } catch (err) {
-    logger.error('Outbox dispatch error', { error: err.message });
+    return events.length;
   }
-}
 
-function startOutboxDispatcher() {
-  if (_dispatchTimer) return;
-  // dispatchOutboxEvents already catches everything it awaits internally, but
-  // passing an async function straight to setInterval is a structural trap:
-  // Node never observes the returned promise, so any *future* change that adds
-  // an await outside its try/catch would silently become an unhandled
-  // rejection — and, per docs/error-handling.md, that crashes the whole
-  // multi-tenant process over a background job affecting a single school's
-  // event. This terminal .catch() is the boundary that makes that impossible
-  // regardless of what dispatchOutboxEvents does internally.
-  _dispatchTimer = setInterval(() => {
-    dispatchOutboxEvents().catch((err) => {
-      logger.error('Outbox dispatch tick failed unexpectedly', { error: err.message, stack: err.stack });
+  async processEvent(event) {
+    const handler = this.handlers.get(event.type);
+
+    if (!handler) {
+      logger.warn(`[outboxDispatcher] No handler registered for event type: ${event.type}`);
+      await this.markFailed(event, new Error(`No handler for event type: ${event.type}`));
+      return;
+    }
+
+    try {
+      await handler(event.payload, event);
+      await OutboxEvent.updateOne(
+        { _id: event._id },
+        { $set: { status: 'completed', processedAt: new Date() } }
+      );
+    } catch (error) {
+      logger.error(`[outboxDispatcher] Failed to process event ${event._id}: ${error.message}`);
+      await this.markFailed(event, error);
+    }
+  }
+
+  async markFailed(event, error) {
+    const attempts = (event.attempts || 0) + 1;
+    const exhausted = attempts >= this.maxAttempts;
+    const backoffMs = Math.min(2 ** attempts * 1000, 5 * 60 * 1000);
+
+    await OutboxEvent.updateOne(
+      { _id: event._id },
+      {
+        $set: {
+          status: exhausted ? 'failed' : 'pending',
+          attempts,
+          lastError: error.message,
+          nextAttemptAt: exhausted ? event.nextAttemptAt : new Date(Date.now() + backoffMs),
+        },
+      }
+    );
+  }
+
+  start() {
+    if (this.job) {
+      return this.job;
+    }
+
+    this.job = createScheduledJob({
+      name: 'outboxDispatcher',
+      intervalMs: this.intervalMs,
+      run: () => this.dispatchBatch(),
     });
-  }, DISPATCH_INTERVAL_MS);
-  if (_dispatchTimer.unref) _dispatchTimer.unref();
-  logger.info('Outbox dispatcher started');
-}
 
-function stopOutboxDispatcher() {
-  if (_dispatchTimer) {
-    clearInterval(_dispatchTimer);
-    _dispatchTimer = null;
-    logger.info('Outbox dispatcher stopped');
+    this.job.start();
+    return this.job;
+  }
+
+  async stop() {
+    if (!this.job) {
+      return;
+    }
+
+    await this.job.stop();
+    this.job = null;
   }
 }
 
-module.exports = {
-  dispatchOutboxEvents,
-  startOutboxDispatcher,
-  stopOutboxDispatcher,
-};
+module.exports = OutboxDispatcher;

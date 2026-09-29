@@ -136,7 +136,8 @@ async function exportAuditLogsEndpoint(req, res, next) {
 async function verifyChainEndpoint(req, res, next) {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
-    const report = await verifyAuditChain(req.schoolId, { limit });
+    const fromCheckpoint = req.query.fromCheckpoint === 'true';
+    const report = await verifyAuditChain(req.schoolId, { limit, fromCheckpoint });
     res.json(report);
   } catch (err) {
     next(err);
