@@ -176,10 +176,17 @@ async function getAllStudents(req, res, next) {
       }
     }
 
-    if (req.query.search) {
-      const escaped = req.query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(escaped, 'i');
-      filter.$or = [{ name: re }, { studentId: re }];
+    if (req.query.search !== undefined) {
+      if (typeof req.query.search !== 'string') {
+        return res.status(400).json({ error: 'search must be a string', code: 'VALIDATION_ERROR' });
+      }
+
+      const trimmedSearch = req.query.search.trim();
+      if (trimmedSearch) {
+        const escaped = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`^${escaped}`, 'i');
+        filter.$or = [{ name: re }, { studentId: re }];
+      }
     }
 
     const [students, total] = await Promise.all([
