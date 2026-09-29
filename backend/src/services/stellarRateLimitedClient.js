@@ -847,15 +847,6 @@ class StellarRateLimitedClient {
       await this._sleep(100);
     }
 
-    // Close Redis connection if we opened one
-    if (this._usingRedis && this._redisClient) {
-      try {
-        await this._redisClient.quit();
-      } catch (_) {
-        // ignore errors during shutdown
-      }
-    }
-
     logger.info('[StellarRateLimitedClient] Disconnected');
   }
 }

@@ -1,0 +1,12 @@
+/* ReportDownload component — CSS Module (issue #1585) */
+
+/* The only inline <style> in ReportDownload was the @keyframes spin for a
+   loading spinner. Defining it here in the module removes the need for the
+   global injection. The spinner itself uses an inline style={{ animation }}
+   referencing the keyframe by name, so we expose it as a :global animation. */
+
+:global {
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+}

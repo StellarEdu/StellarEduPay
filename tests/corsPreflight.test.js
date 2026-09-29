@@ -2,11 +2,8 @@
 
 /**
  * Tests for issue #1415 — OPTIONS preflight coverage.
- *
- * tests/cors.test.js covers parseAllowedOrigins() only; the word OPTIONS does
- * not appear in it. So nothing checked the response a browser actually needs
- * before sending a PUT, PATCH or DELETE, and a preflight regression would only
- * surface in a browser — never in a curl-based API test.
+ * Updated for issue #1584 — X-School-Slug, correlation/request ID headers,
+ * and exposedHeaders for rate-limit and correlation response headers.
  *
  * The real cors middleware is mounted here with the exact options from
  * backend/src/app.js, and a source assertion at the bottom fails if those two
@@ -25,18 +22,60 @@ const APP_PATH = path.join(__dirname, '..', 'backend', 'src', 'app.js');
 const ALLOWED_ORIGIN = 'https://app.example.com';
 const DENIED_ORIGIN = 'https://evil.example.com';
 
-/** The CORS options app.js mounts. Kept in step by the drift test below. */
+/**
+ * The CORS options app.js mounts.
+ * Issue #1584: must include X-School-Slug, X-Correlation-ID, X-Request-ID
+ * in allowedHeaders and expose rate-limit / correlation headers.
+ */
 const CORS_OPTIONS = {
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-ID', 'Idempotency-Key'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-School-ID',
+    'X-School-Slug',
+    'Idempotency-Key',
+    'X-Correlation-ID',
+    'X-Request-ID',
+  ],
+  exposedHeaders: [
+    'Retry-After',
+    'RateLimit-Limit',
+    'RateLimit-Remaining',
+    'RateLimit-Reset',
+    'X-Correlation-ID',
+    'X-Request-ID',
+  ],
   credentials: true,
 };
 
 /** Non-simple methods: these are the ones a browser preflights. */
 const PREFLIGHTED_METHODS = ['PUT', 'PATCH', 'DELETE'];
 
-/** Custom headers the frontend sends, which must be named in the preflight. */
-const CUSTOM_HEADERS = ['Idempotency-Key', 'X-School-ID'];
+/**
+ * All request headers that the API reads and the frontend must be able to send.
+ * Issue #1584: X-School-Slug and correlation/request ID headers added.
+ */
+const CUSTOM_HEADERS = [
+  'Idempotency-Key',
+  'X-School-ID',
+  'X-School-Slug',
+  'X-Correlation-ID',
+  'X-Request-ID',
+];
+
+/**
+ * Response headers the browser JS must be able to read.
+ * Issue #1584: rate-limit and correlation headers added to exposedHeaders.
+ */
+const EXPOSED_HEADERS = [
+  'Retry-After',
+  'RateLimit-Limit',
+  'RateLimit-Remaining',
+  'RateLimit-Reset',
+  'X-Correlation-ID',
+  'X-Request-ID',
+];
 
 function buildApp() {
   const app = express();
@@ -89,7 +128,7 @@ describe.each(PREFLIGHTED_METHODS)('OPTIONS preflight for %s', (method) => {
   });
 });
 
-describe.each(CUSTOM_HEADERS)('preflight allows the %s header', (header) => {
+describe.each(CUSTOM_HEADERS)('preflight allows the %s request header', (header) => {
   it('names it in Access-Control-Allow-Headers', async () => {
     const res = await preflight(app, 'PATCH', header);
     expect(listIncludes(res.headers['access-control-allow-headers'], header)).toBe(true);
@@ -99,6 +138,17 @@ describe.each(CUSTOM_HEADERS)('preflight allows the %s header', (header) => {
     for (const method of PREFLIGHTED_METHODS) {
       const res = await preflight(app, method, header);
       expect(listIncludes(res.headers['access-control-allow-headers'], header)).toBe(true);
+    }
+  });
+});
+
+describe('exposedHeaders — browser can read rate-limit and correlation response headers', () => {
+  it('Access-Control-Expose-Headers contains all expected headers on a real request', async () => {
+    const res = await request(app)
+      .get('/thing')
+      .set('Origin', ALLOWED_ORIGIN);
+    for (const header of EXPOSED_HEADERS) {
+      expect(listIncludes(res.headers['access-control-expose-headers'], header)).toBe(true);
     }
   });
 });
@@ -138,7 +188,7 @@ describe('the actual request after a successful preflight', () => {
   });
 });
 
-describe('app.js CORS configuration', () => {
+describe('app.js CORS configuration (drift guard)', () => {
   const source = fs.readFileSync(APP_PATH, 'utf8');
 
   it('allows every method these tests preflight', () => {
@@ -148,10 +198,24 @@ describe('app.js CORS configuration', () => {
     }
   });
 
-  it('allows every custom header these tests assert on', () => {
-    const line = source.split('\n').find((l) => l.includes('allowedHeaders:'));
+  it('includes every custom request header in allowedHeaders', () => {
+    // allowedHeaders spans multiple lines; join the relevant block
+    const block = source.slice(
+      source.indexOf('allowedHeaders:'),
+      source.indexOf('exposedHeaders:'),
+    );
     for (const header of [...CUSTOM_HEADERS, 'Content-Type', 'Authorization']) {
-      expect(line).toContain(header);
+      expect(block).toContain(header);
+    }
+  });
+
+  it('includes every exposed response header in exposedHeaders', () => {
+    const block = source.slice(
+      source.indexOf('exposedHeaders:'),
+      source.indexOf('credentials:'),
+    );
+    for (const header of EXPOSED_HEADERS) {
+      expect(block).toContain(header);
     }
   });
 

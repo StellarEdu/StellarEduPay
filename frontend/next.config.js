@@ -14,11 +14,16 @@ const isDev = process.env.NODE_ENV !== 'production';
 // Origin of the backend API (scheme://host:port), derived from the public API
 // URL so the CSP connect-src can permit cross-origin XHR to it. Falls back to
 // the local dev backend.
+// Issue #1583: NEXT_PUBLIC_API_URL may be empty (relative path) when running
+// behind the Next.js /api/* proxy rewrite, in which case we omit it from the
+// CSP connect-src (same-origin requests don't need an explicit allow).
 const API_ORIGIN = (() => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || '';
+  if (!raw || raw.startsWith('/')) return null; // relative — same origin, no CSP entry needed
   try {
-    return new URL(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').origin;
+    return new URL(raw).origin;
   } catch {
-    return 'http://localhost:5000';
+    return '';
   }
 })();
 
@@ -46,7 +51,8 @@ const CSP = [
   // Allow fetch/XHR to the backend API and Stellar Horizon (testnet + mainnet).
   // The backend API origin is included so the browser can reach it cross-origin
   // in split-port deployments (e.g. localhost:3000 UI → localhost:5000 API).
-  `connect-src 'self' ${API_ORIGIN} ${CONNECT_SRC_ORIGINS.join(' ')}`,
+  // When API_ORIGIN is null (relative URL, same-origin), omit it from the CSP.
+  `connect-src 'self'${API_ORIGIN ? ` ${API_ORIGIN}` : ''} ${CONNECT_SRC_ORIGINS.join(' ')}`,
   "object-src 'none'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -60,9 +66,11 @@ const securityHeaders = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
 ];
 
-// Server-side origin of the backend, used by the dev proxy (rewrites) below.
-// Lets the browser call the API same-origin (/api/*) so cookies stay first-party
-// — essential in split-host setups like GitHub Codespaces.
+// Server-side origin of the backend, used by the same-origin proxy (rewrites)
+// below. Lets the browser call the API same-origin (/api/*) so cookies stay
+// first-party — essential in split-host setups like GitHub Codespaces.
+// Note: rewrites are resolved at `next build`, so in Docker this must be passed
+// as a build arg (see frontend/Dockerfile and docker-compose.yml).
 const BACKEND_ORIGIN = process.env.BACKEND_PROXY_TARGET || 'http://localhost:5000';
 
 const nextConfig = {

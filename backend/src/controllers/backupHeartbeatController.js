@@ -6,10 +6,34 @@
  * Handles POST /api/internal/backup-heartbeat.
  * Extracted from internalRoutes so it can be unit-tested without Express.
  * See issue #1102.
+ *
+ * The last-success timestamp is persisted (SystemConfig key
+ * `backupLastSuccessAt`) so that every replica exposes the same value and it
+ * survives restarts. See issue #1593.
  */
 
 const { backupLastSuccessTimestamp } = require('../metrics');
+const SystemConfig = require('../models/SystemConfig');
 const logger = require('../utils/logger');
+
+const BACKUP_LAST_SUCCESS_KEY = 'backupLastSuccessAt';
+
+/**
+ * Read the persisted last-success timestamp (seconds) and sync the in-process
+ * gauge so every replica exposes a consistent value. Returns the timestamp or
+ * null when no backup has been recorded yet.
+ */
+async function syncBackupLastSuccess() {
+  const config = await SystemConfig.findOne({ where: { key: BACKUP_LAST_SUCCESS_KEY } });
+  const value = config ? Number(config.value) : NaN;
+
+  if (Number.isFinite(value) && value > 0) {
+    backupLastSuccessTimestamp.set(value);
+    return value;
+  }
+
+  return null;
+}
 
 /**
  * POST /api/internal/backup-heartbeat
@@ -20,7 +44,7 @@ const logger = require('../utils/logger');
  * Authentication: Bearer token in the Authorization header, matched against
  * BACKUP_NOTIFY_TOKEN from the environment.
  */
-function backupHeartbeat(req, res) {
+async function backupHeartbeat(req, res) {
   const token = process.env.BACKUP_NOTIFY_TOKEN;
 
   if (!token) {
@@ -37,10 +61,28 @@ function backupHeartbeat(req, res) {
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
+
+  try {
+    const [config] = await SystemConfig.findOrCreate({
+      where: { key: BACKUP_LAST_SUCCESS_KEY },
+      defaults: { key: BACKUP_LAST_SUCCESS_KEY, value: String(nowSeconds) },
+    });
+
+    if (config.value !== String(nowSeconds)) {
+      config.value = String(nowSeconds);
+      await config.save();
+    }
+  } catch (err) {
+    logger.error('backup-heartbeat: failed to persist last-success timestamp', {
+      error: err.message,
+    });
+    return res.status(500).json({ error: 'Failed to record backup heartbeat' });
+  }
+
   backupLastSuccessTimestamp.set(nowSeconds);
 
   logger.info('backup-heartbeat: backup success recorded', { timestamp: nowSeconds });
   return res.status(200).json({ recorded: nowSeconds });
 }
 
-module.exports = { backupHeartbeat };
+module.exports = { backupHeartbeat, syncBackupLastSuccess, BACKUP_LAST_SUCCESS_KEY };

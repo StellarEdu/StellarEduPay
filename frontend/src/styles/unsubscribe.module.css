@@ -1,0 +1,26 @@
+/* unsubscribe page — CSS Module (issue #1585) */
+
+.wrap {
+  min-height: calc(100vh - 60px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 2rem;
+}
+
+.card {
+  max-width: 520px;
+  width: 100%;
+  color: var(--text);
+}
+
+.card h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.card p {
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}

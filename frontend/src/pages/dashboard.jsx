@@ -5,7 +5,6 @@ import ErrorBoundary from "../components/ErrorBoundary";
 import StudentForm from "../components/StudentForm";
 import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
-import RequireAdmin from "../components/RequireAdmin";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
 import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
@@ -13,6 +12,7 @@ import {
   IconSearch, IconChevronLeft, IconChevronRight,
 } from "../components/Icons";
 import { DEFAULT_CLASS_OPTIONS, loadSchoolClassOptions } from "../utils/classOptions";
+import styles from "../styles/dashboard.module.css";
 
 const PAGE_SIZE = 20;
 
@@ -205,59 +205,6 @@ function Dashboard() {
   return (
     <>
       <SseDegradedBanner degraded={degraded} connectionStatus={connectionStatus} />
-      <style>{`        @keyframes dashFadeUp {
-          from { opacity: 0; transform: translateY(10px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        .dash-wrap { animation: dashFadeUp 0.35s ease both; }
-        .dash-stat-row { --stat-accent: var(--c); }
-
-        /* Inline toolbar override for search */
-        .dash-search {
-          position: relative;
-        }
-        .dash-search-icon {
-          position: absolute;
-          left: 0.65rem;
-          top: 50%;
-          transform: translateY(-50%);
-          color: var(--text-muted);
-          pointer-events: none;
-          display: flex;
-        }
-        .dash-search input {
-          padding-left: 2.125rem !important;
-        }
-
-        .student-row-name { font-weight: 500; color: var(--text); }
-        .student-row-id { font-family: monospace; font-size: 0.78rem; color: var(--text-muted); }
-        .student-row-class { font-size: 0.8125rem; color: var(--text-muted); }
-        .student-row-fee { font-variant-numeric: tabular-nums; font-size: 0.875rem; }
-
-        .stat-card-inner {
-          display: flex;
-          flex-direction: column;
-        }
-        .stat-card-icon-wrap {
-          width: 36px; height: 36px;
-          border-radius: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          margin-bottom: 0.875rem;
-          flex-shrink: 0;
-        }
-
-        /* Skeleton pulse */
-        @keyframes skel-pulse {
-          0%,100% { opacity:1; } 50% { opacity:0.5; }
-        }
-        .skel-block {
-          border-radius: 4px;
-          background: var(--border);
-          animation: skel-pulse 1.4s ease-in-out infinite;
-        }
-      `}</style>
 
       {/* Accessibility live regions */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
@@ -269,7 +216,7 @@ function Dashboard() {
         </div>
       )}
 
-      <div className="page-wrap dash-wrap">
+      <div className={`page-wrap ${styles.wrap}`}>
 
         {/* ── Centered Hero Header ──────────────────── */}
         <PageHero
@@ -309,9 +256,9 @@ function Dashboard() {
               {summaryLoading
                 ? Array.from({ length: 4 }).map((_, i) => (
                     <div key={i} className="stat-card" aria-hidden="true">
-                      <div className="skel-block" style={{ width: 42, height: 42, borderRadius: 12, marginBottom: 16 }} />
-                      <div className="skel-block" style={{ width: "60%", height: 10, marginBottom: 12 }} />
-                      <div className="skel-block" style={{ width: "45%", height: 30 }} />
+                      <div className={styles.skelBlock} style={{ width: 42, height: 42, borderRadius: 12, marginBottom: 16 }} />
+                      <div className={styles.skelBlock} style={{ width: "60%", height: 10, marginBottom: 12 }} />
+                      <div className={styles.skelBlock} style={{ width: "45%", height: 30 }} />
                     </div>
                   ))
                 : stats.map((s) => <StatCard key={s.label} {...s} />)
@@ -332,8 +279,8 @@ function Dashboard() {
 
             {/* Toolbar */}
             <div className="toolbar" role="search" aria-label={t("dashboard.filterStudentsAria")} style={{ margin: 0 }}>
-              <div className="dash-search">
-                <span className="dash-search-icon"><IconSearch size={14} /></span>
+              <div className={styles.search}>
+                <span className={styles.searchIcon}><IconSearch size={14} /></span>
                 <input
                   type="search"
                   placeholder={t("dashboard.searchPlaceholder")}
@@ -434,12 +381,12 @@ function Dashboard() {
                     {studentsLoading ? (
                       Array.from({ length: 6 }).map((_, i) => (
                         <tr key={i}>
-                          <td><div className="skel-block" style={{ height: 12, width: 72 }} /></td>
-                          <td><div className="skel-block" style={{ height: 12, width: 130 }} /></td>
-                          <td><div className="skel-block" style={{ height: 12, width: 44 }} /></td>
-                          <td><div className="skel-block" style={{ height: 12, width: 56 }} /></td>
-                          <td><div className="skel-block" style={{ height: 20, width: 52, borderRadius: 20 }} /></td>
-                          <td><div className="skel-block" style={{ height: 28, width: 42, borderRadius: 6 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 12, width: 72 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 12, width: 130 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 12, width: 44 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 12, width: 56 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 20, width: 52, borderRadius: 20 }} /></td>
+                          <td><div className={styles.skelBlock} style={{ height: 28, width: 42, borderRadius: 6 }} /></td>
                         </tr>
                       ))
                     ) : students.length === 0 ? (
@@ -460,9 +407,9 @@ function Dashboard() {
                       return (
                         <tr key={s.studentId}>
                           <td className="col-mono">{s.studentId}</td>
-                          <td className="student-row-name">{s.name}</td>
-                          <td className="student-row-class">{s.class}</td>
-                          <td className="student-row-fee">
+                          <td className={styles.studentName}>{s.name}</td>
+                          <td className={styles.studentClass}>{s.class}</td>
+                          <td className={styles.studentFee}>
                             <span style={{ fontVariantNumeric: "tabular-nums" }}>{s.feeAmount}</span>
                             <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
                           </td>
@@ -531,10 +478,4 @@ function Dashboard() {
   );
 }
 
-export default function DashboardPage() {
-  return (
-    <RequireAdmin>
-      <Dashboard />
-    </RequireAdmin>
-  );
-}
+export default Dashboard;

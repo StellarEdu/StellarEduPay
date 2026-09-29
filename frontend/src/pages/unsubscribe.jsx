@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useTranslation } from "react-i18next";
 import api from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
+import styles from "../styles/unsubscribe.module.css";
 
 // Issue #1542 — landing page for the unsubscribe link in fee-reminder emails.
 // Opening this page never changes anything (email security scanners pre-fetch
@@ -94,31 +95,8 @@ export default function UnsubscribePage() {
         <title>{t("unsubscribe.pageTitle", "Unsubscribe")} | {t("app.name")}</title>
         <meta name="robots" content="noindex" />
       </Head>
-      <style>{`
-        .unsubscribe-wrap {
-          min-height: calc(100vh - 60px);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: var(--bg);
-          padding: 2rem;
-        }
-        .unsubscribe-card {
-          max-width: 520px;
-          width: 100%;
-          color: var(--text);
-        }
-        .unsubscribe-card h1 {
-          font-size: 1.5rem;
-          margin-bottom: 0.75rem;
-        }
-        .unsubscribe-card p {
-          margin-bottom: 1rem;
-          line-height: 1.5;
-        }
-      `}</style>
-      <div className="unsubscribe-wrap">
-        <div className="unsubscribe-card">{content}</div>
+      <div className={styles.wrap}>
+        <div className={styles.card}>{content}</div>
       </div>
     </>
   );

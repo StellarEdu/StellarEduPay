@@ -23,11 +23,35 @@ function _resetAuditFailureCount() {
 }
 
 /**
+ * Canonical JSON serialisation: keys sorted, Dates and ObjectIds encoded
+ * explicitly so the hash is stable across a round-trip through MongoDB.
+ */
+function _canonicalize(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return { $date: value.toISOString() };
+  if (Array.isArray(value)) return value.map(_canonicalize);
+  if (typeof value === 'object') {
+    // ObjectId (and similar) expose toHexString; encode explicitly.
+    if (typeof value.toHexString === 'function') return { $oid: value.toHexString() };
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = _canonicalize(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function _canonicalStringify(value) {
+  return JSON.stringify(_canonicalize(value));
+}
+
+/**
  * Compute a deterministic HMAC-SHA256 over the canonical fields of an entry.
  * prevHash is included so any modification to the chain is detectable.
  */
 function _computeEntryHash(fields) {
-  const canonical = JSON.stringify({
+  const canonical = _canonicalStringify({
     schoolId:     fields.schoolId,
     action:       fields.action,
     performedBy:  fields.performedBy,
@@ -44,16 +68,29 @@ function _computeEntryHash(fields) {
 }
 
 /**
- * Fetch the most recent audit entry's entryHash for the given schoolId.
- * Used to link the new entry into the hash chain.
+ * Atomically reserve the next sequence number for a school and return the
+ * previous entry's hash. Serialises concurrent appends per school so the
+ * chain cannot fork.
  */
-async function _getPrevHash(schoolId) {
-  const last = await AuditLog.findOne({ schoolId })
-    .sort({ _id: -1 })
+async function _reserveSequence(schoolId) {
+  const counter = await AuditLog.findOneAndUpdate(
+    { schoolId, seq: { $exists: false } },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  return counter.seq;
+}
+
+/**
+ * Fetch the entryHash of the entry with the given seq for the school.
+ */
+async function _getHashAtSeq(schoolId, seq) {
+  if (seq <= 0) return null;
+  const prev = await AuditLog.findOne({ schoolId, seq })
     .select('entryHash')
     .lean()
     .bypassTenantScope();
-  return last ? (last.entryHash || null) : null;
+  return prev ? (prev.entryHash || null) : null;
 }
 
 /**
@@ -74,34 +111,43 @@ async function logAudit({
   userAgent = null,
   severity = null,
 }) {
-  try {
-    const prevHash = await _getPrevHash(schoolId);
-    const createdAt = new Date();
+  const MAX_RETRIES = 5;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    try {
+      const seq = await _reserveSequence(schoolId);
+      const prevHash = await _getHashAtSeq(schoolId, seq - 1);
+      const createdAt = new Date();
 
-    const entryHash = _computeEntryHash({
-      schoolId, action, performedBy, targetId, targetType,
-      details, result, errorMessage, ipAddress, prevHash, createdAt,
-    });
+      const entryHash = _computeEntryHash({
+        schoolId, action, performedBy, targetId, targetType,
+        details, result, errorMessage, ipAddress, prevHash, createdAt,
+      });
 
-    await AuditLog.create({
-      schoolId,
-      action,
-      performedBy,
-      targetId,
-      targetType,
-      details,
-      result,
-      errorMessage,
-      ipAddress,
-      userAgent,
-      ...(severity ? { severity } : {}),
-      prevHash,
-      entryHash,
-      createdAt,
-    });
-  } catch (err) {
-    _auditFailureCount += 1;
-    logger.error('AUDIT_LOG_FAILURE', { err, schoolId, action });
+      await AuditLog.create({
+        schoolId,
+        seq,
+        action,
+        performedBy,
+        targetId,
+        targetType,
+        details,
+        result,
+        errorMessage,
+        ipAddress,
+        userAgent,
+        ...(severity ? { severity } : {}),
+        prevHash,
+        entryHash,
+        createdAt,
+      });
+      return;
+    } catch (err) {
+      // Duplicate { schoolId, seq } — another writer won the race; retry.
+      if (err && err.code === 11000 && attempt < MAX_RETRIES - 1) continue;
+      _auditFailureCount += 1;
+      logger.error('AUDIT_LOG_FAILURE', { err, schoolId, action });
+      return;
+    }
   }
 }
 
@@ -195,7 +241,7 @@ async function getRecentAuditLogs(schoolId, limit = 10) {
  */
 async function verifyAuditChain(schoolId, { limit = 1000 } = {}) {
   const entries = await AuditLog.find({ schoolId })
-    .sort({ _id: 1 })
+    .sort({ seq: 1 })
     .limit(limit)
     .lean()
     .bypassTenantScope();
@@ -264,43 +310,25 @@ async function exportAuditLogs(filters = {}) {
     if (endDate)   query.createdAt.$lte = new Date(endDate);
   }
 
-  const rowLimit = Math.min(
+  const limit = Math.min(
     Math.max(parseInt(requestedLimit, 10) || MAX_EXPORT_ROWS, 1),
-    MAX_EXPORT_ROWS,
+    MAX_EXPORT_ROWS
   );
 
   return AuditLog.find(query)
     .sort({ createdAt: 1 })
-    .limit(rowLimit)
-    .lean();
-}
-
-/**
- * archiveAuditLogs — marks records older than retentionDays as archived=true.
- * Records are never deleted; archiving signals they can be exported to cold storage.
- */
-async function archiveAuditLogs(retentionDays = 730) {
-  const expiry = new Date(Date.now() - retentionDays * 86400000);
-  const result = await AuditLog.updateMany(
-    { createdAt: { $lt: expiry }, archived: false },
-    { $set: { archived: true } },
-  ).bypassTenantScope();
-  if (result.modifiedCount > 0) {
-    logger.info('AUDIT_LOG_ARCHIVE', { archivedCount: result.modifiedCount });
-  }
-  return result.modifiedCount;
+    .limit(limit)
+    .lean()
+    .bypassTenantScope();
 }
 
 module.exports = {
   logAudit,
   getAuditLogs,
   getRecentAuditLogs,
+  verifyAuditChain,
   exportAuditLogs,
   getAuditHealth,
-  verifyAuditChain,
-  archiveAuditLogs,
   _resetAuditFailureCount,
-  // Exported for testing
   _computeEntryHash,
-  MAX_EXPORT_ROWS,
 };

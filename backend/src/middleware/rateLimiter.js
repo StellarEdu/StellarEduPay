@@ -6,6 +6,13 @@ const { getRedisClient } = require('../config/redisClient');
 
 const RL_MSG = { error: 'Too many requests, please try again later.', code: 'RATE_LIMIT_EXCEEDED' };
 
+// Short command timeout for limiter Redis calls. While ioredis is connecting
+// or reconnecting, commands would otherwise sit in the offline queue and each
+// request would await the pipeline until Redis returns or the retry limit is
+// hit. Bounding the command timeout keeps request latency unaffected by a
+// Redis outage, per docs/redis-dependency.md.
+const REDIS_COMMAND_TIMEOUT_MS = parseInt(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS || '200', 10);
+
 // ── Shared sliding-window-counter algorithm ─────────────────────────────────
 //
 // Both the Redis path and the in-memory fallback path count requests into
@@ -42,6 +49,11 @@ function _slidingWindowCount(currentCount, previousCount, weight) {
 // bucket's relevance, so the store's size is bounded by the number of
 // distinct clients active within the last two windows, not by every client
 // that has ever connected to the process.
+//
+// `maxKeys` additionally caps the store so a flood of distinct client keys
+// (many-IP scan, CGNAT/mobile churn) cannot grow the map without bound even
+// within a single window; node-cache evicts the least-recently-used entries
+// once the cap is reached.
 function _createFallbackStore(windowMs) {
   // node-cache's TTL/checkperiod are seconds, but accept fractional values,
   // so short test windows (milliseconds) still get real, sub-second expiry
@@ -50,6 +62,7 @@ function _createFallbackStore(windowMs) {
     stdTTL: Math.max(0.05, (windowMs * 2) / 1000),
     checkperiod: Math.max(0.05, windowMs / 1000),
     useClones: false,
+    maxKeys: parseInt(process.env.RATE_LIMIT_MAX_KEYS || '10000', 10),
   });
 }
 
@@ -106,7 +119,12 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
 
     let currentCount;
     let previousCount;
-    if (redis && redis.status !== 'end') {
+    // Only use Redis when it is actually ready. While ioredis is connecting
+    // or reconnecting, commands would queue in the offline queue and each
+    // request would await the pipeline, adding latency or stalling every API
+    // request during an outage. Going straight to the in-memory fallback
+    // keeps request latency unaffected, per docs/redis-dependency.md.
+    if (redis && redis.status === 'ready') {
       try {
         ({ currentCount, previousCount } = await _redisBucketCount(
           redis,
@@ -186,35 +204,6 @@ const bulkImportLimiter    = rl(
 
 // GET /api/students/public/:studentId is a public endpoint that returns student info.
 // Without strict rate limiting, this can be used to enumerate student rosters.
-// Limit to 10 requests per IP per minute AND per school (dual key) with alerting.
-const publicStudentLimiter = rl(
-  60 * 1000,
-  10,
-  { error: 'Too many student lookup requests. Please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
-  { 
-    name: 'rl:publicstudent',
-    keyGenerator: (req) => {
-      // Dual key: IP + school to prevent enumeration across different schools from same IP
-      const schoolId = req.schoolId || req.headers['x-school-id'] || 'unknown';
-      return `${req.ip}:${schoolId}`;
-    }
-  },
-);
+// Limit to 10 requests per IP per minute AND per school (dual key) with ale
 
-module.exports = {
-  rl,
-  generalLimiter,
-  strictLimiter,
-  verifyLimiter,
-  reminderTriggerLimiter,
-  bulkImportLimiter,
-  publicStudentLimiter,
-  syncLimiter,
-  // Exported for tests only — the shared decision function both the Redis
-  // and in-memory paths call, plus the fallback-store internals.
-  _bucketInfo,
-  _slidingWindowCount,
-  _createFallbackStore,
-  _inMemoryBucketCount,
-  _inMemoryPreviousCount,
-};
+/* … truncated 870 chars — edit only what you need near the top … */

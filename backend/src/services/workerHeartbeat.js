@@ -31,6 +31,7 @@ const WORKER_NAMES = {
   REMINDER_SCHEDULER:     'reminder_scheduler',
   TX_QUEUE_WORKER:        'tx_queue_worker',
   JOB_RECOVERY_SCHEDULER: 'job_recovery_scheduler',
+  HORIZON_STREAMING:      'horizon_streaming',
 };
 
 /**

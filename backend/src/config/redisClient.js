@@ -8,6 +8,7 @@ const REDIS_RECONNECT_BASE_DELAY_MS = parseInt(process.env.REDIS_RECONNECT_BASE_
 const REDIS_RECONNECT_MAX_DELAY_MS = parseInt(process.env.REDIS_RECONNECT_MAX_DELAY_MS || '30000', 10);
 
 let client = null;
+let subscriber = null;
 let lastRedisWarningAt = 0;
 let status = {
   configured: Boolean(process.env.REDIS_HOST),
@@ -138,6 +139,10 @@ function createRedisClient() {
       _updateStatus('reconnecting', `retrying in ${delay}ms`);
       logger.debug('[RedisClient] reconnecting', { delay });
     });
+
+    client.connect().catch((err) => {
+      _throttleRedisWarning('Redis connection failed', { error: err.message });
+    });
   } catch (err) {
     _updateStatus('unavailable', err.message);
     _throttleRedisWarning('Failed to create Redis client', { error: err.message });
@@ -151,6 +156,34 @@ function getRedisClient() {
   return client || createRedisClient();
 }
 
+/**
+ * Return the process-wide subscriber connection. Redis pub/sub connections
+ * cannot be used for regular commands, so consumers share this one duplicate
+ * instead of opening a subscriber per service.
+ */
+function getRedisSubscriber() {
+  const redisClient = getRedisClient();
+  if (!redisClient) return null;
+  if (subscriber) return subscriber;
+
+  try {
+    subscriber = redisClient.duplicate(getRedisConnectionOptions({
+      maxRetriesPerRequest: null,
+    }));
+    subscriber.on('error', (err) => {
+      _throttleRedisWarning('Redis subscriber unavailable', { error: err.message });
+    });
+    subscriber.connect().catch((err) => {
+      _throttleRedisWarning('Redis subscriber connection failed', { error: err.message });
+    });
+  } catch (err) {
+    _throttleRedisWarning('Failed to create Redis subscriber', { error: err.message });
+    subscriber = null;
+  }
+
+  return subscriber;
+}
+
 function getRedisStatus() {
   return { ...status };
 }
@@ -160,11 +193,17 @@ function isRedisReady() {
 }
 
 function resetRedisClient() {
+  if (subscriber) {
+    try {
+      subscriber.quit().catch(() => logger.debug('[RedisClient] subscriber quit missed during reset'));
+    } catch (_) {}
+  }
   if (client) {
     try {
       client.quit().catch(() => logger.debug('[RedisClient] quit missed during reset'));
     } catch (_) {}
   }
+  subscriber = null;
   client = null;
   lastRedisWarningAt = 0;
   status = {
@@ -176,12 +215,29 @@ function resetRedisClient() {
   };
 }
 
+async function closeRedisClients() {
+  const connections = [...new Set([subscriber, client].filter(Boolean))];
+  subscriber = null;
+  client = null;
+
+  const results = await Promise.allSettled(connections.map((connection) => connection.quit()));
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      logger.error('[RedisClient] Failed to close Redis connection', {
+        error: result.reason?.message || String(result.reason),
+      });
+    }
+  }
+}
+
 module.exports = {
   createRedisClient,
   getRedisClient,
+  getRedisSubscriber,
   getRedisConfig,
   getRedisConnectionOptions,
   getRedisStatus,
   isRedisReady,
   resetRedisClient,
+  closeRedisClients,
 };

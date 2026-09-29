@@ -1767,3 +1767,191 @@ html.dark textarea::placeholder { color: var(--text-subtle); }
             justify-content: center;
           }
         }
+
+
+/* ── Global keyframes (issue #1585) ─────────────────────────────────────────
+   Keyframes used by inline style={{ animation }} props must be defined in the
+   global stylesheet — CSS Modules scope @keyframes to the module, making them
+   unreachable from inline styles.
+──────────────────────────────────────────────────────────────────────────── */
+@keyframes navBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MERGED FROM redesign.css (issue #1585) — component-level refinements
+   These rules were previously in a separate redesign.css that was loaded after
+   globals.css. They are merged here so a single stylesheet remains.
+══════════════════════════════════════════════════════════════════════════ */
+
+/* Light-mode explicit class (set alongside class="light" on <html>) */
+html.light {
+  --bg:           #f5f7f4;
+  --bg-subtle:    #eef2ee;
+  --card-bg:      #ffffff;
+  --text:         #101a15;
+  --text-muted:   #566b60;
+  --text-subtle:  #8a988f;
+  --border:       #e4eae4;
+  --border-strong:#d2dcd2;
+  --primary:      #101a15;
+  --radius-sm: 9px;
+  --radius:    11px;
+  --radius-md: 15px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+}
+
+/* Dark mode — refined sidebar and surface values */
+html.dark {
+  --sidebar-bg: #081410;
+  --radius-sm: 9px;
+  --radius:    11px;
+  --radius-md: 15px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+}
+
+::selection { background: rgba(5, 150, 105, 0.20); }
+
+/* Dark cards need a solid base behind the translucent surface */
+html.dark body,
+:root:not(.light) body { background-color: #07110d; }
+
+/* ── Typography refinements ─────────────────────────────────────────────── */
+body { letter-spacing: -0.005em; }
+h1, h2, h3, h4 { letter-spacing: -0.025em; }
+h1 { font-size: clamp(1.9rem, 3vw, 2.15rem); }
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+.btn {
+  border-radius: 11px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  transition: transform .14s ease, box-shadow .16s ease, background .16s, border-color .16s, color .16s, filter .16s;
+}
+.btn:active { transform: translateY(1px); }
+
+.btn-primary,
+.btn-cta {
+  background: var(--grad-brand);
+  color: #fff;
+  border: none;
+  box-shadow: 0 10px 24px -10px var(--accent-ring);
+}
+.btn-primary:hover:not(:disabled),
+.btn-cta:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 16px 32px -12px var(--accent-ring); }
+
+.btn-ghost {
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+
+.btn-dark {
+  background: var(--text);
+  color: var(--bg);
+  border: none;
+}
+.btn-dark:hover { filter: brightness(1.1); }
+
+.btn-sm { border-radius: 9px; }
+
+/* ── Cards & Panels ─────────────────────────────────────────────────────── */
+.card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transition: box-shadow .2s ease, border-color .2s ease, transform .2s ease;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.card:hover { box-shadow: var(--shadow-md); }
+.card-header { border-bottom: 1px solid var(--border); }
+
+/* ── Stat Cards ─────────────────────────────────────────────────────────── */
+.stat-card { border-radius: var(--radius-md); }
+.stat-card-icon-wrap {
+  border-radius: 13px;
+  background: var(--grad-brand);
+  box-shadow: 0 8px 18px -6px var(--accent-ring);
+}
+.stat-card-value { letter-spacing: -0.045em; }
+
+/* ── Forms ──────────────────────────────────────────────────────────────── */
+.form-input,
+.form-select {
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text);
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.form-input:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  outline: none;
+}
+.form-input::placeholder { color: var(--text-subtle); }
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+.data-table thead th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+  background: var(--bg-subtle);
+}
+.data-table tbody tr:hover { background: var(--accent-subtle); }
+.data-table .col-mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* ── Badges & Alerts ────────────────────────────────────────────────────── */
+.badge { border-radius: 100px; font-weight: 650; }
+.alert {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+/* ── Sidebar (app layout) ───────────────────────────────────────────────── */
+.app-sidebar {
+  border-right: 1px solid var(--border);
+  background-image: radial-gradient(420px 200px at 50% -10%, rgba(16,185,129,0.18), transparent 70%);
+}
+.app-sidebar-link {
+  border-radius: 10px;
+  font-weight: 600;
+  transition: background .14s, color .14s;
+}
+
+/* ── Page Hero ──────────────────────────────────────────────────────────── */
+.page-hero-title { letter-spacing: -0.04em; }
+.page-hero-eyebrow { color: var(--accent); letter-spacing: 0.14em; }
+
+/* ── Landing Page ───────────────────────────────────────────────────────── */
+.lp { background: #061510; }
+.lp-hero { background: #061510; }
+.lp-blob-1 { background: radial-gradient(circle, #065f46 0%, transparent 70%); }
+.lp-blob-2 { background: radial-gradient(circle, #0f766e 0%, transparent 70%); }
+.lp-blob-3 { background: radial-gradient(circle, #10b981 0%, transparent 70%); }
+.lp-badge { color: #6ee7b7; background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.28); }
+.lp-hero h1 em {
+  background: linear-gradient(90deg, #6ee7b7 0%, #34d399 50%, #2dd4bf 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.lp-badge-dot { background: #fbbf24; box-shadow: 0 0 0 3px rgba(251,191,36,0.22); }
+.btn-cta {
+  background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+  box-shadow: 0 14px 32px -10px rgba(5,150,105,0.6);
+}
+.lp-stat-v { color: #34d399; }
+.lp-eyebrow, .lp-how .lp-eyebrow { color: #34d399; }
+.lp-step-num { color: #6ee7b7; background: rgba(16,185,129,0.10); border-color: rgba(16,185,129,0.25); }
+.lp-trust-item svg, .lp-feat:hover { border-color: rgba(16,185,129,0.4); }
+.lp-footer-logo { background: linear-gradient(135deg, #34d399, #2dd4bf); }
+.lp-footer-links a:hover { color: #34d399; }

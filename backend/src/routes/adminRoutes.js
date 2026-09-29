@@ -42,6 +42,16 @@ const { auditContext } = require('../middleware/auditContext');
 // POST /api/admin/log-level — change log level at runtime
 router.post('/log-level', requireAdminAuth, auditContext, setLogLevel);
 
+// GET /api/admin/streaming — Horizon SSE streaming status (Issue #1570)
+router.get('/streaming', requireAdminAuth, (req, res) => {
+  try {
+    const { getStreamStatus } = require('../services/horizonStreamingService');
+    res.json(getStreamStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Webhook dead-letter queue admin endpoints
 router.get('/webhooks/dlq', requireAdminAuth, listDLQ);
 router.post('/webhooks/dlq/:id/retry', requireAdminAuth, auditContext, retryDLQEntry);

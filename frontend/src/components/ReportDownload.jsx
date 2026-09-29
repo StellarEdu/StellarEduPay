@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { getReport, getReportCsvUrl } from "../services/api";
+import { getReport } from "../services/api";
+import api from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import {
   IconCalendar, IconDownload, IconBarChart, IconAlertTriangle,
@@ -7,6 +8,9 @@ import {
 } from "./Icons";
 import PageHero, { StatCard } from "./PageHero";
 import { useTranslation } from "react-i18next";
+// Issue #1585: import CSS module so the @keyframes spin is defined in the
+// stylesheet rather than injected as a global inline <style> block.
+import _styles from "../styles/ReportDownload.module.css"; // eslint-disable-line no-unused-vars
 
 export default function ReportDownload() {
   const { t } = useTranslation();
@@ -86,12 +90,16 @@ export default function ReportDownload() {
 
     try {
       setCsvLoading(true);
-      const url = getReportCsvUrl(params);
-      const response = await fetch(url, {
-        credentials: "include",
+      // Issue #1577 — use the shared axios instance so that:
+      //   1. The X-School-ID interceptor is applied (prevents MISSING_SCHOOL_CONTEXT)
+      //   2. The request goes through the Next.js /api/* rewrite proxy, keeping
+      //      SameSite=Strict auth cookies first-party in split-host deployments
+      //   3. Token refresh and error handling are consistent with all other calls
+      const response = await api.get("/reports", {
+        params: { ...params, format: "csv" },
+        responseType: "blob",
       });
-      if (!response.ok) throw new Error(t("reports.downloadError"));
-      const blob = await response.blob();
+      const blob = response.data;
       const blobUrl = URL.createObjectURL(blob);
       const filename =
         startDate && endDate
@@ -105,7 +113,13 @@ export default function ReportDownload() {
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
     } catch (err) {
-      setError(t("reports.failedCsvPrefix") + (err.message || t("reports.failedCsvUnknown")));
+      // Surface the backend error code when available (e.g. MISSING_SCHOOL_CONTEXT)
+      const backendCode  = err.response?.data?.code;
+      const backendError = err.response?.data?.error;
+      setError(
+        getErrorMessage(backendCode, backendError) ||
+        t("reports.failedCsvPrefix") + (err.message || t("reports.failedCsvUnknown"))
+      );
     } finally {
       setCsvLoading(false);
     }
@@ -327,12 +341,6 @@ export default function ReportDownload() {
               </div>
             </div>
           )}
-
-          <style>{`
-            @keyframes spin {
-              to { transform: rotate(360deg); }
-            }
-          `}</style>
 
           {/* Summary stats */}
           <div className="stat-grid" style={{ marginBottom: "1.5rem" }}>

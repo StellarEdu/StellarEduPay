@@ -8,6 +8,8 @@
  * (CWE-1236).
  */
 
+const { Transform } = require('stream');
+
 // Characters that make Excel / LibreOffice / Google Sheets treat a cell as a
 // formula (or, for tab/CR, allow a formula to be smuggled past the check).
 const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
@@ -42,4 +44,37 @@ function csvRow(values) {
   return values.map(csvEscape).join(',');
 }
 
-module.exports = { csvEscape, csvRow, FORMULA_TRIGGER };
+/**
+ * Build a Transform stream that turns a stream of documents into CSV lines.
+ *
+ * The transform is object-mode on the writable side (Mongo cursors emit plain
+ * objects) and byte-mode on the readable side, so it can be piped straight
+ * into an HTTP response. Using a Transform (rather than a `data` listener)
+ * lets `stream.pipeline` apply backpressure end-to-end and destroy the source
+ * cursor when the destination closes early (Issue #1611).
+ *
+ * @param {(doc: *) => Array<*>} toRow maps a document to an array of cells
+ * @param {string[]} [header] optional header row written before any document
+ * @returns {Transform}
+ */
+function csvTransform(toRow, header) {
+  let wroteHeader = false;
+  return new Transform({
+    writableObjectMode: true,
+    transform(doc, _encoding, callback) {
+      try {
+        let line = '';
+        if (!wroteHeader && Array.isArray(header)) {
+          wroteHeader = true;
+          line += csvRow(header) + '\n';
+        }
+        line += csvRow(toRow(doc)) + '\n';
+        callback(null, line);
+      } catch (err) {
+        callback(err);
+      }
+    },
+  });
+}
+
+module.exports = { csvEscape, csvRow, csvTransform, FORMULA_TRIGGER };

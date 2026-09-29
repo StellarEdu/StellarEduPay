@@ -13,6 +13,7 @@ import { IconAlertTriangle, IconCheck } from "../components/Icons";
 import PageHero from "../components/PageHero";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
+import styles from "../styles/fee-adjustments.module.css";
 
 const RULE_TYPES = [
   { value: "discount_percentage", labelKey: "feeAdjustments.ruleTypeDiscountPct" },
@@ -218,40 +219,6 @@ export default function FeeAdjustments() {
 
   return (
     <>
-      <style>{`
-        .fa-form-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 1rem;
-        }
-        .fa-form-grid .full { grid-column: 1 / -1; }
-        @media (max-width: 560px) {
-          .fa-form-grid { grid-template-columns: 1fr; }
-          .fa-form-grid .full { grid-column: 1; }
-        }
-        .fa-priority-hint {
-          font-size: 0.72rem;
-          color: var(--text-muted);
-          margin-top: 0.2rem;
-        }
-        .fa-checkbox-row {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-size: 0.875rem;
-          cursor: pointer;
-          padding: 0.2rem 0;
-        }
-        .fa-checkbox-row input[type=checkbox] {
-          width: 16px;
-          height: 16px;
-          accent-color: var(--accent);
-          cursor: pointer;
-        }
-        .fa-actions { display: flex; gap: 0.375rem; justify-content: flex-end; }
-      `}</style>
-
-      <div className="page-wrap">
         <PageHero
           eyebrow={t("feeAdjustments.eyebrow")}
           title={t("feeAdjustments.title")}
@@ -281,7 +248,7 @@ export default function FeeAdjustments() {
             )}
 
             <form onSubmit={handleSubmit}>
-              <div className="fa-form-grid">
+              <div className={styles.formGrid}>
                 <div className="form-group">
                   <label className="form-label">{t("feeAdjustments.nameLabel")}</label>
                   <input
@@ -339,7 +306,7 @@ export default function FeeAdjustments() {
                     value={form.priority}
                     onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}
                   />
-                  <p className="fa-priority-hint">{t("feeAdjustments.priorityHint")}</p>
+                  <p className={styles.priorityHint}>{t("feeAdjustments.priorityHint")}</p>
                 </div>
 
                 <div className="form-group">
@@ -353,7 +320,7 @@ export default function FeeAdjustments() {
                       <option key={p.value} value={p.value}>{p.label}</option>
                     ))}
                   </select>
-                  <p className="fa-priority-hint">
+                  <p className={styles.priorityHint}>
                     Only matters if this ends up the highest-priority rule matching a
                     student alongside others — see "How overlapping rules resolve" below.
                   </p>
@@ -371,7 +338,7 @@ export default function FeeAdjustments() {
 
                 {editId && (
                   <div className="form-group">
-                    <label className="fa-checkbox-row">
+                    <label className={styles.checkboxRow}>
                       <input
                         type="checkbox"
                         checked={form.isActive}
@@ -529,7 +496,7 @@ export default function FeeAdjustments() {
                         </span>
                       </td>
                       <td>
-                        <div className="fa-actions">
+                        <div className={styles.actions}>
                           <button
                             className="btn btn-sm btn-ghost"
                             onClick={() => startEdit(rule)}

@@ -3,6 +3,7 @@
 const Payment = require('../models/paymentModel');
 const { enqueueTransaction } = require('../queue/transactionQueue');
 const { resolveCorrelationId } = require('../utils/correlationId');
+const { createScheduledJob } = require('../utils/scheduledJob');
 const logger = require('../utils/logger').child('StuckPaymentReconciliation');
 
 // Issue #1477: Increased from 5 minutes to 15 minutes to account for legitimate poll
@@ -14,7 +15,7 @@ const STUCK_PAYMENT_THRESHOLD_MS = parseInt(process.env.STUCK_PAYMENT_THRESHOLD_
 const STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS = parseInt(process.env.STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS, 10) || 10 * 60 * 1000;
 const STUCK_PAYMENT_RECONCILIATION_MAX_BATCH = parseInt(process.env.STUCK_PAYMENT_RECONCILIATION_MAX_BATCH, 10) || 100;
 
-let _timer = null;
+let _job = null;
 
 async function findStuckPayments(limit = STUCK_PAYMENT_RECONCILIATION_MAX_BATCH) {
   return Payment.find({
@@ -46,18 +47,19 @@ async function reconcileStuckPayments(limit = STUCK_PAYMENT_RECONCILIATION_MAX_B
 }
 
 async function _runScheduledReconciliation() {
-  try {
-    const requeued = await reconcileStuckPayments();
-    logger.info('Scheduled stuck payment reconciliation complete', { requeued });
-  } catch (err) {
-    logger.error('Scheduled stuck payment reconciliation failed', { error: err.message });
-  }
+  const requeued = await reconcileStuckPayments();
+  logger.info('Scheduled stuck payment reconciliation complete', { requeued });
+  return requeued;
 }
 
 function startStuckPaymentReconciliationScheduler() {
-  if (_timer) return;
-  _timer = setInterval(_runScheduledReconciliation, STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS);
-  if (_timer.unref) _timer.unref();
+  if (_job) return;
+  _job = createScheduledJob({
+    name: 'stuckPaymentReconciliation',
+    intervalMs: STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS,
+    run: _runScheduledReconciliation,
+  });
+  _job.start();
   logger.info('Stuck payment reconciliation scheduler started', {
     intervalMs: STUCK_PAYMENT_RECONCILIATION_INTERVAL_MS,
     maxBatch: STUCK_PAYMENT_RECONCILIATION_MAX_BATCH,
@@ -65,10 +67,11 @@ function startStuckPaymentReconciliationScheduler() {
   });
 }
 
-function stopStuckPaymentReconciliationScheduler() {
-  if (_timer) {
-    clearInterval(_timer);
-    _timer = null;
+async function stopStuckPaymentReconciliationScheduler() {
+  if (_job) {
+    const job = _job;
+    _job = null;
+    await job.stop();
   }
 }
 

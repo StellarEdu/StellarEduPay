@@ -11,7 +11,8 @@
     "test:loadsim": "jest --testPathPattern=tests/loadsim/ --testPathIgnorePatterns=/node_modules/ --forceExit",
     "test:docker-healthcheck": "cross-env RUN_DOCKER_COMPOSE_HEALTHCHECK_TESTS=true jest tests/dockerComposeHealthCheck.test.js --forceExit",
     "seed": "node scripts/seed-test-data.js",
-    "check-version-drift": "node scripts/check-version-drift.js"
+    "check-version-drift": "node scripts/check-version-drift.js",
+    "validate:migrations": "node scripts/validate-migrations.js"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",

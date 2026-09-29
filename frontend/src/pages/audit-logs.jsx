@@ -5,8 +5,8 @@ import {
   IconChevronLeft, IconChevronRight, IconAlertTriangle, IconCheck,
 } from "../components/Icons";
 import PageHero from "../components/PageHero";
-import RequireAdmin from "../components/RequireAdmin";
 import { useTranslation } from "react-i18next";
+import styles from "../styles/audit-logs.module.css";
 
 function formatTimestamp(isoString, t) {
   if (!isoString) return t("auditLogs.notAvailable");
@@ -37,7 +37,7 @@ function getActionLabel(action, t) {
 
 const ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }));
 
-function AuditLogsContent() {
+export default function AuditLogsContent() {
   const { t } = useTranslation();
   const [logs, setLogs]               = useState([]);
   const [loading, setLoading]         = useState(true);
@@ -118,92 +118,6 @@ function AuditLogsContent() {
 
   return (
     <>
-      <style>{`
-        .al-filters {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-          gap: 0.75rem;
-          padding: 1.25rem 1.5rem;
-          border-bottom: 1px solid var(--border);
-          background: var(--bg-subtle, var(--bg));
-        }
-        .al-filter-label {
-          display: block;
-          font-size: 0.7rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: var(--text-muted);
-          margin-bottom: 0.3rem;
-        }
-        .al-filter-input {
-          width: 100%;
-          padding: 0.425rem 0.65rem;
-          border: 1.5px solid var(--border);
-          border-radius: var(--radius-sm);
-          font-size: 0.825rem;
-          font-family: inherit;
-          color: var(--text);
-          background: var(--card-bg);
-          outline: none;
-          transition: border-color 0.15s, box-shadow 0.15s;
-        }
-        .al-filter-input:focus {
-          border-color: var(--accent);
-          box-shadow: 0 0 0 3px var(--accent-subtle);
-        }
-        .al-empty {
-          padding: 3.5rem;
-          text-align: center;
-          color: var(--text-muted);
-        }
-        .al-detail-pre {
-          margin-top: 0.75rem;
-          padding: 0.625rem 0.75rem;
-          background: var(--bg-subtle, var(--bg));
-          border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
-          font-size: 0.72rem;
-          font-family: monospace;
-          overflow: auto;
-          max-height: 220px;
-          white-space: pre-wrap;
-          word-break: break-all;
-          color: var(--text);
-        }
-        .al-target-badge {
-          display: inline-flex;
-          align-items: center;
-          padding: 0.15rem 0.5rem;
-          border-radius: 4px;
-          background: var(--accent-subtle);
-          color: var(--accent);
-          font-size: 0.65rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          margin-right: 0.375rem;
-          flex-shrink: 0;
-        }
-        .al-expand-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.3rem;
-          padding: 0.2rem 0.55rem;
-          border: 1px solid var(--border);
-          border-radius: 4px;
-          background: transparent;
-          color: var(--text-muted);
-          font-size: 0.72rem;
-          font-family: inherit;
-          cursor: pointer;
-          transition: background 0.12s;
-        }
-        .al-expand-btn:hover { background: var(--bg-subtle, var(--bg)); }
-        .al-result-badge-success { background: var(--success-bg); color: var(--success-text); }
-        .al-result-badge-failure { background: var(--danger-bg);  color: var(--danger-text);  }
-      `}</style>
-
       <div className="page-wrap-wide">
         <PageHero
           eyebrow={t("auditLogs.eyebrow")}
@@ -218,13 +132,13 @@ function AuditLogsContent() {
 
         <div className="card">
           {/* Filters */}
-          <div className="al-filters">
+          <div className={styles.filters}>
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterActionLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterActionLabel")}</label>
               <select
                 value={actionFilter}
                 onChange={e => setActionFilter(e.target.value)}
-                className="al-filter-input"
+                className={styles.filterInput}
               >
                 <option value="">{t("auditLogs.allActions")}</option>
                 {ACTION_OPTIONS.map(o => (
@@ -234,11 +148,11 @@ function AuditLogsContent() {
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterTargetTypeLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterTargetTypeLabel")}</label>
               <select
                 value={targetTypeFilter}
                 onChange={e => setTargetTypeFilter(e.target.value)}
-                className="al-filter-input"
+                className={styles.filterInput}
               >
                 <option value="">{t("auditLogs.allTypes")}</option>
                 {["student","payment","fee","school"].map(t => (
@@ -248,11 +162,11 @@ function AuditLogsContent() {
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterResultLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterResultLabel")}</label>
               <select
                 value={resultFilter}
                 onChange={e => setResultFilter(e.target.value)}
-                className="al-filter-input"
+                className={styles.filterInput}
                 aria-label={t("auditLogs.filterByResult")}
               >
                 <option value="">{t("auditLogs.allResults")}</option>
@@ -262,44 +176,44 @@ function AuditLogsContent() {
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterActorIdLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterActorIdLabel")}</label>
               <input
                 type="text"
                 value={actorIdInput}
                 onChange={e => setActorIdInput(e.target.value)}
                 placeholder={t("auditLogs.actorPlaceholder")}
-                className="al-filter-input"
+                className={styles.filterInput}
               />
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterSearchLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterSearchLabel")}</label>
               <input
                 type="text"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 placeholder={t("auditLogs.searchPlaceholder")}
-                className="al-filter-input"
+                className={styles.filterInput}
               />
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterFromLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterFromLabel")}</label>
               <input
                 type="date"
                 value={startDate}
                 onChange={e => setStartDate(e.target.value)}
-                className="al-filter-input"
+                className={styles.filterInput}
               />
             </div>
 
             <div>
-              <label className="al-filter-label">{t("auditLogs.filterToLabel")}</label>
+              <label className={styles.filterLabel}>{t("auditLogs.filterToLabel")}</label>
               <input
                 type="date"
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
-                className="al-filter-input"
+                className={styles.filterInput}
               />
             </div>
           </div>
@@ -336,7 +250,7 @@ function AuditLogsContent() {
               </table>
             </div>
           ) : logs.length === 0 ? (
-            <div className="al-empty">
+            <div className={styles.empty}>
               <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("auditLogs.noLogsFound")}</p>
               <p style={{ fontSize: "0.8125rem" }}>{t("auditLogs.emptyFilters")}</p>
             </div>
@@ -365,7 +279,7 @@ function AuditLogsContent() {
                         <td style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>{log.performedBy}</td>
                         <td>
                           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.25rem" }}>
-                            <span className="al-target-badge">{log.targetType}</span>
+                            <span className={styles.targetBadge}>{log.targetType}</span>
                             <span className="font-mono" style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{log.targetId}</span>
                           </div>
                         </td>
@@ -383,14 +297,14 @@ function AuditLogsContent() {
                           ) : (
                             <div>
                               <button
-                                className="al-expand-btn"
+                                className={styles.expandBtn}
                                 onClick={() => setExpandedId(isExpanded ? null : log._id)}
                                 aria-expanded={isExpanded}
                               >
                                 {isExpanded ? t("actions.hide") : t("actions.view")}
                               </button>
                               {isExpanded && (
-                                <pre className="al-detail-pre">
+                                <pre className={styles.detailPre}>
                                   {JSON.stringify(log.details, null, 2)}
                                 </pre>
                               )}

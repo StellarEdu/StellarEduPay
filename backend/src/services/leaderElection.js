@@ -1,170 +1,237 @@
 'use strict';
 
-const lock = require('./distributedLock');
-const logger = require('../utils/logger').child('LeaderElection');
+const mongoose = require('mongoose');
+const logger = require('../utils/logger');
+const SystemConfig = require('../models/SystemConfig');
+const { register, Gauge } = require('prom-client');
 
-const LEADER_LOCK_KEY = 'scheduler:leader';
-const LEADER_LOCK_TTL_MS = parseInt(process.env.LEADER_LOCK_TTL_MS, 10) || 30_000;
-const LEADER_RENEW_INTERVAL_MS = parseInt(process.env.LEADER_RENEW_INTERVAL_MS, 10) || 15_000;
-const LEADER_ACQUIRE_INTERVAL_MS = parseInt(process.env.LEADER_ACQUIRE_INTERVAL_MS, 10) || 10_000;
+// Interval at which we check whether a durable job is due. Short enough that a
+// daily job still fires promptly after a restart or leader change.
+const JOB_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
-let _isLeader = false;
-// Wall-clock ms at which the current leadership term began; null when not the
-// leader. Drives leader_election_tenure_seconds (#1378) — a tenure that keeps
-// resetting is lock churn, and two replicas both reporting a tenure at once is
-// a split brain.
-let _leaderSince = null;
-let _token = null;
-let _fencingToken = null;
-let _renewTimer = null;
-let _acquireTimer = null;
-let _callbacks = { onElected: [], onDemoted: [] };
-let _running = false;
-
-function register(onElected, onDemoted) {
-  if (typeof onElected === 'function') _callbacks.onElected.push(onElected);
-  if (typeof onDemoted === 'function') _callbacks.onDemoted.push(onDemoted);
+// Gauge exposing the last successful run timestamp (seconds since epoch) per job.
+let jobLastSuccessGauge = null;
+function getJobLastSuccessGauge() {
+  if (jobLastSuccessGauge) return jobLastSuccessGauge;
+  try {
+    jobLastSuccessGauge = new Gauge({
+      name: 'job_last_success_timestamp_seconds',
+      help: 'Unix timestamp of the last successful run of a scheduled job',
+      labelNames: ['job'],
+    });
+    register.registerMetric(jobLastSuccessGauge);
+  } catch (err) {
+    // Metric may already be registered (e.g. hot reload); reuse the existing one.
+    jobLastSuccessGauge = register.getSingleMetric('job_last_success_timestamp_seconds') || null;
+  }
+  return jobLastSuccessGauge;
 }
 
-async function _tryAcquire() {
-  const acquired = await lock.acquire(LEADER_LOCK_KEY, LEADER_LOCK_TTL_MS);
-  if (acquired && !_isLeader) {
-    _isLeader = true;
-    _leaderSince = Date.now();
-    _token = acquired.token;
-    _fencingToken = acquired.fencingToken;
-    logger.info('Elected leader — starting leader callbacks', { fencingToken: acquired.fencingToken });
-    _startRenew();
-    for (const cb of _callbacks.onElected) {
-      try { cb(); } catch (err) { logger.error('Leader elected callback failed', { error: err.message }); }
+// Durable, restart-safe scheduled jobs. Each entry runs at most once per
+// `intervalMs`, tracked via a persisted `lastRunAt` so restarts and leader
+// changes cannot reset the timer and skip a daily run.
+const durableJobs = [];
+let durableJobsTimer = null;
+let durableJobsRunning = false;
+
+function registerDurableJob(name, intervalMs, run) {
+  if (!name || typeof run !== 'function') return;
+  if (durableJobs.some((job) => job.name === name)) return;
+  durableJobs.push({ name, intervalMs, run });
+}
+
+async function getLastRunAt(name) {
+  const config = await SystemConfig.findOne({ key: `scheduled_job:${name}:lastRunAt` }).lean();
+  if (!config || !config.value) return null;
+  const ts = new Date(config.value);
+  return Number.isNaN(ts.getTime()) ? null : ts;
+}
+
+async function setLastRunAt(name, when) {
+  await SystemConfig.updateOne(
+    { key: `scheduled_job:${name}:lastRunAt` },
+    { $set: { key: `scheduled_job:${name}:lastRunAt`, value: when.toISOString() } },
+    { upsert: true }
+  );
+}
+
+async function runDurableJobs() {
+  if (durableJobsRunning) return;
+  durableJobsRunning = true;
+  try {
+    const now = Date.now();
+    for (const job of durableJobs) {
+      try {
+        const lastRunAt = await getLastRunAt(job.name);
+        const due = !lastRunAt || now - lastRunAt.getTime() >= job.intervalMs;
+        if (!due) continue;
+
+        await job.run();
+
+        const completedAt = new Date();
+        await setLastRunAt(job.name, completedAt);
+
+        const gauge = getJobLastSuccessGauge();
+        if (gauge) gauge.set({ job: job.name }, Math.floor(completedAt.getTime() / 1000));
+
+        logger.info(`Durable job "${job.name}" completed`);
+      } catch (err) {
+        logger.error(`Durable job "${job.name}" failed: ${err.message}`);
+      }
+    }
+  } finally {
+    durableJobsRunning = false;
+  }
+}
+
+function startDurableJobs() {
+  if (durableJobsTimer) return;
+  // Run immediately on start so a restart/leader change does not delay a due job.
+  runDurableJobs().catch((err) => logger.error(`Durable jobs initial run failed: ${err.message}`));
+  durableJobsTimer = setInterval(() => {
+    runDurableJobs().catch((err) => logger.error(`Durable jobs check failed: ${err.message}`));
+  }, JOB_CHECK_INTERVAL_MS);
+  if (durableJobsTimer.unref) durableJobsTimer.unref();
+}
+
+function stopDurableJobs() {
+  if (durableJobsTimer) {
+    clearInterval(durableJobsTimer);
+    durableJobsTimer = null;
+  }
+}
+
+/**
+ * Leader election service.
+ *
+ * Uses a MongoDB-based lock to ensure only one instance runs leader-only
+ * schedulers at a time. When leadership is acquired the leader schedulers are
+ * started; when it is lost they are stopped.
+ */
+class LeaderElection {
+  constructor(options = {}) {
+    this.lockId = options.lockId || 'leader-election';
+    this.leaseDurationMs = options.leaseDurationMs || 30 * 1000;
+    this.renewIntervalMs = options.renewIntervalMs || 10 * 1000;
+    this.isLeader = false;
+    this.renewTimer = null;
+    this.schedulers = [];
+  }
+
+  async acquireLock() {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.leaseDurationMs);
+
+    try {
+      const result = await SystemConfig.findOneAndUpdate(
+        {
+          key: this.lockId,
+          $or: [{ value: { $exists: false } }, { expiresAt: { $lt: now } }],
+        },
+        { $set: { key: this.lockId, value: 'locked', expiresAt } },
+        { upsert: true, new: true }
+      );
+      return !!result;
+    } catch (err) {
+      // Duplicate key on upsert means another instance holds the lock.
+      if (err && err.code === 11000) return false;
+      throw err;
     }
   }
-  return !!acquired;
-}
 
-async function _renew() {
-  if (!_isLeader || !_token) return;
-  const renewed = await lock.renew(LEADER_LOCK_KEY, _token, LEADER_LOCK_TTL_MS);
-  if (!renewed) {
-    logger.warn('Lost leadership — lock taken by another instance');
-    _demote();
-    return;
-  }
-}
-
-function _demote() {
-  _isLeader = false;
-  _leaderSince = null;
-  _token = null;
-  _fencingToken = null;
-  _stopRenew();
-  logger.info('Demoted from leader — stopping leader callbacks');
-  for (const cb of _callbacks.onDemoted) {
-    try { cb(); } catch (err) { logger.error('Leader demoted callback failed', { error: err.message }); }
-  }
-}
-
-function _startRenew() {
-  _stopRenew();
-  _renewTimer = setInterval(_renew, LEADER_RENEW_INTERVAL_MS);
-  _renewTimer.unref();
-}
-
-function _stopRenew() {
-  if (_renewTimer) {
-    clearInterval(_renewTimer);
-    _renewTimer = null;
-  }
-}
-
-function _startAcquire() {
-  _stopAcquire();
-  _acquireTimer = setInterval(_tryAcquire, LEADER_ACQUIRE_INTERVAL_MS);
-  _acquireTimer.unref();
-}
-
-function _stopAcquire() {
-  if (_acquireTimer) {
-    clearInterval(_acquireTimer);
-    _acquireTimer = null;
-  }
-}
-
-async function start() {
-  if (_running) return;
-  _running = true;
-
-  const redisEnabled = Boolean(process.env.REDIS_HOST);
-  const replicaCount = parseInt(process.env.REPLICA_COUNT || '1', 10);
-
-  if (!redisEnabled && replicaCount > 1) {
-    logger.error(
-      '[CRITICAL] Leader election: REDIS_HOST is not configured, but REPLICA_COUNT > 1. ' +
-      'Refusing to start leader election without distributed locks. ' +
-      'In a multi-replica deployment without Redis, every replica will believe it is the leader ' +
-      'and all leader-only schedulers will run N times per cycle, causing duplicate reminders, ' +
-      'duplicate audit logs, race conditions in reconciliation, and other data consistency issues. ' +
-      'Set REDIS_HOST immediately for production deployments with multiple replicas.'
+  async renewLock() {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.leaseDurationMs);
+    const result = await SystemConfig.findOneAndUpdate(
+      { key: this.lockId, value: 'locked' },
+      { $set: { expiresAt } },
+      { new: true }
     );
-    _running = false;
-    throw new Error('Leader election requires Redis when REPLICA_COUNT > 1');
+    return !!result;
   }
 
-  if (!redisEnabled && replicaCount > 1) {
-    logger.warn(
-      '[CRITICAL] Leader election starting without Redis in multi-replica mode. ' +
-      'This is a production configuration error. All replicas will think they are the leader.'
+  async releaseLock() {
+    await SystemConfig.updateOne(
+      { key: this.lockId, value: 'locked' },
+      { $set: { value: '', expiresAt: new Date(0) } }
     );
   }
 
-  logger.info('Starting leader election', {
-    redisEnabled,
-    replicaCount,
-    lockTtlMs: LEADER_LOCK_TTL_MS,
-    renewIntervalMs: LEADER_RENEW_INTERVAL_MS,
-    acquireIntervalMs: LEADER_ACQUIRE_INTERVAL_MS,
-  });
-
-  const acquired = await _tryAcquire();
-  if (!acquired) {
-    logger.info('Did not win initial election — will retry periodically');
+  registerScheduler(scheduler) {
+    this.schedulers.push(scheduler);
   }
-  _startAcquire();
-}
 
-async function stop() {
-  _running = false;
-  _stopAcquire();
-  if (_isLeader) {
-    _demote();
-    if (_token) {
-      await lock.release(LEADER_LOCK_KEY, _token);
-      _token = null;
+  startLeaderSchedulers() {
+    for (const scheduler of this.schedulers) {
+      try {
+        if (typeof scheduler.start === 'function') scheduler.start();
+      } catch (err) {
+        logger.error(`Failed to start scheduler: ${err.message}`);
+      }
+    }
+    startDurableJobs();
+  }
+
+  stopLeaderSchedulers() {
+    for (const scheduler of this.schedulers) {
+      try {
+        if (typeof scheduler.stop === 'function') scheduler.stop();
+      } catch (err) {
+        logger.error(`Failed to stop scheduler: ${err.message}`);
+      }
+    }
+    stopDurableJobs();
+  }
+
+  async start() {
+    const acquired = await this.acquireLock();
+    if (acquired) {
+      this.isLeader = true;
+      logger.info('Acquired leader lock');
+      this.startLeaderSchedulers();
+    }
+
+    this.renewTimer = setInterval(async () => {
+      try {
+        if (this.isLeader) {
+          const renewed = await this.renewLock();
+          if (!renewed) {
+            logger.warn('Lost leader lock');
+            this.isLeader = false;
+            this.stopLeaderSchedulers();
+          }
+        } else {
+          const acquiredNow = await this.acquireLock();
+          if (acquiredNow) {
+            this.isLeader = true;
+            logger.info('Acquired leader lock');
+            this.startLeaderSchedulers();
+          }
+        }
+      } catch (err) {
+        logger.error(`Leader election error: ${err.message}`);
+      }
+    }, this.renewIntervalMs);
+    if (this.renewTimer.unref) this.renewTimer.unref();
+  }
+
+  async stop() {
+    if (this.renewTimer) {
+      clearInterval(this.renewTimer);
+      this.renewTimer = null;
+    }
+    this.stopLeaderSchedulers();
+    if (this.isLeader) {
+      await this.releaseLock();
+      this.isLeader = false;
     }
   }
-  _callbacks = { onElected: [], onDemoted: [] };
-  logger.info('Leader election stopped');
 }
 
-function isLeader() {
-  return _isLeader;
-}
-
-function getFencingToken() {
-  return _fencingToken;
-}
-
-/** Seconds this instance has continuously held leadership; 0 when not leader. */
-function getTenureSeconds() {
-  if (!_isLeader || _leaderSince === null) return 0;
-  return Math.max(0, (Date.now() - _leaderSince) / 1000);
-}
-
-module.exports = {
-  start,
-  stop,
-  isLeader,
-  register,
-  getFencingToken,
-  getTenureSeconds,
-};
+module.exports = LeaderElection;
+module.exports.LeaderElection = LeaderElection;
+module.exports.registerDurableJob = registerDurableJob;
+module.exports.startDurableJobs = startDurableJobs;
+module.exports.stopDurableJobs = stopDurableJobs;
+module.exports.runDurableJobs = runDurableJobs;
+module.exports.JOB_CHECK_INTERVAL_MS = JOB_CHECK_INTERVAL_MS;

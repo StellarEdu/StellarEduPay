@@ -54,6 +54,16 @@ function isTwilioConfigured() {
 }
 
 /**
+ * Validate a phone number as E.164 (e.g. +447700900000).
+ *
+ * @param {string} phone
+ * @returns {boolean}
+ */
+function isValidE164(phone) {
+  return typeof phone === 'string' && /^\+[1-9]\d{1,14}$/.test(phone.trim());
+}
+
+/**
  * Send an SMS message.
  *
  * @param {string} to   - Recipient phone number in E.164 format (e.g. +447700900000)
@@ -61,6 +71,11 @@ function isTwilioConfigured() {
  * @returns {Promise<{sent: boolean, sid?: string}>}
  */
 async function sendSms(to, body) {
+  if (!isValidE164(to)) {
+    logger.warn('Refusing to send SMS — recipient is not a valid E.164 number', { to });
+    return { sent: false, error: 'invalid_recipient' };
+  }
+
   const client = getTwilioClient();
 
   if (!client || !config.TWILIO_FROM_NUMBER) {
@@ -95,16 +110,22 @@ async function sendSms(to, body) {
  * @returns {Promise<{sent: boolean, sid?: string}>}
  */
 async function sendWhatsApp(to, body) {
+  // Normalise the recipient address — Twilio requires the "whatsapp:" prefix
+  const toAddress = to && to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
+  const bareNumber = toAddress.replace(/^whatsapp:/, '');
+
+  if (!isValidE164(bareNumber)) {
+    logger.warn('Refusing to send WhatsApp — recipient is not a valid E.164 number', { to });
+    return { sent: false, error: 'invalid_recipient' };
+  }
+
   const client = getTwilioClient();
 
   if (!client || !config.TWILIO_WHATSAPP_FROM) {
     // Dev / no-Twilio fallback
-    logger.info('WhatsApp (no Twilio — dev mode)', { to, body });
+    logger.info('WhatsApp (no Twilio — dev mode)', { to: toAddress, body });
     return { sent: false };
   }
-
-  // Normalise the recipient address — Twilio requires the "whatsapp:" prefix
-  const toAddress = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
 
   try {
     const message = await client.messages.create({
@@ -121,4 +142,4 @@ async function sendWhatsApp(to, body) {
   }
 }
 
-module.exports = { sendSms, sendWhatsApp, isTwilioConfigured };
+module.exports = { sendSms, sendWhatsApp, isTwilioConfigured, isValidE164 };

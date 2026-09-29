@@ -1,12 +1,10 @@
 'use strict';
 
 /**
- * Regression tests for the BullMQ retry-queue Redis connection.
+ * Regression tests for the BullMQ retry queue's shared Redis connection.
  *
- * The bug: transactionRetryQueue.js created its ioredis connection WITHOUT
- * `maxRetriesPerRequest: null`, so BullMQ's createQueueEvents() threw
- *   "BullMQ: Your redis options maxRetriesPerRequest must be null"
- * on startup and the whole retry / dead-letter pipeline failed to initialize.
+ * The retry queue must use the centralized ioredis client and keep the
+ * `maxRetriesPerRequest: null` requirement BullMQ needs for blocking consumers.
  *
  * These tests mock ioredis + bullmq so they run without a live Redis, and:
  *   1. assert the dedicated queue connection carries the required blocking
@@ -15,7 +13,7 @@
  *   3. assert a failed payment that has exhausted its attempts lands in the DLQ.
  */
 
-// Capture options the queue passes to ioredis and to BullMQ's QueueEvents.
+// Capture options used by the shared client and connections passed to BullMQ.
 const capture = {
   redisOptions: [],
   queueEventsConnections: [],
@@ -28,6 +26,7 @@ jest.mock('ioredis', () => {
     capture.redisOptions.push(options);
     return {
       on: jest.fn(),
+      connect: jest.fn().mockResolvedValue(undefined),
       quit: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn(),
     };
@@ -91,21 +90,25 @@ describe('transactionRetryQueue Redis connection', () => {
     queueModule = require('../src/queue/transactionRetryQueue');
   });
 
-  test('exported queue config sets BullMQ blocking options', () => {
+  test('exported queue config preserves the centralized Redis policy', () => {
     expect(queueModule.config.redis.maxRetriesPerRequest).toBeNull();
-    expect(queueModule.config.redis.enableReadyCheck).toBe(false);
+    expect(queueModule.config.redis.enableOfflineQueue).toBe(false);
+    expect(typeof queueModule.config.redis.retryStrategy).toBe('function');
+    expect(typeof queueModule.config.redis.reconnectOnError).toBe('function');
   });
 
   test('initializeQueue boots and gives QueueEvents a connection with maxRetriesPerRequest=null', async () => {
     await expect(queueModule.initializeQueue()).resolves.toBeDefined();
 
-    // ioredis was constructed with the required option (this is what BullMQ checks).
+    // Only the shared client is constructed, with BullMQ's required option.
     expect(capture.redisOptions.length).toBeGreaterThan(0);
     expect(capture.redisOptions[0].maxRetriesPerRequest).toBeNull();
 
-    // QueueEvents received a real connection (the line that used to throw).
+    // QueueEvents receives the centralized client instead of creating a module-local one.
     expect(capture.queueEventsConnections.length).toBeGreaterThan(0);
-    expect(capture.queueEventsConnections[0]).toBeTruthy();
+    expect(capture.queueEventsConnections[0]).toBe(
+      require('../src/config/redisClient').getRedisClient()
+    );
   });
 
   test('a payment that has exhausted its attempts lands in the DLQ', async () => {

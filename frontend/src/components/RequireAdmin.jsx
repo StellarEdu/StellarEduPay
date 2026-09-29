@@ -10,15 +10,10 @@ import { useTranslation } from "react-i18next";
  * the authentication check resolves, then redirects unauthenticated or
  * under-privileged users to /login before any protected content is shown.
  *
- * Usage — wrap any admin page's exported component:
- *
- *   export default function MyAdminPage() { ... }
- *   // In _app.jsx or directly:
- *   <RequireAdmin><MyAdminPage /></RequireAdmin>
- *
- * Or as a HOC (used by AppLayout internally):
- *
- *   export default RequireAdmin(MyAdminPage);
+ * Usage — applied centrally (#1579): _app.jsx renders every route listed in
+ * ADMIN_ROUTES (src/config/routes.js) inside <RouteShell>, which wraps it in
+ * <RequireAdmin>. To protect a new admin page, add its path to ADMIN_ROUTES;
+ * do not wrap pages individually.
  *
  * Guarantees:
  *  - No protected JSX is rendered until `checked` is true AND `isAdmin` is true.

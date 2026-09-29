@@ -50,26 +50,13 @@
 
 const crypto = require('crypto');
 const logger = require('../utils/logger').child('DistributedLock');
-const { getRedisConnectionOptions } = require('../config/redisClient');
+const { getRedisClient } = require('../config/redisClient');
 
 const redisEnabled = Boolean(process.env.REDIS_HOST);
 
-// Share the central reconnection policy (Issue #83) so the lock client backs off
-// and treats transient errors identically to every other Redis consumer.
-// maxRetriesPerRequest: null lets a command wait through a reconnect rather than
-// erroring immediately, so a brief blip doesn't spuriously deny every lock.
-const redisConfig = getRedisConnectionOptions({ maxRetriesPerRequest: null });
+const client = redisEnabled ? getRedisClient() : null;
 
-let client = null;
-
-if (redisEnabled) {
-  const Redis = require('ioredis');
-  client = new Redis(redisConfig);
-  client.on('error', (err) => logger.error('Redis lock client error', { error: err.message }));
-  client.connect().catch((err) =>
-    logger.error('Redis lock client connect failed', { error: err.message })
-  );
-} else {
+if (!redisEnabled) {
   // Issue #1043: Warn loudly if Redis is not configured in a multi-instance deployment.
   // In single-instance deployments (REPLICA_COUNT=1 or unset), the fallback is safe.
   // In multi-instance deployments, the in-process fallback provides no cross-replica
@@ -323,11 +310,7 @@ async function getCurrentFence(key) {
 }
 
 async function close() {
-  try {
-    if (client) await client.quit();
-  } catch (err) {
-    logger.error('Error closing Redis lock client', { error: err.message });
-  }
+  // The shared client is closed by config/redisClient during process shutdown.
 }
 
 module.exports = {

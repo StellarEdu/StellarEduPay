@@ -14,27 +14,44 @@ spec:
       labels:
         app: backend
     spec:
+      # Allow the Node process to complete its graceful shutdown sequence
+      # (drain queues, close HTTP server, disconnect Mongo) before the pod
+      # is forcibly killed. SHUTDOWN_TIMEOUT_MS defaults to 30 000 ms;
+      # add 10 s margin so tini can relay the signal and Node can flush.
+      terminationGracePeriodSeconds: 45
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
-      # imagePullSecrets is used for private registries.
-      # Create the secret with:
-      #   kubectl create secret docker-registry regcred \
-      #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
-      # Then reference it in your Kustomize overlay:
-      #   imagePullSecrets:
-      #     - name: regcred
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: migrate
           image: stellaredupay/backend:placeholder
           imagePullPolicy: IfNotPresent
-          command: ["npm", "run", "migrate"]
+          command: ["node", "scripts/migrate.js"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: MONGO_URI
               valueFrom:
                 secretKeyRef:
                   name: stellaredupay
                   key: MONGO_URI
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: stellaredupay
+                  key: NODE_ENV
+          # Provide a writable /tmp for any Node temp files
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "100m"
@@ -48,37 +65,59 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          # All non-secret settings come from the ConfigMap; secrets from the
+          # Secret. Individual env overrides below take precedence.
+          envFrom:
+            - configMapRef:
+                name: stellaredupay
+            - secretRef:
+                name: stellaredupay
           env:
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: stellaredupay
-                  key: JWT_SECRET
-            - name: MONGO_URI
-              valueFrom:
-                secretKeyRef:
-                  name: stellaredupay
-                  key: MONGO_URI
+            # REDIS_HOST is already in the ConfigMap; keep this explicit entry
+            # for clarity and to document it is intentionally a static value.
             - name: REDIS_HOST
               value: "redis"
-            - name: APP_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: stellaredupay
-                  key: APP_URL
+          # Give endpoints time to drain from load-balancer routing tables
+          # before Node starts refusing new connections.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          # startupProbe: prevents liveness kills during slow startups
+          # (migration index builds, initial Mongo connection).
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24   # 10 + 24*5 = 130 s window before kill
+          # readinessProbe: remove from LB rotation when Mongo is
+          # unavailable or app is in shutdown.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 5000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 0
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # livenessProbe: only kills the pod when the Node process itself
+          # is frozen or deadlocked — no external dependency checks.
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/live
               port: 5000
-            initialDelaySeconds: 60
+            initialDelaySeconds: 0
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
@@ -89,3 +128,6 @@ spec:
             limits:
               cpu: "1000m"
               memory: "512Mi"
+      volumes:
+        - name: tmp
+          emptyDir: {}

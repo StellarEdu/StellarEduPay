@@ -22,15 +22,21 @@ mockBus.setMaxListeners(0);
 jest.mock('ioredis', () => {
   const NodeEventEmitter = require('events');
   return class MockRedis extends NodeEventEmitter {
-    constructor() {
+    constructor(options = {}) {
       super();
+      this.options = options;
       this._channels = new Set();
       this._onPublish = (channel, message) => {
         if (this._channels.has(channel)) this.emit('message', channel, message);
       };
       mockBus.on('publish', this._onPublish);
     }
-    connect() { return Promise.resolve(); }
+    duplicate(options) { return new MockRedis({ ...this.options, ...options }); }
+    connect() {
+      this.emit('connect');
+      this.emit('ready');
+      return Promise.resolve();
+    }
     async subscribe(ch) { this._channels.add(ch); }
     async unsubscribe(ch) { this._channels.delete(ch); }
     async publish(ch, msg) { mockBus.emit('publish', ch, msg); return 1; }
@@ -107,6 +113,18 @@ describe('sseService', () => {
   });
 
   describe('heartbeat', () => {
+    it('ends local connections during graceful shutdown', async () => {
+      delete process.env.REDIS_HOST;
+      const replica = loadReplica();
+      const res = mockRes();
+
+      replica.addClient('school-1', res);
+      await replica.closeAll();
+
+      expect(res.end).toHaveBeenCalled();
+      expect(replica.getStats()).toEqual({ schools: 0, connections: 0 });
+    });
+
     it('writes a keepalive comment through a 60s idle period', () => {
       jest.useFakeTimers();
       delete process.env.REDIS_HOST; // single-process mode is fine for this
