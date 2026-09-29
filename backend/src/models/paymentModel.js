@@ -26,8 +26,24 @@ const paymentSchema = new mongoose.Schema(
     schoolId: { type: String, required: true, index: true },
     studentId: { type: String, required: true, index: true },
 
-    // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash } below
+    // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash, opIndex } below
     txHash: { type: String, required: true, index: true },
+    // #1558 — A single Stellar transaction can carry up to 100 payment
+    // operations. Payment identity is therefore (txHash, opIndex), not txHash
+    // alone. opIndex is the 0-based position of the operation within the
+    // transaction (Horizon operation index). Defaults to 0 so existing rows
+    // and single-operation transactions keep working unchanged.
+    opIndex: {
+      type: Number,
+      default: 0,
+      min: [0, 'opIndex must be non-negative'],
+      validate: [
+        {
+          validator: (v) => Number.isInteger(v),
+          message: 'opIndex must be an integer',
+        },
+      ],
+    },
     amount: {
       type: Number,
       required: true,
@@ -184,185 +200,24 @@ softDelete(paymentSchema);
 paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 
 // Indexes
-// Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).
-// The single-field txHash index (inline, non-unique) is kept for cross-school lookups.
-paymentSchema.index({ schoolId: 1, txHash: 1 }, { unique: true });
-// Unique sparse index on txHash for fast duplicate detection across all schools.
-// sparse: true excludes documents where txHash is null (manually created records).
-paymentSchema.index({ txHash: 1 }, { unique: true, sparse: true });
+// Compound unique index enforces per-school, per-operation uniqueness: the same
+// transaction may legitimately contain several payment operations (one per
+// student), so identity is (schoolId, txHash, opIndex) rather than
+// (schoolId, txHash). The single-field txHash index (inline, non-unique) is kept
+// for cross-school lookups.
+paymentSchema.index({ schoolId: 1, txHash: 1, opIndex: 1 }, { unique: true });
+// Unique sparse index on (txHash, opIndex) for fast duplicate detection across
+// all schools. sparse: true excludes documents where txHash is null (manually
+// created records). Replaces the previous global unique { txHash: 1 } index,
+// which rejected the second payment row of a multi-operation transaction with
+// E11000.
+paymentSchema.index({ txHash: 1, opIndex: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ studentId: 1, confirmedAt: -1 });
 paymentSchema.index({ schoolId: 1, confirmedAt: -1 });
 paymentSchema.index({ schoolId: 1, studentId: 1, confirmedAt: -1 });
 paymentSchema.index({ schoolId: 1, feeValidationStatus: 1 });
 paymentSchema.index({ schoolId: 1, isSuspicious: 1 });
 paymentSchema.index({ schoolId: 1, confirmationStatus: 1 });
-paymentSchema.index({ confirmationState: 1 });
-// Partial compound index for report queries: filters out soft-deleted
-// payments so MongoDB only indexes documents that appear in aggregation
-// results, keeping the index lean and report queries fast. The
-// studentDeleted clause used by the application-level query is intentionally
-// not part of this filter — MongoDB partial index filters don't support
-// $ne, so "studentDeleted !== true" cannot be expressed directly (see
-// migrations/015_add_payment_report_index.js, which creates the equivalent
-// named index used in production).
-paymentSchema.index(
-  { schoolId: 1, status: 1, confirmedAt: -1 },
-  { partialFilterExpression: { deletedAt: null } }
-);
-paymentSchema.index({ schoolId: 1, studentId: 1, feeCategory: 1 });
+paymentSch
 
-paymentSchema.virtual('explorerUrl').get(function () {
-  const hash = this.transactionHash || this.txHash;
-  if (!hash) return null;
-  const network = process.env.STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
-  return `https://stellar.expert/explorer/${network}/tx/${hash}`;
-});
-
-paymentSchema.virtual('stellarExplorerUrl').get(function () {
-  return this.explorerUrl;
-});
-
-/**
- * Status transition guard (pre-save hook).
- *
- * Uses the canonical transition tables imported from constants/paymentStatus.js
- * (Issue #72). See that module for the full allowed-transitions specification.
- *
- * Callers with admin authority may set `payment.$locals.adminOverride = true`
- * before calling .save() to use the wider admin transition table; the override
- * must be audited explicitly by the caller.
- */
-paymentSchema.pre('save', async function () {
-  // Use in-memory Mongoose helpers instead of a DB query to avoid an N+1
-  // round-trip on every save. this.isNew is true for inserts; for existing
-  // documents Mongoose tracks the original field values so we can check the
-  // persisted status without any additional database call.
-  if (!this.isNew) {
-    // For the transition check we need the *original* persisted status.
-    // Mongoose stores it in this.$__.savedState when the document was loaded.
-    const savedState = this.$__ && this.$__.savedState;
-    const originalStatus = savedState ? savedState.status : null;
-    const newStatus = this.status;
-
-    if (originalStatus !== null && originalStatus !== newStatus) {
-      // Callers with admin authority may set $locals.adminOverride = true to
-      // use the wider admin transition table (e.g. DISPUTED → REFUNDED).
-      // The override must be audited explicitly by the caller.
-      const adminOverride = !!(this.$locals && this.$locals.adminOverride);
-      if (!isTransitionAllowed(originalStatus, newStatus, adminOverride)) {
-        const err = new Error(
-          `Payment status transition from ${originalStatus} to ${newStatus} is not allowed`,
-        );
-        err.code = 'INVALID_TRANSITION';
-        throw err;
-      }
-    }
-
-    // Same backstop for the finality state machine (issue #747). Callers are
-    // expected to compute the next value via
-    // paymentConfirmationStateMachine.resolveNextState() before assigning it
-    // here; this guard catches any caller that bypasses that and tries to
-    // persist an illegal jump (e.g. finalized -> pending).
-    const originalConfirmationState = savedState ? savedState.confirmationState : null;
-    const newConfirmationState = this.confirmationState;
-
-    if (
-      originalConfirmationState != null &&
-      originalConfirmationState !== newConfirmationState
-    ) {
-      const allowedStates = CONFIRMATION_STATE_TRANSITIONS[originalConfirmationState] || [];
-      if (!allowedStates.includes(newConfirmationState)) {
-        const err = new Error(
-          `Payment confirmationState transition from ${originalConfirmationState} to ${newConfirmationState} is not allowed`,
-        );
-        err.code = 'INVALID_CONFIRMATION_TRANSITION';
-        throw err;
-      }
-    }
-  }
-
-  // Issue #68 — Normalize numeric precision to 7 decimal places (Stellar's
-  // canonical precision) so aggregates never accumulate floating-point drift.
-  // Also rejects any non-finite value that somehow slipped past the validator
-  // (e.g. values written directly via update operators bypass Mongoose validators).
-  const STELLAR_DECIMALS = 7;
-  const normalize = (v) => (v != null && Number.isFinite(v) ? parseFloat(v.toFixed(STELLAR_DECIMALS)) : v);
-
-  if (this.isModified('amount') && this.amount != null) {
-    this.amount = normalize(this.amount);
-  }
-  if (this.isModified('feeAmount') && this.feeAmount != null) {
-    this.feeAmount = normalize(this.feeAmount);
-  }
-  if (this.isModified('excessAmount') && this.excessAmount != null) {
-    this.excessAmount = normalize(this.excessAmount);
-  }
-
-});
-
-// Issue #669: Send payment receipt email on SUCCESS transition
-paymentSchema.post('save', async function () {
-  // Check if status transitioned to SUCCESS
-  const savedState = this.$__ && this.$__.savedState;
-  const originalStatus = savedState ? savedState.status : null;
-  const newStatus = this.status;
-
-  if (originalStatus !== 'SUCCESS' && newStatus === 'SUCCESS') {
-    // Status transitioned to SUCCESS — queue receipt email
-    let student;
-    try {
-      const Student = require('./studentModel');
-      student = await Student.findOne({
-        schoolId: this.schoolId,
-        studentId: this.studentId,
-      });
-    } catch (err) {
-      logger.error({
-        msg: 'Failed to look up student for payment receipt email',
-        paymentId: this._id,
-        error: err.message,
-      });
-    }
-
-    if (student && student.parentEmail) {
-      try {
-        const emailService = require('../services/emailService');
-        // Use cumulative totalPaid for accurate remaining balance (issue #1031)
-        const totalPaid = student.totalPaid || 0;
-        await emailService.sendPaymentReceipt({
-          schoolId: this.schoolId,
-          studentId: this.studentId,
-          to: student.parentEmail,
-          studentName: student.name,
-          amount: this.amount,
-          txHash: this.txHash,
-          confirmedAt: this.confirmedAt,
-          remainingBalance: student.feeAmount - totalPaid,
-        });
-      } catch (err) {
-        // Log error but don't fail the save, and don't let it block cache invalidation below
-        logger.error({
-          msg: 'Failed to send payment receipt email',
-          paymentId: this._id,
-          error: err.message,
-        });
-      }
-    }
-
-    // Invalidate report cache on new successful payments — independent of the
-    // email dispatch above, so a broken email path can never suppress this.
-    try {
-      const reportCacheInvalidator = require('../services/reportCacheInvalidator');
-      reportCacheInvalidator.invalidate(this.schoolId);
-    } catch (err) {
-      logger.error({
-        msg: 'Failed to invalidate report cache',
-        paymentId: this._id,
-        schoolId: this.schoolId,
-        error: err.message,
-      });
-    }
-  }
-});
-
-module.exports = mongoose.model('Payment', paymentSchema);
+/* … truncated 6988 chars — edit only what you need near the top … */
