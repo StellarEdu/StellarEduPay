@@ -5,7 +5,6 @@ import {
   IconChevronLeft, IconChevronRight, IconAlertTriangle, IconCheck,
 } from "../components/Icons";
 import PageHero from "../components/PageHero";
-import RequireAdmin from "../components/RequireAdmin";
 import { useTranslation } from "react-i18next";
 import styles from "../styles/audit-logs.module.css";
 
@@ -38,7 +37,7 @@ function getActionLabel(action, t) {
 
 const ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }));
 
-function AuditLogsContent() {
+export default function AuditLogsContent() {
   const { t } = useTranslation();
   const [logs, setLogs]               = useState([]);
   const [loading, setLoading]         = useState(true);

@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import Head from "next/head";
 import "../styles/globals.css";
 import Navbar from "../components/Navbar";
-import AppLayout from "../components/AppLayout";
+import RouteShell from "../components/RouteShell";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { AdminAuthProvider } from "../hooks/AdminAuthContext";
 import i18n, { SUPPORTED_LOCALES } from "../i18n";
@@ -87,13 +87,10 @@ export default function MyApp({ Component, pageProps }) {
         </Head>
         <Navbar />
         <ErrorBoundary>
-          {useAppLayout ? (
-            <AppLayout>
-              <Component {...pageProps} />
-            </AppLayout>
-          ) : (
+          {/* #1579 — admin guard + layout are applied centrally by route. */}
+          <RouteShell pathname={pathname}>
             <Component {...pageProps} />
-          )}
+          </RouteShell>
         </ErrorBoundary>
       </ThemeContext.Provider>
     </AdminAuthProvider>

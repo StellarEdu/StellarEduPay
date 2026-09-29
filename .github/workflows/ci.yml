@@ -146,7 +146,7 @@ jobs:
     name: Build frontend
     runs-on: ubuntu-latest
     env:
-      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+      NEXT_PUBLIC_API_URL: /api
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6

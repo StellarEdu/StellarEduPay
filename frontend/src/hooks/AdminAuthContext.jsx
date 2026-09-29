@@ -44,7 +44,7 @@ export function AdminAuthProvider({ children }) {
 /**
  * Drop-in replacement for the standalone `useAdminAuth()` call.
  * Returns the same shape: { isAdmin, checked, login, logout, schoolId, userId,
- * authMeError, retryAuth }.
+ * roles, authMeError, retryAuth }.
  *
  * Throws a clear error when used outside <AdminAuthProvider> so misconfiguration
  * surfaces immediately in development rather than silently producing bad state.

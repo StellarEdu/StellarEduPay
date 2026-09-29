@@ -77,7 +77,10 @@ services:
       context: ./frontend
       args:
         # NEXT_PUBLIC_* vars are inlined at build time by Next.js — pass as build arg
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}
+        # #1578 — same-origin by default: the browser calls /api on :3000 and
+        # Next proxies it to the backend service, keeping auth cookies first-party.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        BACKEND_PROXY_TARGET: ${BACKEND_PROXY_TARGET:-http://backend:5000}
         NEXT_PUBLIC_STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
     ports:
       - "3000:3000"

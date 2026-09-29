@@ -1,75 +1,46 @@
-import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useTranslation } from "react-i18next";
 import { useAdminAuthContext } from "../hooks/AdminAuthContext";
-import RequireAdmin from "./RequireAdmin";
-import {
-  IconDashboard,
-  IconCreditCard,
-  IconBarChart,
-  IconLayers,
-  IconFileText,
-  IconMessageCircle,
-  IconDollarSign,
-  IconShield,
-  IconTrendingUp,
-} from "./Icons";
+import { PUBLIC_NAV_ITEMS, ADMIN_NAV_ITEMS } from "../config/navigation";
 
-const PUBLIC_NAV = [
-  { href: "/dashboard",      i18nKey: "nav.dashboard",  Icon: IconDashboard },
-  { href: "/pay-fees",       i18nKey: "nav.payFees",   Icon: IconCreditCard },
-  { href: "/reports",        i18nKey: "nav.reports",   Icon: IconBarChart },
-];
-
-const ADMIN_NAV = [
-  { href: "/fees",                    label: "Fees",          Icon: IconDollarSign },
-  { href: "/analytics",               label: "Analytics",     Icon: IconTrendingUp },
-  { href: "/fee-adjustments",         label: "Fee Rules",     Icon: IconLayers },
-  { href: "/source-validation-rules", label: "Source Rules",  Icon: IconShield },
-  { href: "/audit-logs",              label: "Audit Logs",    Icon: IconFileText },
-  { href: "/disputes",                label: "Disputes",      Icon: IconMessageCircle },
-];
+function SidebarLink({ href, i18nKey, Icon, active }) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      href={href}
+      className={`app-sidebar-link${active ? " active" : ""}`}
+      aria-current={active ? "page" : undefined}
+    >
+      <span className="app-sidebar-icon">
+        <Icon size={15} />
+      </span>
+      {t(i18nKey)}
+    </Link>
+  );
+}
 
 function AppLayoutInner({ children }) {
   const { pathname } = useRouter();
   const { t } = useTranslation();
   const { isAdmin } = useAdminAuthContext();
 
+  // #1580 — rendered from the shared navigation config (config/navigation.js),
+  // the same source the top Navbar uses.
   return (
     <div className="app-layout">
       <aside className="app-sidebar" aria-label={t("nav.sidebarAria")}>
         <div>
           <div className="app-sidebar-section">{t("nav.section")}</div>
-          {PUBLIC_NAV.map(({ href, i18nKey, Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`app-sidebar-link${pathname === href ? " active" : ""}`}
-              aria-current={pathname === href ? "page" : undefined}
-            >
-              <span className="app-sidebar-icon">
-                <Icon size={15} />
-              </span>
-              {t(i18nKey)}
-            </Link>
+          {PUBLIC_NAV_ITEMS.map((item) => (
+            <SidebarLink key={item.href} {...item} active={pathname === item.href} />
           ))}
 
           {isAdmin && (
             <>
               <div className="app-sidebar-section">{t("nav.adminSection")}</div>
-              {ADMIN_NAV.map(({ href, i18nKey, Icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className={`app-sidebar-link${pathname === href ? " active" : ""}`}
-                  aria-current={pathname === href ? "page" : undefined}
-                >
-                  <span className="app-sidebar-icon">
-                    <Icon size={15} />
-                  </span>
-                  {t(i18nKey)}
-                </Link>
+              {ADMIN_NAV_ITEMS.map((item) => (
+                <SidebarLink key={item.href} {...item} active={pathname === item.href} />
               ))}
             </>
           )}
@@ -86,14 +57,10 @@ function AppLayoutInner({ children }) {
 /**
  * AppLayout
  *
- * Wraps every admin route with the sidebar layout AND the RequireAdmin guard.
- * The guard is applied first so no layout chrome or page content renders until
- * authentication is confirmed.
+ * The sidebar layout for admin routes. The RequireAdmin guard is applied
+ * outside this component by RouteShell (#1579), so no layout chrome renders
+ * until authentication is confirmed.
  */
 export default function AppLayout({ children }) {
-  return (
-    <RequireAdmin>
-      <AppLayoutInner>{children}</AppLayoutInner>
-    </RequireAdmin>
-  );
+  return <AppLayoutInner>{children}</AppLayoutInner>;
 }

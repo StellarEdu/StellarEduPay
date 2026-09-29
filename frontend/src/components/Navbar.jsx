@@ -43,7 +43,11 @@ export default function Navbar() {
   const { t, i18n } = useTranslation();
   const { dark, toggle } = useTheme();
   const { isAdmin, logout } = useAdminAuthContext();
-  const links = isAdmin ? [...PUBLIC_LINKS, ...ADMIN_LINKS] : PUBLIC_LINKS;
+  // #1580 — same navigation source as the AppLayout sidebar.
+  const links = getNavItems({ isAdmin });
+  // On sidebar routes the desktop sidebar already shows these links, so the top
+  // bar only shows them where the sidebar is hidden (narrow screens).
+  const hasSidebar = usesAppLayout(pathname);
 
   useEffect(() => { setOpen(false); }, [pathname]);
 

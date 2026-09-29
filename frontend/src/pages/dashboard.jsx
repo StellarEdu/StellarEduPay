@@ -5,7 +5,6 @@ import ErrorBoundary from "../components/ErrorBoundary";
 import StudentForm from "../components/StudentForm";
 import PageHero, { StatCard } from "../components/PageHero";
 import SseDegradedBanner from "../components/SseDegradedBanner";
-import RequireAdmin from "../components/RequireAdmin";
 import { usePaymentEvents } from "../hooks/usePaymentEvents";
 import { getSyncStatus, getPaymentSummary, getStudents, getStudent, getSchool } from "../services/api";
 import {
@@ -479,10 +478,4 @@ function Dashboard() {
   );
 }
 
-export default function DashboardPage() {
-  return (
-    <RequireAdmin>
-      <Dashboard />
-    </RequireAdmin>
-  );
-}
+export default Dashboard;

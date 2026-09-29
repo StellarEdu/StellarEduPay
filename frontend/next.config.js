@@ -23,7 +23,7 @@ const API_ORIGIN = (() => {
   try {
     return new URL(raw).origin;
   } catch {
-    return 'http://localhost:5000';
+    return '';
   }
 })();
 
@@ -66,9 +66,11 @@ const securityHeaders = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
 ];
 
-// Server-side origin of the backend, used by the dev proxy (rewrites) below.
-// Lets the browser call the API same-origin (/api/*) so cookies stay first-party
-// — essential in split-host setups like GitHub Codespaces.
+// Server-side origin of the backend, used by the same-origin proxy (rewrites)
+// below. Lets the browser call the API same-origin (/api/*) so cookies stay
+// first-party — essential in split-host setups like GitHub Codespaces.
+// Note: rewrites are resolved at `next build`, so in Docker this must be passed
+// as a build arg (see frontend/Dockerfile and docker-compose.yml).
 const BACKEND_ORIGIN = process.env.BACKEND_PROXY_TARGET || 'http://localhost:5000';
 
 const nextConfig = {

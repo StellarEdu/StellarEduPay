@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+import { apiUrl } from '../config/apiBase';
 
 // After this many consecutive closed-connection errors we stop retrying and
 // surface a 'failed' status so the UI can prompt the user to refresh.
@@ -53,7 +53,7 @@ export function usePaymentEvents({ enabled = true, onEvent } = {}) {
     // not attempt a connection — guard with `enabled=false` at call site.
     if (!schoolId) return;
 
-    const url = `${API_URL}/payments/events?schoolId=${encodeURIComponent(schoolId)}`;
+    const url = apiUrl('/payments/events', { schoolId });
     const es = new EventSource(url, { withCredentials: true });
     esRef.current = es;
 

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { createRefreshHandler } from "./authRefresh";
+import { API_BASE_URL, apiUrl } from "../config/apiBase";
 
 const TIMEOUT_MS = parseInt(process.env.NEXT_PUBLIC_REQUEST_TIMEOUT_MS || "15000", 10);
 
