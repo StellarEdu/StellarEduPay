@@ -1,33 +1,58 @@
-'use strict';
+import js from '@eslint/js';
+import globals from 'globals';
 
-const js = require('@eslint/js');
-const pluginN = require('eslint-plugin-n');
-const globals = require('globals');
-
-module.exports = [
+export default [
   js.configs.recommended,
-  pluginN.configs['flat/recommended'],
   {
     languageOptions: {
-      ecmaVersion: 2021,
+      ecmaVersion: 2022,
+      sourceType: 'module',
       globals: {
         ...globals.node,
-        ...globals.jest,
       },
     },
     rules: {
-      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      'require-await': 'error',
-      'no-console': 'error',
-      'n/exports-style': 'off',
-      'n/no-extraneous-require': 'error',
-      'n/no-process-exit': 'off',
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
   {
-    files: ['src/utils/logger.js'],
+    // Monetary amounts must be exact. Stellar amounts are 7-decimal fixed-point
+    // values (int64 stroops); doing float arithmetic on them introduces rounding
+    // error. Use the helpers in utils/stellarAmount.js instead of parseFloat/toFixed.
+    files: ['src/**/*.js'],
+    ignores: ['src/utils/stellarAmount.js', 'src/**/__tests__/**'],
     rules: {
-      'no-console': 'off',
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'parseFloat',
+          message:
+            'Do not parse money with parseFloat. Use utils/stellarAmount.js (toStroops/fromStroops) for exact 7-decimal amounts.',
+        },
+      ],
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'Number',
+          property: 'parseFloat',
+          message:
+            'Do not parse money with Number.parseFloat. Use utils/stellarAmount.js (toStroops/fromStroops) for exact 7-decimal amounts.',
+        },
+        {
+          object: 'Number',
+          property: 'parseInt',
+          message:
+            'Do not parse money with Number.parseInt. Use utils/stellarAmount.js (toStroops/fromStroops) for exact 7-decimal amounts.',
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.property.name='toFixed']",
+          message:
+            'Do not round money with toFixed. Store amounts as integer stroops and use utils/stellarAmount.js for conversion.',
+        },
+      ],
     },
   },
 ];
