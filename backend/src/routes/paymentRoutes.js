@@ -200,10 +200,15 @@ router.post(
   idempotency,
   createPaymentIntent,
 );
+// /submit is a public relay for signed payment transactions. It is rate-limited
+// per IP and per school, and idempotent (keyed by tx hash when no header is
+// supplied) so client retries cannot cause duplicate processing (#1561).
 router.post(
   "/submit",
+  strictLimiter,
   validateSubmitTransaction,
   resolveSchool,
+  idempotency,
   submitTransaction,
 );
 
@@ -248,26 +253,6 @@ router.get("/receipt/:txHash", generateReceipt);
 router.get("/queue/:txHash", requireSchoolAuth(['owner', 'staff', 'read_only']), getQueueJobStatus);
 router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentPayments);
 
-router.post("/:paymentId/lock", requireSchoolAuth(['owner', 'staff']), auditContext, lockPaymentForUpdate);
-router.post("/:paymentId/unlock", requireSchoolAuth(['owner', 'staff']), auditContext, unlockPayment);
+router.post("/:paymentId/
 
-// Registered BEFORE "/:txHash/status" on purpose: Express matches in order, so
-// the parameterised route would otherwise capture "bulk" as a txHash.
-router.patch("/bulk/status", requireSchoolAuth(['owner', 'staff']), auditContext, bulkUpdatePaymentStatus);
-router.patch("/:txHash/status", requireSchoolAuth(['owner', 'staff']), auditContext, updatePaymentStatus);
-router.patch("/:txHash/suspicion-review", requireSchoolAuth(['owner', 'staff']), auditContext, reviewSuspiciousPayment);
-router.patch("/:txHash/correct-placeholder", requireSchoolAuth(['owner', 'staff']), auditContext, correctPlaceholderPayment);
-
-router.post("/:txHash/refund", requireSchoolAuth(['owner', 'staff']), auditContext, initiatePaymentRefund);
-router.post("/refunds/:refundId/approve", requireSchoolAuth(['owner', 'staff']), auditContext, approvePaymentRefund);
-router.post("/refunds/:refundId/reject", requireSchoolAuth(['owner', 'staff']), auditContext, rejectPaymentRefund);
-router.post("/refunds/:refundId/complete", requireSchoolAuth(['owner', 'staff']), auditContext, completePaymentRefund);
-router.get("/:txHash/refunds", requireSchoolAuth(['owner', 'staff', 'read_only']), getPaymentRefunds);
-router.get("/refunds/school/list", requireSchoolAuth(['owner', 'staff', 'read_only']), getSchoolRefunds);
-
-router.get("/verify/:receiptId", verifyReceipt);
-
-router.get("/reconciliation/reports", requireSchoolAuth(['owner', 'staff', 'read_only']), getReconciliationReports);
-router.post("/reconciliation/report", requireSchoolAuth(['owner', 'staff']), auditContext, generateSchoolReconciliationReport);
-
-/* … truncated 733 chars — edit only what you need near the top … */
+/* … truncated 1838 chars — edit only what you need near the top … */
