@@ -191,3 +191,13 @@ deploy/k8s/mongodb-statefulset.yaml runs a single replica (replicas: 1) with no 
 
 Backend auto-scaling
 deploy/k8s/backend-hpa.yaml defines a HorizontalPodAutoscaler for the backend Deployment: it scales between 2 and 10 replicas, targeting 70% average CPU utilization across pods. This handles end-of-term fee-collection peaks without manual `kubectl scale`. The Deployment's `replicas: 2` field is only the starting point once the HPA is applied — the HPA takes over adjusting replica count from there. Tune `minReplicas`/`maxReplicas`/`averageUtilization` in that file if peak load patterns change.
+
+## Log Collection
+
+By default, containers are configured to output logs exclusively to `stdout` (structured JSON) to integrate with standard log aggregators without risking disk space exhaustion or permission issues on the ephemeral filesystem. No log files are written in containerized environments unless explicitly enabled.
+
+To view logs for the backend:
+- **Directly via Kubernetes:** `kubectl logs -f deployment/backend`
+- **Via Log Aggregators:** Logs are automatically collected by cluster-level agents (like Promtail/Fluentd) and can be queried in your centralized logging system (e.g., **Loki** or **CloudWatch**).
+
+For bare-metal or VM deployments where file-based rotation is required, file transports can be enabled by setting `LOG_TO_FILE=true` and providing an absolute path to a writable directory in `LOG_DIR`.

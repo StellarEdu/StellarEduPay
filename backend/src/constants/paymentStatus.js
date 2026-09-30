@@ -11,6 +11,27 @@
  *
  * Never use inline string literals for payment statuses. This prevents drift
  * between the model's allowed set, controller checks, and any future tooling.
+ *
+ * ---------------------------------------------------------------------------
+ * Authoritative lifecycle — Issue #1560
+ * ---------------------------------------------------------------------------
+ * `status` is the ONE authoritative, persisted lifecycle field. The other
+ * fields that historically overlapped with it are derived from `status` and
+ * must never be treated as independent sources of truth:
+ *
+ *   status            — authoritative (persisted).
+ *   confirmationStatus — derived: 'confirmed' for SUCCESS/REFUNDED,
+ *                        'failed' for FAILED/INVALID, otherwise
+ *                        'pending_confirmation'.
+ *   confirmationState  — derived: mirrors the confirmationStatus mapping
+ *                        (see paymentConfirmationStateMachine.js).
+ *
+ * Use `deriveConfirmationStatus(status)` / `deriveConfirmationState(status)`
+ * to compute the derived fields, and `isCountedAsPaid(status)` as the single
+ * shared predicate for "counted as paid" across reports, summaries and
+ * finalisation logic. A migration to drop the redundant fields is a follow-up
+ * (see issue #1560 acceptance criteria); this module only documents and
+ * centralises the derivation so all callers agree.
  */
 
 /**
@@ -106,82 +127,56 @@ function isTransitionAllowed(from, to, adminOverride = false) {
 }
 
 /**
- * Horizon transaction result codes that represent a *definitive* failure —
- * the transaction was rejected by the network and can never be applied.
+ * Statuses that represent money that has actually been received and should be
+ * counted as "paid" by reports, summaries and finalisation logic.
  *
- * Anything not listed here (e.g. `tx_too_late` before time bounds expire,
- * `tx_insufficient_fee` under surge pricing, or a bare 504/5xx/network error)
- * is treated as *ambiguous*: the transaction may still be included in a
- * ledger, so the payment must remain SUBMITTED and be resolved by hash.
- *
- * Issue #1562.
+ * REFUNDED is intentionally excluded: the funds were returned, so the payment
+ * no longer contributes to paid totals. DISPUTED is excluded because the
+ * payment is under investigation. This is the single shared predicate — do not
+ * re-implement `status === 'SUCCESS'` checks elsewhere (Issue #1560).
  */
-const DEFINITIVE_TX_RESULT_CODES = Object.freeze([
-  'tx_bad_seq',
-  'tx_bad_auth',
-  'tx_bad_auth_extra',
-  'tx_insufficient_balance',
-  'tx_insufficient_fee',
-  'tx_no_source_account',
-  'tx_no_account',
-  'tx_not_supported',
-  'tx_malformed',
-  'tx_bad_minseq_age',
-  'tx_source_account_not_found',
-  'op_no_trust',
-  'op_underfunded',
-  'op_no_destination',
-  'op_not_authorized',
-  'op_malformed',
-  'op_already_exists',
-  'op_src_no_trust',
-  'op_src_not_authorized',
-  'op_no_issuer',
-  'op_low_reserve',
-  'op_line_full',
-  'op_cross_self',
-  'op_sell_no_trust',
-  'op_buy_no_trust',
-  'op_not_found',
-  'op_invalid_asset',
-  'op_asset_not_authorized',
-  'op_does_not_exist',
-  'op_too_many_subentries',
-  'op_too_many_signers',
-  'op_bad_auth',
-  'op_no_source_account',
-  'op_src_no_trust',
-  'op_src_underfunded',
-  'op_src_low_reserve',
-  'op_src_not_authorized',
-  'op_src_malformed',
-  'op_src_no_issuer',
-  'op_src_line_full',
-  'op_src_cross_self',
-  'op_src_sell_no_trust',
-  'op_src_buy_no_trust',
-  'op_src_not_found',
-  'op_src_invalid_asset',
-  'op_src_asset_not_authorized',
-  'op_src_does_not_exist',
-  'op_src_too_many_subentries',
-  'op_src_too_many_signers',
-  'op_src_bad_auth',
-  'op_src_no_source_account',
+const COUNTED_AS_PAID_STATUSES = Object.freeze([
+  PAYMENT_STATUS.SUCCESS,
 ]);
 
 /**
- * Returns true when a Horizon transaction result code is a definitive
- * failure (the transaction can never be applied). Ambiguous codes — and
- * anything not in the list — return false so callers keep the payment
- * SUBMITTED and resolve it by hash. Issue #1562.
+ * Single shared predicate for "counted as paid".
  *
- * @param {string} [code]
+ * @param {string} status - A PAYMENT_STATUS value
  * @returns {boolean}
  */
-function isDefinitiveTxResultCode(code) {
-  if (!code || typeof code !== 'string') return false;
-  return DEFINITIVE_TX_RESULT_CODES.includes(code);
+function isCountedAsPaid(status) {
+  return COUNTED_AS_PAID_STATUSES.includes(status);
+}
+
+/**
+ * Derives the legacy `confirmationStatus` value from the authoritative
+ * `status`. Kept in sync with the model's confirmationStatus enum
+ * (`pending_confirmation | confirmed | failed`).
+ *
+ * @param {string} status - A PAYMENT_STATUS value
+ * @returns {'confirmed'|'failed'|'pending_confirmation'}
+ */
+function deriveConfirmationStatus(status) {
+  if (status === PAYMENT_STATUS.SUCCESS || status === PAYMENT_STATUS.REFUNDED) {
+    return 'confirmed';
+  }
+  if (status === PAYMENT_STATUS.FAILED || status === PAYMENT_STATUS.INVALID) {
+    return 'failed';
+  }
+  return 'pending_confirmation';
+}
+
+/**
+ * Derives the legacy `confirmationState` value from the authoritative
+ * `status`. Mirrors `deriveConfirmationStatus` so the state machine and the
+ * model agree on a single lifecycle (Issue #1560).
+ *
+ * @param {string} status - A PAYMENT_STATUS value
+ * @returns {'confirmed'|'failed'|'pending_confirmation'}
+ */
+function deriveConfirmationState(status) {
+  return deriveConfirmationStatus(status);
 }
 
 module.exports = {
@@ -189,7 +184,9 @@ module.exports = {
   PAYMENT_STATUS_VALUES,
   PAYMENT_STATUS_TRANSITIONS,
   ADMIN_PAYMENT_STATUS_TRANSITIONS,
+  COUNTED_AS_PAID_STATUSES,
   isTransitionAllowed,
-  DEFINITIVE_TX_RESULT_CODES,
-  isDefinitiveTxResultCode,
+  isCountedAsPaid,
+  deriveConfirmationStatus,
+  deriveConfirmationState,
 };

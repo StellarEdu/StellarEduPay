@@ -4,8 +4,9 @@ metadata:
   name: stellaredupay
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
     # Enforce HTTPS by redirecting all HTTP traffic to HTTPS
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     # Issue TLS certificate using cert-manager and Let's Encrypt
@@ -15,7 +16,7 @@ spec:
   # TLS configuration — certificate termination at the Ingress
   tls:
     - hosts:
-        - YOUR_DOMAIN_HERE  # Replace with your domain name (e.g., stellaredupay.example.com)
+        - stellaredupay.example.com
       secretName: stellaredupay-tls
   rules:
     - host: YOUR_DOMAIN_HERE  # Replace with your domain name (e.g., stellaredupay.example.com)

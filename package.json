@@ -62,7 +62,6 @@
     ],
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/backend/",
       "tests/stellar\\.integration\\.test\\.js",
       "tests/integration/",
       "tests/e2e/",

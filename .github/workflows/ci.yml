@@ -102,7 +102,7 @@ jobs:
             echo "ERROR: TLS block not found in deploy/k8s/ingress.yaml"
             exit 1
           fi
-          echo "✓ TLS block found in ingress configuration"
+          echo "TLS block found in ingress configuration"
 
   lint-backend:
     name: Lint backend
@@ -197,7 +197,6 @@ jobs:
     env:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
-      # Dummy secrets required by config/index.js validation before test files can set them.
       JWT_SECRET: ci-test-jwt-secret-not-used-in-production
       SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
     services:
@@ -205,14 +204,6 @@ jobs:
         image: mongo:7
         ports:
           - 27017:27017
-        # Single-node replica set ("rs0") — REQUIRED. Multi-document MongoDB
-        # transactions (payment recording, fee batch apply, TransactionManager)
-        # fail against a standalone mongod with "Transaction numbers are only
-        # allowed on a replica set member or mongos". The healthcheck runs
-        # rs.initiate() on the first probe; the job's steps only start once the
-        # service reports healthy (initiated + PRIMARY). The old comment here
-        # claimed standalone was "sufficient" — it never was for any code path
-        # that opens a session.
         options: >-
           --replSet rs0
           --health-cmd "mongosh --quiet --eval 'try { if (rs.status().ok !== 1) { throw new Error(\"rs not initiated\"); } } catch (e) { try { rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"localhost:27017\" }] }); } catch (e2) {} process.exit(1); } if (!db.hello().isWritablePrimary) { process.exit(1); }'"
