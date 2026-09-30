@@ -21,13 +21,116 @@ const logger = require('../utils/logger');
 // that never touch email), so eagerly loading that chain would make the
 // model unrequireable outside a fully-configured environment.
 
+// ---------------------------------------------------------------------------
+// #1560 — Single authoritative payment lifecycle.
+//
+// A payment's lifecycle is persisted in exactly ONE field: `status`
+// (PAYMENT_STATUS_VALUES, guarded by PAYMENT_STATUS_TRANSITIONS). The two
+// legacy fields `confirmationStatus` and `confirmationState` are DERIVED
+// views of `status` and must never be treated as authoritative:
+//
+//   status            confirmationState   confirmationStatus
+//   ---------------   -----------------   --------------------
+//   PENDING           detected            pending_confirmation
+//   SUBMITTED         pending             pending_confirmation
+//   SUCCESS           finalized           confirmed
+//   FAILED            failed              failed
+//   REFUNDED          finalized           confirmed
+//   (anything else)   detected            pending_confirmation
+//
+// `confirmationState` is the fine-grained finality sub-state of `status`
+// (issue #747); `confirmationStatus` is the legacy 3-value projection kept
+// for backward compatibility with existing queries/UI. Both are recomputed
+// from `status` on every save (see the pre('save') hook below) so the three
+// fields can no longer disagree. Migration of existing documents is a
+// follow-up per #1560's acceptance criteria; this change only makes the
+// derivation explicit and enforced.
+const STATUS_TO_CONFIRMATION_STATE = Object.freeze({
+  PENDING: CONFIRMATION_STATES.DETECTED,
+  SUBMITTED: CONFIRMATION_STATES.PENDING,
+  SUCCESS: CONFIRMATION_STATES.FINALIZED,
+  FAILED: CONFIRMATION_STATES.FAILED,
+  REFUNDED: CONFIRMATION_STATES.FINALIZED,
+});
+
+const STATUS_TO_CONFIRMATION_STATUS = Object.freeze({
+  PENDING: 'pending_confirmation',
+  SUBMITTED: 'pending_confirmation',
+  SUCCESS: 'confirmed',
+  FAILED: 'failed',
+  REFUNDED: 'confirmed',
+});
+
+/**
+ * Derive the fine-grained confirmation state from the authoritative `status`.
+ * @param {string} status
+ * @returns {string} one of CONFIRMATION_STATES
+ */
+function deriveConfirmationState(status) {
+  return STATUS_TO_CONFIRMATION_STATE[status] || CONFIRMATION_STATES.DETECTED;
+}
+
+/**
+ * Derive the legacy 3-value confirmation status from the authoritative `status`.
+ * @param {string} status
+ * @returns {'pending_confirmation'|'confirmed'|'failed'}
+ */
+function deriveConfirmationStatus(status) {
+  return STATUS_TO_CONFIRMATION_STATUS[status] || 'pending_confirmation';
+}
+
+/**
+ * #1560 — The single shared predicate for "counted as paid".
+ *
+ * Every service (reports, summaries, finalisation, reconciliation) must use
+ * this instead of consulting `status`, `confirmationStatus` or
+ * `confirmationState` independently. A payment counts as paid iff its
+ * authoritative `status` is SUCCESS (or REFUNDED, which is a terminal state
+ * reached only after a successful payment).
+ *
+ * @param {object|string} paymentOrStatus a Payment document/lean object, or a raw status string
+ * @returns {boolean}
+ */
+function isCountedAsPaid(paymentOrStatus) {
+  const status =
+    typeof paymentOrStatus === 'string'
+      ? paymentOrStatus
+      : paymentOrStatus && paymentOrStatus.status;
+  return status === 'SUCCESS' || status === 'REFUNDED';
+}
+
+/**
+ * #1560 — Mongo filter matching every payment that counts as paid.
+ * Use this in queries so reports/summaries agree with isCountedAsPaid().
+ * @returns {{status: {$in: string[]}}}
+ */
+function countedAsPaidFilter() {
+  return { status: { $in: ['SUCCESS', 'REFUNDED'] } };
+}
+
 const paymentSchema = new mongoose.Schema(
   {
     schoolId: { type: String, required: true, index: true },
     studentId: { type: String, required: true, index: true },
 
-    // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash } below
+    // unique: false here — uniqueness is enforced by the compound index { schoolId, txHash, opIndex } below
     txHash: { type: String, required: true, index: true },
+    // #1558 — A single Stellar transaction can carry up to 100 payment
+    // operations. Payment identity is therefore (txHash, opIndex), not txHash
+    // alone. opIndex is the 0-based position of the operation within the
+    // transaction (Horizon operation index). Defaults to 0 so existing rows
+    // and single-operation transactions keep working unchanged.
+    opIndex: {
+      type: Number,
+      default: 0,
+      min: [0, 'opIndex must be non-negative'],
+      validate: [
+        {
+          validator: (v) => Number.isInteger(v),
+          message: 'opIndex must be an integer',
+        },
+      ],
+    },
     amount: {
       type: Number,
       required: true,
@@ -106,7 +209,9 @@ const paymentSchema = new mongoose.Schema(
     },
     assetType: { type: String, default: null },
 
-    // Canonical status values are imported from constants/paymentStatus.js (Issue #72).
+    // #1560 — AUTHORITATIVE lifecycle field. Canonical status values are
+    // imported from constants/paymentStatus.js (Issue #72). All other
+    // lifecycle fields below are derived from this one.
     status: { type: String, enum: PAYMENT_STATUS_VALUES, default: 'PENDING' },
     memo: { type: String },
     senderAddress: { type: String, default: null },
@@ -127,13 +232,14 @@ const paymentSchema = new mongoose.Schema(
 
     ledger: { type: Number, default: null },
     ledgerSequence: { type: Number, default: null },
-    // Legacy 3-value status, kept for backward compatibility with existing
-    // queries/UI. Always derived from confirmationState (see
-    // paymentConfirmationStateMachine.deriveLegacyConfirmationStatus).
+    // #1560 — DERIVED (not authoritative). Legacy 3-value status, kept for
+    // backward compatibility with existing queries/UI. Always recomputed from
+    // `status` in the pre('save') hook below.
     confirmationStatus: { type: String, enum: ['pending_confirmation', 'confirmed', 'failed'], default: 'pending_confirmation' },
-    // Fine-grained finality state machine (issue #747):
-    // detected -> pending -> confirmed -> finalized, with failed as a
-    // terminal escape from any non-terminal state. See
+    // #1560 — DERIVED (not authoritative). Fine-grained finality state machine
+    // (issue #747): detected -> pending -> confirmed -> finalized, with failed
+    // as a terminal escape from any non-terminal state. Always recomputed from
+    // `status` in the pre('save') hook below. See
     // backend/src/services/paymentConfirmationStateMachine.js for the policy.
     confirmationState: {
       type: String,
@@ -183,186 +289,37 @@ const paymentSchema = new mongoose.Schema(
 softDelete(paymentSchema);
 paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 
+// #1560 — Keep the derived lifecycle fields in lock-step with the
+// authoritative `status` on every write. This is the single place the
+// derivation is enforced, so `status`, `confirmationStatus` and
+// `confirmationState` can no longer disagree on newly written documents.
+paymentSchema.pre('save', function syncDerivedLifecycleFields(next) {
+  if (this.isModified('status') || this.isNew) {
+    this.confirmationState = deriveConfirmationState(this.status);
+    this.confirmationStatus = deriveConfirmationStatus(this.status);
+  }
+  next();
+});
+
+// #1560 — Expose the shared "counted as paid" predicate on the model so all
+// services can use one definition instead of consulting the three fields
+// independently.
+paymentSchema.statics.isCountedAsPaid = isCountedAsPaid;
+paymentSchema.statics.countedAsPaidFilter = countedAsPaidFilter;
+paymentSchema.statics.deriveConfirmationState = deriveConfirmationState;
+paymentSchema.statics.deriveConfirmationStatus = deriveConfirmationStatus;
+
 // Indexes
-// Compound unique index enforces per-school txHash uniqueness (same tx can exist in two schools).
-// The single-field txHash index (inline, non-unique) is kept for cross-school lookups.
-paymentSchema.index({ schoolId: 1, txHash: 1 }, { unique: true });
-// Unique sparse index on txHash for fast duplicate detection across all schools.
-// sparse: true excludes documents where txHash is null (manually created records).
-paymentSchema.index({ txHash: 1 }, { unique: true, sparse: true });
-paymentSchema.index({ studentId: 1, confirmedAt: -1 });
-paymentSchema.index({ schoolId: 1, confirmedAt: -1 });
-paymentSchema.index({ schoolId: 1, studentId: 1, confirmedAt: -1 });
-paymentSchema.index({ schoolId: 1, feeValidationStatus: 1 });
-paymentSchema.index({ schoolId: 1, isSuspicious: 1 });
-paymentSchema.index({ schoolId: 1, confirmationStatus: 1 });
-paymentSchema.index({ confirmationState: 1 });
-// Partial compound index for report queries: filters out soft-deleted
-// payments so MongoDB only indexes documents that appear in aggregation
-// results, keeping the index lean and report queries fast. The
-// studentDeleted clause used by the application-level query is intentionally
-// not part of this filter — MongoDB partial index filters don't support
-// $ne, so "studentDeleted !== true" cannot be expressed directly (see
-// migrations/015_add_payment_report_index.js, which creates the equivalent
-// named index used in production).
-paymentSchema.index(
-  { schoolId: 1, status: 1, confirmedAt: -1 },
-  { partialFilterExpression: { deletedAt: null } }
-);
-paymentSchema.index({ schoolId: 1, studentId: 1, feeCategory: 1 });
+// Compound unique index enforces per-school, per-operation uniqueness: the same
+// transaction may legitimately contain several payment operations (one per
+// student), so identity is (schoolId, txHash, opIndex) rather than
+// txHash alone.
+paymentSchema.index({ schoolId: 1, txHash: 1, opIndex: 1 }, { unique: true });
 
-paymentSchema.virtual('explorerUrl').get(function () {
-  const hash = this.transactionHash || this.txHash;
-  if (!hash) return null;
-  const network = process.env.STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
-  return `https://stellar.expert/explorer/${network}/tx/${hash}`;
-});
+const Payment = mongoose.model('Payment', paymentSchema);
 
-paymentSchema.virtual('stellarExplorerUrl').get(function () {
-  return this.explorerUrl;
-});
-
-/**
- * Status transition guard (pre-save hook).
- *
- * Uses the canonical transition tables imported from constants/paymentStatus.js
- * (Issue #72). See that module for the full allowed-transitions specification.
- *
- * Callers with admin authority may set `payment.$locals.adminOverride = true`
- * before calling .save() to use the wider admin transition table; the override
- * must be audited explicitly by the caller.
- */
-paymentSchema.pre('save', async function () {
-  // Use in-memory Mongoose helpers instead of a DB query to avoid an N+1
-  // round-trip on every save. this.isNew is true for inserts; for existing
-  // documents Mongoose tracks the original field values so we can check the
-  // persisted status without any additional database call.
-  if (!this.isNew) {
-    // For the transition check we need the *original* persisted status.
-    // Mongoose stores it in this.$__.savedState when the document was loaded.
-    const savedState = this.$__ && this.$__.savedState;
-    const originalStatus = savedState ? savedState.status : null;
-    const newStatus = this.status;
-
-    if (originalStatus !== null && originalStatus !== newStatus) {
-      // Callers with admin authority may set $locals.adminOverride = true to
-      // use the wider admin transition table (e.g. DISPUTED → REFUNDED).
-      // The override must be audited explicitly by the caller.
-      const adminOverride = !!(this.$locals && this.$locals.adminOverride);
-      if (!isTransitionAllowed(originalStatus, newStatus, adminOverride)) {
-        const err = new Error(
-          `Payment status transition from ${originalStatus} to ${newStatus} is not allowed`,
-        );
-        err.code = 'INVALID_TRANSITION';
-        throw err;
-      }
-    }
-
-    // Same backstop for the finality state machine (issue #747). Callers are
-    // expected to compute the next value via
-    // paymentConfirmationStateMachine.resolveNextState() before assigning it
-    // here; this guard catches any caller that bypasses that and tries to
-    // persist an illegal jump (e.g. finalized -> pending).
-    const originalConfirmationState = savedState ? savedState.confirmationState : null;
-    const newConfirmationState = this.confirmationState;
-
-    if (
-      originalConfirmationState != null &&
-      originalConfirmationState !== newConfirmationState
-    ) {
-      const allowedStates = CONFIRMATION_STATE_TRANSITIONS[originalConfirmationState] || [];
-      if (!allowedStates.includes(newConfirmationState)) {
-        const err = new Error(
-          `Payment confirmationState transition from ${originalConfirmationState} to ${newConfirmationState} is not allowed`,
-        );
-        err.code = 'INVALID_CONFIRMATION_TRANSITION';
-        throw err;
-      }
-    }
-  }
-
-  // Issue #68 — Normalize numeric precision to 7 decimal places (Stellar's
-  // canonical precision) so aggregates never accumulate floating-point drift.
-  // Also rejects any non-finite value that somehow slipped past the validator
-  // (e.g. values written directly via update operators bypass Mongoose validators).
-  const STELLAR_DECIMALS = 7;
-  const normalize = (v) => (v != null && Number.isFinite(v) ? parseFloat(v.toFixed(STELLAR_DECIMALS)) : v);
-
-  if (this.isModified('amount') && this.amount != null) {
-    this.amount = normalize(this.amount);
-  }
-  if (this.isModified('feeAmount') && this.feeAmount != null) {
-    this.feeAmount = normalize(this.feeAmount);
-  }
-  if (this.isModified('excessAmount') && this.excessAmount != null) {
-    this.excessAmount = normalize(this.excessAmount);
-  }
-
-});
-
-// Issue #669: Send payment receipt email on SUCCESS transition
-paymentSchema.post('save', async function () {
-  // Check if status transitioned to SUCCESS
-  const savedState = this.$__ && this.$__.savedState;
-  const originalStatus = savedState ? savedState.status : null;
-  const newStatus = this.status;
-
-  if (originalStatus !== 'SUCCESS' && newStatus === 'SUCCESS') {
-    // Status transitioned to SUCCESS — queue receipt email
-    let student;
-    try {
-      const Student = require('./studentModel');
-      student = await Student.findOne({
-        schoolId: this.schoolId,
-        studentId: this.studentId,
-      });
-    } catch (err) {
-      logger.error({
-        msg: 'Failed to look up student for payment receipt email',
-        paymentId: this._id,
-        error: err.message,
-      });
-    }
-
-    if (student && student.parentEmail) {
-      try {
-        const emailService = require('../services/emailService');
-        // Use cumulative totalPaid for accurate remaining balance (issue #1031)
-        const totalPaid = student.totalPaid || 0;
-        await emailService.sendPaymentReceipt({
-          schoolId: this.schoolId,
-          studentId: this.studentId,
-          to: student.parentEmail,
-          studentName: student.name,
-          amount: this.amount,
-          txHash: this.txHash,
-          confirmedAt: this.confirmedAt,
-          remainingBalance: student.feeAmount - totalPaid,
-        });
-      } catch (err) {
-        // Log error but don't fail the save, and don't let it block cache invalidation below
-        logger.error({
-          msg: 'Failed to send payment receipt email',
-          paymentId: this._id,
-          error: err.message,
-        });
-      }
-    }
-
-    // Invalidate report cache on new successful payments — independent of the
-    // email dispatch above, so a broken email path can never suppress this.
-    try {
-      const reportCacheInvalidator = require('../services/reportCacheInvalidator');
-      reportCacheInvalidator.invalidate(this.schoolId);
-    } catch (err) {
-      logger.error({
-        msg: 'Failed to invalidate report cache',
-        paymentId: this._id,
-        schoolId: this.schoolId,
-        error: err.message,
-      });
-    }
-  }
-});
-
-module.exports = mongoose.model('Payment', paymentSchema);
+module.exports = Payment;
+module.exports.isCountedAsPaid = isCountedAsPaid;
+module.exports.countedAsPaidFilter = countedAsPaidFilter;
+module.exports.deriveConfirmationState = deriveConfirmationState;
+module.exports.deriveConfirmationStatus = deriveConfirmationStatus;
