@@ -30,6 +30,7 @@ async function createPaymentPlan(req, res, next) {
         dueDate: new Date(inst.dueDate),
         paid: false,
         paidAmount: 0,
+        paymentTxHashes: [],
       })),
     });
 
@@ -69,11 +70,46 @@ async function getPaymentPlan(req, res, next) {
   }
 }
 
+// Allocate a confirmed on-chain payment to the oldest unpaid installments (FIFO).
+// Supports partial installment payment and records the settling tx hash per installment.
+async function allocatePaymentToPlan(schoolId, studentId, amount, txHash) {
+  const plan = await PaymentPlan.findOne({ schoolId, studentId, deletedAt: null, status: 'active' });
+  if (!plan) return null;
+
+  let remaining = amount;
+  for (const installment of plan.installments) {
+    if (remaining <= 0) break;
+    const outstanding = installment.amount - (installment.paidAmount || 0);
+    if (outstanding <= 0) continue;
+
+    const applied = Math.min(remaining, outstanding);
+    installment.paidAmount = (installment.paidAmount || 0) + applied;
+    remaining -= applied;
+
+    if (txHash) {
+      installment.paymentTxHashes = installment.paymentTxHashes || [];
+      installment.paymentTxHashes.push(txHash);
+    }
+
+    if (installment.paidAmount >= installment.amount) {
+      installment.paid = true;
+      installment.paidAt = new Date();
+    }
+  }
+
+  await plan.save();
+  return plan;
+}
+
 async function updateInstallmentStatus(req, res, next) {
   try {
     const { schoolId } = req;
     const { studentId, installmentIndex } = req.params;
-    const { paid, paidAmount } = req.body;
+    const { paid, paidAmount, reference } = req.body;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'A reference is required for manual settlements', code: 'VALIDATION_ERROR' });
+    }
 
     const plan = await PaymentPlan.findOne({ schoolId, studentId, deletedAt: null });
     if (!plan) {
@@ -86,26 +122,25 @@ async function updateInstallmentStatus(req, res, next) {
 
     const installment = plan.installments[installmentIndex];
     installment.paid = paid;
-    installment.paidAmount = paidAmount || installment.amount;
+    // Reconcile against the installment amount rather than trusting the request body.
+    installment.paidAmount = paid ? installment.amount : 0;
     if (paid) {
       installment.paidAt = new Date();
     }
 
     await plan.save();
 
-    if (req.auditContext) {
-      await logAudit({
-        schoolId,
-        action: 'installment_update',
-        performedBy: req.auditContext.performedBy,
-        targetId: studentId,
-        targetType: 'payment_plan',
-        details: { installmentIndex, paid, paidAmount },
-        result: 'success',
-        ipAddress: req.auditContext.ipAddress,
-        userAgent: req.auditContext.userAgent,
-      });
-    }
+    await logAudit({
+      schoolId,
+      action: 'installment_update',
+      performedBy: req.auditContext ? req.auditContext.performedBy : undefined,
+      targetId: studentId,
+      targetType: 'payment_plan',
+      details: { installmentIndex, paid, paidAmount: installment.paidAmount, reference },
+      result: 'success',
+      ipAddress: req.auditContext ? req.auditContext.ipAddress : undefined,
+      userAgent: req.auditContext ? req.auditContext.userAgent : undefined,
+    });
 
     res.json(plan);
   } catch (err) {
@@ -152,4 +187,5 @@ module.exports = {
   getPaymentPlan,
   updateInstallmentStatus,
   cancelPaymentPlan,
+  allocatePaymentToPlan,
 };
