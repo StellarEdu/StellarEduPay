@@ -15,7 +15,7 @@
     "validate:migrations": "node scripts/validate-migrations.js"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
+    "@babel/core": "^8.0.6",
     "@babel/preset-env": "^7.29.7",
     "@babel/preset-react": "^7.29.7",
     "@testing-library/jest-dom": "^6.9.1",
