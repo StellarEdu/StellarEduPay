@@ -43,7 +43,7 @@ jobs:
       # The "security-and-quality" suite runs the full set of security queries plus
       # quality queries (unused code, dead branches, etc.).
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           queries: security-and-quality
@@ -53,10 +53,10 @@ jobs:
       # as a no-op placeholder; it is safe to leave in place if build-time
       # analysis is ever added for a compiled language.
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: '/language:javascript-typescript'
           # Upload results to the Security → Code scanning tab.
