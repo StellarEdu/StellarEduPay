@@ -13,6 +13,12 @@ const STATUS_BADGE = {
   unknown:   { cls: "badge badge-neutral", key: "status.validation.unknown" },
 };
 
+function groupMonospaceValue(value) {
+  if (!value || typeof value !== "string") return value;
+  const clean = value.replace(/\s+/g, "");
+  return clean.match(/.{1,4}/g)?.join(" ") || value;
+}
+
 function InfoRow({ label, children, mono }) {
   return (
     <div style={{
@@ -112,8 +118,8 @@ export default function VerifyPayment() {
                 if (fieldError) setFieldError("");
               }}
               required
-              aria-invalid={!!fieldError}
-              aria-describedby={fieldError ? "txin-err" : undefined}
+              aria-invalid={!!(fieldError || error)}
+              aria-describedby={fieldError ? "txin-err" : error ? "txin-server-err" : undefined}
               className="form-input"
               style={{
                 fontFamily: "monospace",
@@ -147,7 +153,7 @@ export default function VerifyPayment() {
         </form>
 
         {error && (
-          <div ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
+          <div id="txin-server-err" ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
             <IconAlertTriangle size={15} />
             <div>
               <span>{error}</span>
@@ -166,7 +172,7 @@ export default function VerifyPayment() {
         )}
 
         {result && (
-          <div style={{ marginTop: "1.25rem" }} role="status">
+          <div style={{ marginTop: "1.25rem" }} role="status" aria-live="polite">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <IconCheck size={15} style={{ color: "var(--success-text)" }} />
@@ -194,8 +200,12 @@ export default function VerifyPayment() {
             )}
             <div style={{ padding: "0.625rem 0" }}>
               <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("verifyPayment.txHash")}</div>
-              <div style={{ fontFamily: "monospace", fontSize: "0.78rem", wordBreak: "break-all", color: "var(--text)" }}>
-                {result.hash}
+              <div
+                data-raw={result.hash}
+                title={result.hash}
+                style={{ fontFamily: "monospace", fontSize: "0.78rem", wordBreak: "break-all", color: "var(--text)" }}
+              >
+                {groupMonospaceValue(result.hash)}
               </div>
               {result.stellarExplorerUrl && (
                 <a

@@ -15,6 +15,12 @@ const STATUS_BADGE = {
   unknown:   { cls: "badge badge-neutral", key: "status.validation.unknown" },
 };
 
+export function groupMonospaceValue(value) {
+  if (!value || typeof value !== "string") return value;
+  const clean = value.replace(/\s+/g, "");
+  return clean.match(/.{1,4}/g)?.join(" ") || value;
+}
+
 function CopyButton({ text, copyKey, copied, onCopy }) {
   const { t } = useTranslation();
   const isCopied = copied === copyKey;
@@ -59,6 +65,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
   const [error, setError]                     = useState("");
   const [loading, setLoading]                 = useState(false);
   const [copied, setCopied]                   = useState(null);
+  const [liveStatus, setLiveStatus]           = useState("");
   const [hasDeletedPayments, setHasDeletedPayments] = useState(false);
   const [balanceError, setBalanceError]         = useState(false);
   const [disputingTx, setDisputingTx]           = useState(null);
@@ -128,6 +135,9 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
         }
         setStudent(stuRes.value?.data ?? null);
         setInstructions(instrRes.status === "fulfilled" ? instrRes.value?.data : null);
+        if (stuRes.value?.data?.name) {
+          setLiveStatus(t("paymentForm.instructionsLoadedAnnouncement", { studentName: stuRes.value.data.name }));
+        }
         setPayments([]);
       } else {
         const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
@@ -144,6 +154,9 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
         ]);
         setStudent(stuRes.value?.data ?? null);
         setInstructions(instrRes.value?.data ?? null);
+        if (stuRes.value?.data?.name) {
+          setLiveStatus(t("paymentForm.instructionsLoadedAnnouncement", { studentName: stuRes.value.data.name }));
+        }
         const paymentsList = payRes.value?.data?.payments ?? payRes.value?.data ?? [];
         setPayments(paymentsList);
         setHasDeletedPayments(balRes?.value?.data?.hasDeletedPayments === true);
@@ -201,6 +214,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
     if (!student?.studentId) return;
     await navigator.clipboard.writeText(sharePaymentUrl(student.studentId)).catch(() => {});
     setShareCopied(true);
+    setLiveStatus(t("paymentForm.copiedShareLinkAnnouncement"));
     setTimeout(() => setShareCopied(false), 2000);
   }
 
@@ -218,6 +232,13 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
   async function copy(text, key) {
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopied(key);
+    const announcementKeys = {
+      wallet: "paymentForm.copiedWalletAnnouncement",
+      memo: "paymentForm.copiedMemoAnnouncement",
+      "encoded-memo": "paymentForm.copiedMemoAnnouncement",
+      "qr-uri": "paymentForm.copiedUriAnnouncement",
+    };
+    setLiveStatus(t(announcementKeys[key] || "actions.copied"));
     setTimeout(() => setCopied(null), 2000);
   }
 
@@ -288,7 +309,24 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
 
   return (
     <>
-      
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          width: "1px",
+          height: "1px",
+          padding: 0,
+          margin: "-1px",
+          overflow: "hidden",
+          clip: "rect(0, 0, 0, 0)",
+          whiteSpace: "nowrap",
+          border: 0,
+        }}
+      >
+        {liveStatus}
+      </div>
 
       <div className="card pf-wrap">
         <div className="card-header">
@@ -327,6 +365,8 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                   debounceRef.current = setTimeout(() => lookupStudent(val), 420);
                 }}
                 required
+                aria-invalid={!!error}
+                aria-describedby={error ? "sid-error" : undefined}
                 className="form-input"
               />
             </div>
@@ -336,7 +376,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
           </form>
 
           {error && (
-            <div ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
+            <div id="sid-error" ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
               <IconAlertTriangle size={15} />
               <span>{error}</span>
             </div>
@@ -407,8 +447,17 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 <div className="pf-code-row">
                   <span className="pf-code">{sharePaymentUrl(student.studentId)}</span>
                 </div>
-                <div style={{ background: "#fff", padding: "0.5rem", borderRadius: "8px", alignSelf: "flex-start" }}>
-                  <QRCodeSVG value={sharePaymentUrl(student.studentId)} size={96} />
+                <div
+                  role="img"
+                  aria-label={t("paymentForm.shareQrAria", { studentId: student.studentId })}
+                  style={{ background: "#fff", padding: "0.5rem", borderRadius: "8px", alignSelf: "flex-start" }}
+                >
+                  <QRCodeSVG
+                    value={sharePaymentUrl(student.studentId)}
+                    size={96}
+                    role="img"
+                    aria-label={t("paymentForm.shareQrAria", { studentId: student.studentId })}
+                  />
                 </div>
               </div>
 
@@ -416,18 +465,31 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>
                 <span className="pf-section-label">{t("paymentForm.walletAddress")}</span>
                 <div className="pf-code-row">
-                  <span className="pf-code">{instructions.walletAddress}</span>
+                  <span
+                    className="pf-code"
+                    data-raw={instructions.walletAddress}
+                    title={instructions.walletAddress}
+                  >
+                    {groupMonospaceValue(instructions.walletAddress)}
+                  </span>
                   <CopyButton text={instructions.walletAddress} copyKey="wallet" copied={copied} onCopy={copy} />
                 </div>
               </div>
 
               {/* Memo */}
               <div style={{ marginBottom: "1.25rem" }}>
-                <span className="pf-section-label">{t("paymentForm.memoRequired")}</span>
-                <div className="pf-code-row">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem", flexWrap: "wrap" }}>
+                  <span id="pf-memo-label" className="pf-section-label" style={{ marginBottom: 0 }}>
+                    {t("paymentForm.memoRequiredBadge")}
+                  </span>
+                </div>
+                <div className="pf-code-row" aria-labelledby="pf-memo-label" aria-describedby="pf-memo-warning">
                   <span className="pf-code">{instructions.memo}</span>
                   <CopyButton text={instructions.memo} copyKey="memo" copied={copied} onCopy={copy} />
                 </div>
+                <p id="pf-memo-warning" style={{ marginTop: "0.375rem", fontSize: "0.75rem", color: "var(--warning-text, var(--text-muted))" }}>
+                  {t("paymentForm.memoExchangeWarning")}
+                </p>
               </div>
 
               {/* QR Code */}
@@ -439,9 +501,10 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 // Guard against a stale selection if the memo changes to one
                 // that has no numeric equivalent.
                 const activeMemoType = memoTypes.includes(memoType) ? memoType : "MEMO_TEXT";
+                const feeAmt = instructions.feeAmount ?? student.feeAmount ?? 0;
                 const paymentUri = generateStellarPaymentUri({
                   destination: instructions.walletAddress,
-                  amount: instructions.feeAmount ?? student.feeAmount ?? 0,
+                  amount: feeAmt,
                   memo: instructions.memo,
                   memoType: activeMemoType,
                   assetCode: nonNative?.code,
@@ -449,6 +512,11 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 });
                 const encodedMemo = encodeMemo(instructions.memo, activeMemoType);
                 const downloadFilename = `stellar-payment-${instructions.memo}.png`;
+                const qrAriaLabel = t("paymentForm.qrAria", {
+                  amount: feeAmt,
+                  address: instructions.walletAddress,
+                  memo: instructions.memo,
+                });
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
                     <span className="pf-section-label" style={{ display: "block", marginBottom: "0.75rem" }}>
@@ -456,6 +524,8 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                     </span>
                     <div
                       ref={qrWrapperRef}
+                      role="img"
+                      aria-label={qrAriaLabel}
                       style={{ display: "inline-flex", padding: "0.75rem", background: "#fff", borderRadius: "var(--radius-sm)", maxWidth: "100%" }}
                     >
                       {/* #1384 — 200px is the WCAG-friendly minimum for a
@@ -465,7 +535,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         value={paymentUri}
                         size={200}
                         role="img"
-                        aria-label={t("paymentForm.qrAria", { address: instructions.walletAddress })}
+                        aria-label={qrAriaLabel}
                       />
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -596,8 +666,12 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                           )}
                         </div>
                     </div>
-                    <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem", wordBreak: "break-all" }}>
-                      {p.txHash}
+                    <div
+                      data-raw={p.txHash}
+                      title={p.txHash}
+                      style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem", wordBreak: "break-all" }}
+                    >
+                      {groupMonospaceValue(p.txHash)}
                     </div>
                     {p.confirmedAt && (
                       <div style={{ fontSize: "0.75rem", color: "var(--text-subtle)" }}>

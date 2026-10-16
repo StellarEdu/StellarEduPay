@@ -113,7 +113,7 @@ export default function StudentForm({ student, onClose, onSave }) {
         <h2 style={{ marginTop: 0, marginBottom: "1.5rem" }}>{t("studentForm.editTitle")}</h2>
 
         {error && (
-          <div style={{
+          <div role="alert" style={{
             background: "#fee2e2",
             border: "1px solid #fecaca",
             borderRadius: "6px",
@@ -127,7 +127,7 @@ export default function StudentForm({ student, onClose, onSave }) {
         )}
 
         {success && (
-          <div style={{
+          <div role="status" aria-live="polite" style={{
             background: "#dcfce7",
             border: "1px solid #bbf7d0",
             borderRadius: "6px",
@@ -142,7 +142,7 @@ export default function StudentForm({ student, onClose, onSave }) {
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="student-form-id" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -152,6 +152,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.studentId")}
             </label>
             <input
+              id="student-form-id"
               type="text"
               value={student.studentId}
               disabled
@@ -169,7 +170,7 @@ export default function StudentForm({ student, onClose, onSave }) {
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="student-form-name" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -179,11 +180,13 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.name")}
             </label>
             <input
+              id="student-form-name"
               type="text"
               name="name"
               value={formData.name}
               onChange={handleChange}
               aria-invalid={!!fieldErrors.name}
+              aria-describedby={fieldErrors.name ? "student-form-name-err" : undefined}
               style={{
                 width: "100%",
                 padding: "0.75rem",
@@ -195,12 +198,12 @@ export default function StudentForm({ student, onClose, onSave }) {
               }}
             />
             {fieldErrors.name && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
+              <span id="student-form-name-err" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="student-form-class" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -210,6 +213,7 @@ export default function StudentForm({ student, onClose, onSave }) {
                {t("studentForm.className")}
             </label>
             <input
+              id="student-form-class"
               type="text"
               name="class"
               value={formData.class}
@@ -227,7 +231,7 @@ export default function StudentForm({ student, onClose, onSave }) {
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="student-form-email" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -237,11 +241,13 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.parentEmail")}
             </label>
             <input
+              id="student-form-email"
               type="email"
               name="parentEmail"
               value={formData.parentEmail}
               onChange={handleChange}
               aria-invalid={!!fieldErrors.parentEmail}
+              aria-describedby={fieldErrors.parentEmail ? "student-form-email-err" : undefined}
               style={{
                 width: "100%",
                 padding: "0.75rem",
@@ -253,12 +259,12 @@ export default function StudentForm({ student, onClose, onSave }) {
               }}
             />
             {fieldErrors.parentEmail && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
+              <span id="student-form-email-err" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="student-form-phone" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -268,6 +274,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.parentPhone")}
             </label>
             <input
+              id="student-form-phone"
               type="tel"
               name="parentPhone"
               value={formData.parentPhone}
