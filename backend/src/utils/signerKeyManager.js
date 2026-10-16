@@ -67,6 +67,7 @@
 
 const crypto = require('crypto');
 const { Keypair, StrKey } = require('@stellar/stellar-sdk');
+const { resolveSecret } = require('../config/secrets');
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -98,7 +99,7 @@ function _validateHex(hex, label) {
  * @returns {Buffer} 32-byte key buffer
  */
 function getMasterKey() {
-  const hex = _cachedMasterKeyHex || process.env.SIGNER_MASTER_KEY;
+  const hex = _cachedMasterKeyHex || resolveSecret('SIGNER_MASTER_KEY');
   if (!hex) {
     throw new Error(
       '[signerKeyManager] No signing master key available. Set SIGNER_MASTER_KEY directly, ' +
@@ -348,12 +349,16 @@ function reEncryptSecretKey(oldEncryptedBlob) {
  * @returns {boolean}
  */
 function isMasterKeyConfigured() {
-  const hex = _cachedMasterKeyHex || process.env.SIGNER_MASTER_KEY;
-  return (
-    typeof hex === 'string' &&
-    hex.length === KEY_HEX_LENGTH &&
-    /^[0-9a-fA-F]+$/.test(hex)
-  );
+  try {
+    const hex = _cachedMasterKeyHex || resolveSecret('SIGNER_MASTER_KEY');
+    return (
+      typeof hex === 'string' &&
+      hex.length === KEY_HEX_LENGTH &&
+      /^[0-9a-fA-F]+$/.test(hex)
+    );
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {

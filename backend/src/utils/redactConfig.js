@@ -1,8 +1,9 @@
 'use strict';
 
 // Pattern-based secret detection to automatically cover new secrets.
-// Matches common secret-related suffixes plus explicit known-non-secret exceptions.
-const SECRET_PATTERN = /(SECRET|PASSWORD|PASS|TOKEN|KEY|SID|URI|HASH|API_KEY)$/i;
+// Matches common secret-related suffixes (and their *_FILE file-based secret
+// counterparts) plus explicit known-non-secret exceptions.
+const SECRET_PATTERN = /(SECRET|PASSWORD|PASS|TOKEN|KEY|KEYPAIR|SID|URI|HASH|API_KEY)(_FILE)?$/i;
 
 // Known environment variable keys that match the pattern but are NOT secrets.
 const NON_SECRET_ALLOWLIST = new Set([
@@ -45,6 +46,10 @@ const REQUEST_LOG_REDACT_FIELDS = [
  */
 function shouldRedact(key) {
   if (NON_SECRET_ALLOWLIST.has(key)) return false;
+  if (typeof key === 'string' && key.endsWith('_FILE')) {
+    const baseKey = key.slice(0, -5);
+    if (NON_SECRET_ALLOWLIST.has(baseKey)) return false;
+  }
   return SECRET_PATTERN.test(key);
 }
 

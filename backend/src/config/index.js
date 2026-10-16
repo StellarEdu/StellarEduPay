@@ -10,6 +10,16 @@
  */
 
 const Joi = require("joi");
+const {
+  SENSITIVE_CONFIG_KEYS,
+  resolveSecret,
+  resolveEnvSecrets,
+  initializeSecretsProvider,
+} = require("./secrets");
+
+// Resolve any *_FILE secrets (e.g. JWT_SECRET_FILE, MONGO_URI_FILE) before Joi
+// validation and populate process.env for downstream modules when unset.
+const resolvedEnvInput = resolveEnvSecrets(process.env, { mutate: true });
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 // Every variable this module owns is declared here with its type, default,
@@ -82,11 +92,23 @@ const schema = Joi.object({
   SMTP_USER: Joi.string().allow(null, "").default(null),
   SMTP_PASS: Joi.string().allow(null, "").default(null).secret(),
   SMTP_FROM: Joi.string().allow(null, "").default(null),
+
+  // ── Additional Sensitive Config (Issue #1829) ───────────────────────────────
+  ADMIN_PASSWORD: Joi.string().allow(null, "").default(null).secret(),
+  ADMIN_PASSWORD_HASH: Joi.string().allow(null, "").default(null).secret(),
+  STUDENT_PII_ENCRYPTION_KEY: Joi.string().allow(null, "").default(null).secret(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY: Joi.string().allow(null, "").default(null).secret(),
+  AUDIT_HMAC_KEY: Joi.string().allow(null, "").default(null).secret(),
+  METRICS_BEARER_TOKEN: Joi.string().allow(null, "").default(null).secret(),
+  SENDGRID_API_KEY: Joi.string().allow(null, "").default(null).secret(),
+  TWILIO_AUTH_TOKEN: Joi.string().allow(null, "").default(null).secret(),
+  ANCHOR_PLATFORM_KEYPAIR: Joi.string().allow(null, "").default(null).secret(),
+  REDIS_PASSWORD: Joi.string().allow(null, "").default(null).secret(),
 })
   .unknown(true) // tolerate variables owned by other modules during migration
   .prefs({ convert: true, abortEarly: false });
 
-const { value: env, error } = schema.validate(process.env, {
+const { value: env, error } = schema.validate(resolvedEnvInput, {
   stripUnknown: false,
 });
 
@@ -293,6 +315,17 @@ const SMTP_USER = env.SMTP_USER;
 const SMTP_PASS = env.SMTP_PASS;
 const SMTP_FROM = env.SMTP_FROM;
 
+const ADMIN_PASSWORD = env.ADMIN_PASSWORD;
+const ADMIN_PASSWORD_HASH = env.ADMIN_PASSWORD_HASH;
+const STUDENT_PII_ENCRYPTION_KEY = env.STUDENT_PII_ENCRYPTION_KEY;
+const WEBHOOK_SECRET_ENCRYPTION_KEY = env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+const AUDIT_HMAC_KEY = env.AUDIT_HMAC_KEY;
+const METRICS_BEARER_TOKEN = env.METRICS_BEARER_TOKEN;
+const SENDGRID_API_KEY = env.SENDGRID_API_KEY;
+const TWILIO_AUTH_TOKEN = env.TWILIO_AUTH_TOKEN;
+const ANCHOR_PLATFORM_KEYPAIR = env.ANCHOR_PLATFORM_KEYPAIR;
+const REDIS_PASSWORD = env.REDIS_PASSWORD;
+
 module.exports = {
   PORT,
   MONGO_URI,
@@ -341,4 +374,18 @@ module.exports = {
   SMTP_USER,
   SMTP_PASS,
   SMTP_FROM,
+  ADMIN_PASSWORD,
+  ADMIN_PASSWORD_HASH,
+  STUDENT_PII_ENCRYPTION_KEY,
+  WEBHOOK_SECRET_ENCRYPTION_KEY,
+  AUDIT_HMAC_KEY,
+  METRICS_BEARER_TOKEN,
+  SENDGRID_API_KEY,
+  TWILIO_AUTH_TOKEN,
+  ANCHOR_PLATFORM_KEYPAIR,
+  REDIS_PASSWORD,
+  SENSITIVE_CONFIG_KEYS,
+  resolveSecret,
+  resolveEnvSecrets,
+  initializeSecretsProvider,
 };
