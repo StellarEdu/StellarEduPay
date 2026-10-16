@@ -4,14 +4,18 @@ const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
 const tenantScope = require('../plugins/tenantScope');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
+const { toStroops } = require('../utils/stellarAmount');
 
 const feeCategorySchema = new mongoose.Schema(
   {
     category: { type: String, required: true },
     amount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    amountStroops: { type: String, default: null },
     paid: { type: Boolean, default: false },
     totalPaid: { type: Number, default: 0 },
+    totalPaidStroops: { type: String, default: '0' },
     remainingBalance: { type: Number, default: null },
+    remainingBalanceStroops: { type: String, default: null },
     paymentDeadline: { type: Date, default: null },
   },
   { _id: false }
@@ -25,11 +29,14 @@ const studentSchema = new mongoose.Schema(
     class: { type: String, required: true, index: true },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    feeAmountStroops: { type: String, default: null },
     fees: { type: [feeCategorySchema], default: [] },
     paymentDeadline: { type: Date, default: null },
     feePaid: { type: Boolean, default: false, index: true },
     totalPaid: { type: Number, default: 0 },
+    totalPaidStroops: { type: String, default: '0' },
     remainingBalance: { type: Number, default: null },
+    remainingBalanceStroops: { type: String, default: null },
 
     /**
      * Cumulative amount of manual partial-credit adjustments applied by admins.
@@ -40,6 +47,7 @@ const studentSchema = new mongoose.Schema(
      * application level (see adjustStudentCredit endpoint).
      */
     creditAdjustments: { type: Number, default: 0 },
+    creditBalanceStroops: { type: String, default: '0' },
 
     // Parent contact for fee reminders — encrypted at rest (issue #1480), see
     // pre('save')/post('init') hooks below and studentPiiEncryption.js.
@@ -127,6 +135,44 @@ studentSchema.index({ feePaid: 1, class: 1 });
 studentSchema.index({ totalPaid: 1 });
 studentSchema.index({ name: 'text', studentId: 'text' });
 
+function toStroopStringOrNull(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+    return null;
+  }
+  return toStroops(value).toString();
+}
+
+function syncStudentStroopsOnDocument(doc) {
+  if (doc.feeAmount !== undefined && doc.feeAmount !== null && Number.isFinite(Number(doc.feeAmount))) {
+    doc.feeAmountStroops = toStroops(doc.feeAmount).toString();
+  }
+  if (doc.totalPaid !== undefined && doc.totalPaid !== null && Number.isFinite(Number(doc.totalPaid))) {
+    doc.totalPaidStroops = toStroops(doc.totalPaid).toString();
+  }
+  doc.remainingBalanceStroops = toStroopStringOrNull(doc.remainingBalance);
+  const creditVal = doc.creditBalance !== undefined ? doc.creditBalance : doc.creditAdjustments;
+  if (creditVal !== undefined && creditVal !== null && Number.isFinite(Number(creditVal))) {
+    doc.creditBalanceStroops = toStroops(creditVal).toString();
+  }
+  if (Array.isArray(doc.fees)) {
+    doc.fees.forEach((fee) => {
+      if (fee.amount !== undefined && fee.amount !== null && Number.isFinite(Number(fee.amount))) {
+        fee.amountStroops = toStroops(fee.amount).toString();
+      }
+      if (fee.totalPaid !== undefined && fee.totalPaid !== null && Number.isFinite(Number(fee.totalPaid))) {
+        fee.totalPaidStroops = toStroops(fee.totalPaid).toString();
+      }
+      fee.remainingBalanceStroops = toStroopStringOrNull(fee.remainingBalance);
+    });
+  }
+}
+
+// #1819 — Populate exact *Stroops string fields during validation and save.
+studentSchema.pre('validate', function syncStudentStroopsPreValidate(next) {
+  syncStudentStroopsOnDocument(this);
+  next();
+});
+
 // ── Parent contact PII encryption at rest — Issue #1480 ─────────────────────
 // Encrypt parentEmail/parentPhone before persisting, then decrypt them back
 // onto the in-memory document so callers (controllers, reminder/email
@@ -199,6 +245,8 @@ studentSchema.pre('save', async function () {
     this.remainingBalance = Math.max(0, this.feeAmount - this.totalPaid);
     this.feePaid = this.fees.every(fee => fee.paid);
   }
+
+  syncStudentStroopsOnDocument(this);
 });
 
 module.exports = mongoose.model('Student', studentSchema);

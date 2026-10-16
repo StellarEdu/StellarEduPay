@@ -13,6 +13,7 @@ const {
   ADMIN_PAYMENT_STATUS_TRANSITIONS,
   isTransitionAllowed,
 } = require('../constants/paymentStatus');
+const { toStroops } = require('../utils/stellarAmount');
 const logger = require('../utils/logger');
 // Student/emailService/reportCacheInvalidator are required lazily inside the
 // post('save') hook below, not hoisted here: emailService pulls in
@@ -142,6 +143,7 @@ const paymentSchema = new mongoose.Schema(
         },
       ],
     },
+    amountStroops: { type: String, default: null },
 
     // Correlation ID tying this payment to its full async lifecycle (polling
     // -> queue -> processor -> webhook -> SSE). Deterministically derived
@@ -158,6 +160,7 @@ const paymentSchema = new mongoose.Schema(
         },
       ],
     },
+    feeAmountStroops: { type: String, default: null },
     feeCategory: { type: String, default: null, index: true },
     feeValidationStatus: { type: String, enum: ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'], default: 'unknown' },
     excessAmount: {
@@ -171,6 +174,7 @@ const paymentSchema = new mongoose.Schema(
         },
       ],
     },
+    excessAmountStroops: { type: String, default: '0' },
 
     // Underpaid Payment Reconciliation (Issue #1039)
     // Tracks reconciliation status and details for partial/underpaid payments
@@ -191,6 +195,7 @@ const paymentSchema = new mongoose.Schema(
           },
         ],
       },
+      appliedCreditStroops: { type: String, default: '0' },
       creditAppliedAt: { type: Date, default: null },
       creditAppliedBy: { type: String, default: null },
       refundTxHash: { type: String, default: null },
@@ -273,6 +278,7 @@ const paymentSchema = new mongoose.Schema(
     // convert on-the-fly by ignoring fiatSnapshot.
     fiatSnapshot: {
       fiatAmount:   { type: Number, default: null },  // crypto_amount × fiatRate
+      fiatAmountStroops: { type: String, default: null },
       fiatCurrency: { type: String, default: null },  // e.g. 'USD'
       fiatRate:     { type: Number, default: null },  // rate at confirmation
       rateSource:   { type: String, default: null },  // 'coingecko' | 'coinbase' | etc.
@@ -289,11 +295,48 @@ const paymentSchema = new mongoose.Schema(
 softDelete(paymentSchema);
 paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
 
+function toStroopStringOrNull(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+    return null;
+  }
+  return toStroops(value).toString();
+}
+
+function syncPaymentStroopsOnDocument(doc) {
+  if (doc.amount !== undefined && doc.amount !== null && Number.isFinite(Number(doc.amount))) {
+    doc.amountStroops = toStroops(doc.amount).toString();
+  }
+  doc.feeAmountStroops = toStroopStringOrNull(doc.feeAmount);
+  if (doc.excessAmount !== undefined && doc.excessAmount !== null && Number.isFinite(Number(doc.excessAmount))) {
+    doc.excessAmountStroops = toStroops(doc.excessAmount).toString();
+  } else if (doc.excessAmount === null) {
+    doc.excessAmountStroops = null;
+  }
+  if (doc.underpaidReconciliation && doc.underpaidReconciliation.appliedCredit !== undefined && doc.underpaidReconciliation.appliedCredit !== null) {
+    if (Number.isFinite(Number(doc.underpaidReconciliation.appliedCredit))) {
+      doc.underpaidReconciliation.appliedCreditStroops = toStroops(
+        doc.underpaidReconciliation.appliedCredit
+      ).toString();
+    }
+  }
+  if (doc.fiatSnapshot && doc.fiatSnapshot.fiatAmount !== undefined) {
+    doc.fiatSnapshot.fiatAmountStroops = toStroopStringOrNull(doc.fiatSnapshot.fiatAmount);
+  }
+}
+
+// #1819 — Populate exact *Stroops string fields at runtime during validation
+// and save so newly created/updated Payment documents always have them.
+paymentSchema.pre('validate', function syncPaymentStroopsPreValidate(next) {
+  syncPaymentStroopsOnDocument(this);
+  next();
+});
+
 // #1560 — Keep the derived lifecycle fields in lock-step with the
 // authoritative `status` on every write. This is the single place the
 // derivation is enforced, so `status`, `confirmationStatus` and
 // `confirmationState` can no longer disagree on newly written documents.
 paymentSchema.pre('save', function syncDerivedLifecycleFields(next) {
+  syncPaymentStroopsOnDocument(this);
   if (this.isModified('status') || this.isNew) {
     this.confirmationState = deriveConfirmationState(this.status);
     this.confirmationStatus = deriveConfirmationStatus(this.status);

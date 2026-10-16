@@ -5,6 +5,7 @@ const { csvEscape } = require('../utils/csv');
 const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
 const { POOL_CONFIG } = require('../config/database');
+const { toStroops, sumStroops, stroopsToNumber } = require('../utils/stellarAmount');
 
 /**
  * Convert a local calendar date string (YYYY-MM-DD) and an IANA timezone to a
@@ -199,16 +200,27 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
 async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' } = {}) {
   const byDate = await aggregateByDate({ schoolId, startDate, endDate, timezone });
 
+  const totalStroops = sumStroops(
+    byDate.map((row) =>
+      row.totalAmountStroops != null ? row.totalAmountStroops : toStroops(row.totalAmount || 0)
+    )
+  );
   const totals = byDate.reduce(
     (acc, row) => {
-      acc.totalAmount    = parseFloat((acc.totalAmount + row.totalAmount).toFixed(7));
       acc.paymentCount  += row.paymentCount;
       acc.validCount    += row.validCount;
       acc.overpaidCount += row.overpaidCount;
       acc.underpaidCount+= row.underpaidCount;
       return acc;
     },
-    { totalAmount: 0, paymentCount: 0, validCount: 0, overpaidCount: 0, underpaidCount: 0 }
+    {
+      totalAmount: stroopsToNumber(totalStroops),
+      totalAmountStroops: totalStroops.toString(),
+      paymentCount: 0,
+      validCount: 0,
+      overpaidCount: 0,
+      underpaidCount: 0,
+    }
   );
 
   // Count students who have fully paid within the period
