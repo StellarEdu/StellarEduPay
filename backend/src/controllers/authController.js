@@ -745,5 +745,6 @@ module.exports = {
   handleListSessions,
   handleRevokeSession,
   handleChangePassword,
+  getStore,
   _resetStore,
 };

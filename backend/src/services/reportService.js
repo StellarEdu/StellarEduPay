@@ -5,6 +5,7 @@ const { csvEscape } = require('../utils/csv');
 const Student = require('../models/studentModel');
 const FeeStructure = require('../models/feeStructureModel');
 const { POOL_CONFIG } = require('../config/database');
+const { amountExpression } = require('../utils/stroopFields');
 
 /**
  * Convert a local calendar date string (YYYY-MM-DD) and an IANA timezone to a
@@ -156,14 +157,14 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         // Fall back to updatedAt so these payments are bucketed to a real date
         // rather than grouped under a null key and sorted before all real dates.
         _id: { $dateToString: { format: '%Y-%m-%d', date: { $ifNull: ['$confirmedAt', '$updatedAt'] }, timezone } },
-        totalAmount:   { $sum: '$amount' },
+        totalAmount:   { $sum: amountExpression('amountStroops', 'amount') },
         paymentCount:  { $sum: 1 },
         validCount:    { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'valid'] }, 1, 0] } },
         overpaidCount: { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'overpaid'] }, 1, 0] } },
         underpaidCount:{ $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
         uniqueStudents:{ $addToSet: '$studentId' },
         // #883 — sum historical fiat amounts from locked snapshots
-        totalFiatAmount:{ $sum: { $ifNull: ['$fiatSnapshot.fiatAmount', 0] } },
+        totalFiatAmount:{ $sum: amountExpression('fiatSnapshot.fiatAmountStroops', 'fiatSnapshot.fiatAmount') },
         fiatCurrency:  { $first: '$fiatSnapshot.fiatCurrency' },
       },
     },
@@ -249,6 +250,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
               confirmedAt: buildDateRangeFilter({ startDate, endDate, timezone }),
             } : {},
           },
+          { $set: { amountForReport: amountExpression('amountStroops', 'amount') } },
         ],
         as: 'payments',
       },
@@ -256,7 +258,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
     {
       $group: {
         _id: '$class',
-        totalCollected: { $sum: { $sum: '$payments.amount' } },
+        totalCollected: { $sum: { $sum: '$payments.amountForReport' } },
         paymentCount: { $sum: { $size: '$payments' } },
         paidStudentIds: { $addToSet: { $cond: ['$feePaid', '$studentId', '$$REMOVE'] } },
         unpaidStudentIds: { $addToSet: { $cond: ['$feePaid', '$$REMOVE', '$studentId'] } },
@@ -391,8 +393,8 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
           _id: '$class',
           totalStudents: { $sum: 1 },
           paidStudents:  { $sum: { $cond: ['$feePaid', 1, 0] } },
-          totalFees:     { $sum: '$feeAmount' },
-          totalPaid:     { $sum: '$totalPaid' },
+          totalFees:     { $sum: amountExpression('feeAmountStroops', 'feeAmount') },
+          totalPaid:     { $sum: amountExpression('totalPaidStroops', 'totalPaid') },
         },
       },
       {
@@ -419,7 +421,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
 
     Student.aggregate([
       { $match: Student.activeFilter({ schoolId }) },
-      { $group: { _id: null, totalExpected: { $sum: '$feeAmount' }, totalPaid: { $sum: '$totalPaid' } } },
+      { $group: { _id: null, totalExpected: { $sum: amountExpression('feeAmountStroops', 'feeAmount') }, totalPaid: { $sum: amountExpression('totalPaidStroops', 'totalPaid') } } },
     ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
   ]);
 

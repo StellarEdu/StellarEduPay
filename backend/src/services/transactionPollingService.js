@@ -230,7 +230,7 @@ async function processTransaction(tx, school, fencingToken) {
     networkFee,
     // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
     fiatSnapshot: isConfirmed && !isSuspicious
-      ? await captureFiatSnapshot(paymentAmount, asset || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
+      ? await captureFiatSnapshot(paymentAmount, asset?.assetCode || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
       : null,
   };
 

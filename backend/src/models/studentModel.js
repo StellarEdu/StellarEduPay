@@ -4,14 +4,18 @@ const mongoose = require('mongoose');
 const softDelete = require('../utils/softDelete');
 const tenantScope = require('../plugins/tenantScope');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
+const { toStroopString, syncStroopUpdate } = require('../utils/stroopFields');
 
 const feeCategorySchema = new mongoose.Schema(
   {
     category: { type: String, required: true },
     amount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    amountStroops: { type: String, default: null, match: /^-?\d+$/ },
     paid: { type: Boolean, default: false },
     totalPaid: { type: Number, default: 0 },
+    totalPaidStroops: { type: String, default: null, match: /^-?\d+$/ },
     remainingBalance: { type: Number, default: null },
+    remainingBalanceStroops: { type: String, default: null, match: /^-?\d+$/ },
     paymentDeadline: { type: Date, default: null },
   },
   { _id: false }
@@ -25,11 +29,14 @@ const studentSchema = new mongoose.Schema(
     class: { type: String, required: true, index: true },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    feeAmountStroops: { type: String, default: null, match: /^-?\d+$/ },
     fees: { type: [feeCategorySchema], default: [] },
     paymentDeadline: { type: Date, default: null },
     feePaid: { type: Boolean, default: false, index: true },
     totalPaid: { type: Number, default: 0 },
+    totalPaidStroops: { type: String, default: null, match: /^-?\d+$/ },
     remainingBalance: { type: Number, default: null },
+    remainingBalanceStroops: { type: String, default: null, match: /^-?\d+$/ },
 
     /**
      * Cumulative amount of manual partial-credit adjustments applied by admins.
@@ -97,6 +104,23 @@ const studentSchema = new mongoose.Schema(
 // Apply soft delete utility
 softDelete(studentSchema);
 studentSchema.plugin(tenantScope, { modelName: 'Student' });
+studentSchema.pre('validate', function syncStudentStroops(next) {
+  for (const [source, target] of [['feeAmount', 'feeAmountStroops'], ['totalPaid', 'totalPaidStroops'], ['remainingBalance', 'remainingBalanceStroops']]) {
+    if (this[source] !== null && this[source] !== undefined) this[target] = toStroopString(this[source]);
+  }
+  for (const fee of this.fees || []) {
+    if (fee.amount != null) fee.amountStroops = toStroopString(fee.amount);
+    if (fee.totalPaid != null) fee.totalPaidStroops = toStroopString(fee.totalPaid);
+    if (fee.remainingBalance != null) fee.remainingBalanceStroops = toStroopString(fee.remainingBalance);
+  }
+  next();
+});
+for (const hook of ['updateOne', 'updateMany', 'findOneAndUpdate']) {
+  studentSchema.pre(hook, function syncStudentUpdateStroops(next) {
+    syncStroopUpdate(this.getUpdate(), [['feeAmount', 'feeAmountStroops'], ['totalPaid', 'totalPaidStroops'], ['remainingBalance', 'remainingBalanceStroops']]);
+    next();
+  });
+}
 
 // isOverdue: true when a deadline is set, the fee is unpaid, and the deadline has passed
 studentSchema.virtual('isOverdue').get(function () {
@@ -199,6 +223,18 @@ studentSchema.pre('save', async function () {
     this.remainingBalance = Math.max(0, this.feeAmount - this.totalPaid);
     this.feePaid = this.fees.every(fee => fee.paid);
   }
+});
+
+studentSchema.pre('save', function syncStudentStroopsAfterTotals(next) {
+  this.feeAmountStroops = toStroopString(this.feeAmount);
+  this.totalPaidStroops = toStroopString(this.totalPaid);
+  this.remainingBalanceStroops = toStroopString(this.remainingBalance);
+  for (const fee of this.fees || []) {
+    fee.amountStroops = toStroopString(fee.amount);
+    fee.totalPaidStroops = toStroopString(fee.totalPaid);
+    fee.remainingBalanceStroops = toStroopString(fee.remainingBalance);
+  }
+  next();
 });
 
 module.exports = mongoose.model('Student', studentSchema);

@@ -14,6 +14,7 @@ const {
   isTransitionAllowed,
 } = require('../constants/paymentStatus');
 const logger = require('../utils/logger');
+const { toStroopString, syncStroopUpdate } = require('../utils/stroopFields');
 // Student/emailService/reportCacheInvalidator are required lazily inside the
 // post('save') hook below, not hoisted here: emailService pulls in
 // services/email -> config, which throws at require time if MONGO_URI isn't
@@ -143,6 +144,8 @@ const paymentSchema = new mongoose.Schema(
       ],
     },
 
+    amountStroops: { type: String, default: null, match: /^-?\d+$/ },
+
     // Correlation ID tying this payment to its full async lifecycle (polling
     // -> queue -> processor -> webhook -> SSE). Deterministically derived
     // from txHash — see utils/correlationId.js.
@@ -158,6 +161,7 @@ const paymentSchema = new mongoose.Schema(
         },
       ],
     },
+    feeAmountStroops: { type: String, default: null, match: /^-?\d+$/ },
     feeCategory: { type: String, default: null, index: true },
     feeValidationStatus: { type: String, enum: ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'], default: 'unknown' },
     excessAmount: {
@@ -171,6 +175,8 @@ const paymentSchema = new mongoose.Schema(
         },
       ],
     },
+
+    excessAmountStroops: { type: String, default: null, match: /^-?\d+$/ },
 
     // Underpaid Payment Reconciliation (Issue #1039)
     // Tracks reconciliation status and details for partial/underpaid payments
@@ -191,6 +197,7 @@ const paymentSchema = new mongoose.Schema(
           },
         ],
       },
+      appliedCreditStroops: { type: String, default: null, match: /^-?\d+$/ },
       creditAppliedAt: { type: Date, default: null },
       creditAppliedBy: { type: String, default: null },
       refundTxHash: { type: String, default: null },
@@ -273,6 +280,7 @@ const paymentSchema = new mongoose.Schema(
     // convert on-the-fly by ignoring fiatSnapshot.
     fiatSnapshot: {
       fiatAmount:   { type: Number, default: null },  // crypto_amount × fiatRate
+      fiatAmountStroops: { type: String, default: null, match: /^-?\d+$/ },
       fiatCurrency: { type: String, default: null },  // e.g. 'USD'
       fiatRate:     { type: Number, default: null },  // rate at confirmation
       rateSource:   { type: String, default: null },  // 'coingecko' | 'coinbase' | etc.
@@ -288,6 +296,20 @@ const paymentSchema = new mongoose.Schema(
 
 softDelete(paymentSchema);
 paymentSchema.plugin(tenantScope, { modelName: 'Payment' });
+paymentSchema.pre('validate', function syncPaymentStroops(next) {
+  for (const [source, target] of [['amount', 'amountStroops'], ['feeAmount', 'feeAmountStroops'], ['excessAmount', 'excessAmountStroops']]) {
+    if (this[source] !== null && this[source] !== undefined) this[target] = toStroopString(this[source]);
+  }
+  if (this.underpaidReconciliation?.appliedCredit != null) this.underpaidReconciliation.appliedCreditStroops = toStroopString(this.underpaidReconciliation.appliedCredit);
+  if (this.fiatSnapshot?.fiatAmount != null) this.fiatSnapshot.fiatAmountStroops = toStroopString(this.fiatSnapshot.fiatAmount);
+  next();
+});
+for (const hook of ['updateOne', 'updateMany', 'findOneAndUpdate']) {
+  paymentSchema.pre(hook, function syncPaymentUpdateStroops(next) {
+    syncStroopUpdate(this.getUpdate(), [['amount', 'amountStroops'], ['feeAmount', 'feeAmountStroops'], ['excessAmount', 'excessAmountStroops'], ['underpaidReconciliation.appliedCredit', 'underpaidReconciliation.appliedCreditStroops'], ['fiatSnapshot.fiatAmount', 'fiatSnapshot.fiatAmountStroops']]);
+    next();
+  });
+}
 
 // #1560 — Keep the derived lifecycle fields in lock-step with the
 // authoritative `status` on every write. This is the single place the

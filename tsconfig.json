@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node", "express", "jsonwebtoken"]
+  },
+  "include": [
+    "backend/src/utils/money.js",
+    "backend/src/utils/stellarAmount.js",
+    "backend/src/services/stellarService.js",
+    "backend/src/services/transactionPollingService.js",
+    "backend/src/controllers/paymentController.js",
+    "backend/src/middleware/auth.js",
+    "backend/src/config/index.js",
+    "backend/src/controllers/paymentPlanController.js",
+    "frontend/src/services/api.js",
+    "frontend/src/components/PaymentForm.jsx"
+  ],
+  "exclude": ["node_modules", "backend/node_modules", "frontend/node_modules"]
+}

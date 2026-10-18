@@ -22,8 +22,8 @@ const schema = Joi.object({
 
   // ── Required ────────────────────────────────────────────────────────────────
   MONGO_URI: Joi.string().required(),
-  JWT_SECRET: Joi.string().min(32).required().secret(),
-  RECEIPT_SIGNATURE_SECRET: Joi.string().required().secret(),
+  JWT_SECRET: Joi.string().min(32).required(),
+  RECEIPT_SIGNATURE_SECRET: Joi.string().required(),
 
   // ── Server ──────────────────────────────────────────────────────────────────
   PORT: Joi.number().integer().min(0).max(65535).default(5000),
@@ -80,7 +80,7 @@ const schema = Joi.object({
   SMTP_PORT: Joi.number().integer().min(0).max(65535).default(587),
   SMTP_SECURE: Joi.boolean().truthy("true").falsy("false").default(false),
   SMTP_USER: Joi.string().allow(null, "").default(null),
-  SMTP_PASS: Joi.string().allow(null, "").default(null).secret(),
+  SMTP_PASS: Joi.string().allow(null, "").default(null),
   SMTP_FROM: Joi.string().allow(null, "").default(null),
 })
   .unknown(true) // tolerate variables owned by other modules during migration
