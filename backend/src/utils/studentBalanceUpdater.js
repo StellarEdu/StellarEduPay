@@ -149,7 +149,16 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
     return null;
   }
 
-  // Aggregate all successful, non-suspicious payments for this student.
+  // Canonical balance formula (fix #1751):
+  //   Paid = Σ amount  where  status === 'SUCCESS'
+  //                           AND isSuspicious === false
+  //                           AND deletedAt  === null     (not soft-deleted)
+  //                           AND status !== 'REFUNDED'   (excluded via explicit allowlist above)
+  //
+  // "status === 'SUCCESS'" already excludes PENDING, FAILED, SUBMITTED, and
+  // REFUNDED in one predicate — REFUNDED payments can only reach that value
+  // if manually set, so we make the exclusion explicit and unambiguous here.
+  //
   // Summed via $toDecimal (#1123 money-representation fix) so MongoDB adds
   // the amounts in exact Decimal128 space instead of accumulating float
   // error across every installment for the life of the account.

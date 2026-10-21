@@ -494,6 +494,11 @@ async function verifyPayment(req, res, next) {
         // The cumulative total drives the status; per-payment underpaid rejection
         // is not applied here because a parent may be paying in installments.
         //
+        // Filters match the canonical formula (fix #1751): status:'SUCCESS',
+        // isSuspicious:false, deletedAt:null — identical to updateStudentBalance so
+        // the classification stored on the payment record is consistent with the
+        // student balance this tx will contribute to.
+        //
         // Summed via $toDecimal (#1123 money-representation fix) so the addition
         // happens in exact Decimal128 space inside MongoDB — a plain `$sum` over
         // the `amount` doubles would accumulate float error server-side, before
@@ -502,7 +507,7 @@ async function verifyPayment(req, res, next) {
         // space, so an installment plan that sums exactly to the fee is never
         // misclassified by a float epsilon.
         const prevAgg = await Payment.aggregate([
-          { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS' } },
+          { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS', isSuspicious: false } },
           { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
         ]);
         const prevTotal = prevAgg.length ? decimalFromMongo(prevAgg[0].total) : toMoney(0);

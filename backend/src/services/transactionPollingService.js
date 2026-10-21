@@ -18,6 +18,7 @@ const logger = require('../utils/logger').child('TransactionPollingService');
 const { deriveCorrelationId } = require('../utils/correlationId');
 const { captureFiatSnapshot } = require('./currencyConversionService');
 const { HorizonPollBudget, orderSchoolsByPriority } = require('./horizonPollBudget');
+const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const { drainingWalletEntries } = require('./walletRotationService');
 const { recordUnmatchedPayment } = require('./unmatchedPaymentService');
 const { isBeforeIngestStart } = require('../utils/ingestWindow');
@@ -187,16 +188,20 @@ async function processTransaction(tx, school, fencingToken) {
   const isConfirmed = isConfirmedOrAbove(confirmation.state);
   const confirmationStatus = confirmation.confirmationStatus;
 
-  // Calculate cumulative totals
+  // Calculate per-payment cumulative totals — used only for the payment record's
+  // feeValidationStatus / excessAmount UI fields.  Student balance is NOT written
+  // here; that is exclusively updateStudentBalance's job (fix #1751).
+  //
+  // We still count only confirmed+non-suspicious payments to keep the
+  // per-payment status labels consistent with the canonical formula.
   const previousPayments = await Payment.aggregate([
-    { $match: { schoolId, studentId: memo, confirmationStatus: 'confirmed', isSuspicious: false, deletedAt: null } },
+    { $match: { schoolId, studentId: memo, status: 'SUCCESS', isSuspicious: false, deletedAt: null } },
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
   const previousTotal = previousPayments.length ? previousPayments[0].total : 0;
   // Sum/diff in exact stroop space (#842) so an exact cumulative match is never
   // mis-flagged as underpaid/overpaid by a float rounding epsilon.
   const cumulativeTotal = stroopsToNumber(toStroops(previousTotal) + toStroops(paymentAmount));
-  const remaining = stroopsToNumber(toStroops(student.feeAmount) - toStroops(cumulativeTotal));
 
   // Route classification through the single canonical helper (#1766) so the
   // poller/stream path uses the same vocabulary as verify and sync: 'partial'
@@ -223,6 +228,9 @@ async function processTransaction(tx, school, fencingToken) {
     correlationId,
     amount: paymentAmount,
     feeAmount: student.feeAmount,
+    // feeValidationStatus and excessAmount are kept for the payment record so
+    // the UI can still show per-payment over/under flags; they do NOT drive
+    // the student balance (that is exclusively updateStudentBalance's job).
     feeValidationStatus: cumulativeStatus,
     excessAmount,
     status: isSuspicious ? 'FAILED' : (isConfirmed ? 'SUCCESS' : 'PENDING'),
@@ -249,17 +257,12 @@ async function processTransaction(tx, school, fencingToken) {
     await session.withTransaction(async () => {
       await Payment.create([paymentData], { session });
 
-      // Atomically update student balance if confirmed and not suspicious
+      // Fix #1751: Delegate all student balance writes to the single canonical
+      // function (updateStudentBalance) so this path never diverges from
+      // verifyPayment and syncPaymentsForSchool.  Only update when the payment
+      // will actually count in the canonical formula (SUCCESS, not suspicious).
       if (isConfirmed && !isSuspicious) {
-        await Student.findOneAndUpdate(
-          { schoolId, studentId: memo },
-          {
-            totalPaid: cumulativeTotal,
-            remainingBalance: Math.max(0, remaining),
-            feePaid: cumulativeTotal >= student.feeAmount,
-          },
-          { session }
-        );
+        await updateStudentBalance(schoolId, memo, { session });
       }
     });
 
@@ -879,15 +882,4 @@ module.exports = {
   pollAllSchools,
   pollSchoolTransactions,
   pollSchoolWithDrainingAddresses,
-  processTransaction,
-  isBeforeIngestStart,
-  // Exposed for testing
-  _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
-  getHorizonUnreachableSince: () => horizonUnreachableSince,
-  _getBudgetStats: () => pollBudget.getStats(),
-  _setPollBudget: (budget) => { pollBudget = budget; },
-  _runWithConcurrency: runWithConcurrency,
-  _gatherSchoolSignals: gatherSchoolSignals,
-  _resetBackoffState: () => {
-    consecutiveErrors = 0;
-    currentIntervalMs = SY
+  process

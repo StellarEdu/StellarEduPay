@@ -15,7 +15,6 @@
 
 const Student = require('../models/studentModel');
 const School  = require('../models/schoolModel');
-const Payment = require('../models/paymentModel');
 const ReminderLog = require('../models/reminderLogModel');
 const { sendFeeReminder, sendSmsReminder, sendWhatsAppReminder, verifySmtp } = require('./notificationService');
 const { isTwilioConfigured } = require('./smsService');
@@ -293,13 +292,18 @@ async function processReminders() {
       summary.eligible++;
 
       try {
-        // Fresh balance check — skip if student has actually paid in full
-        const paymentAgg = await Payment.aggregate([
-          { $match: { schoolId: school.schoolId, studentId: student.studentId, deletedAt: null } },
-          { $group: { _id: null, totalPaid: { $sum: '$amount' } } },
-        ]);
-        const totalPaid = paymentAgg.length ? paymentAgg[0].totalPaid : 0;
-        const remainingBalance = Math.max(0, (student.feeAmount || 0) - totalPaid);
+        // Fix #1751: Read the stored remainingBalance written by updateStudentBalance
+        // (the canonical writer) instead of re-aggregating all payments with an
+        // incorrect deletedAt-only filter that counted FAILED, PENDING, REFUNDED and
+        // suspicious payments and ignored creditAdjustments.
+        //
+        // updateStudentBalance is called by every payment pipeline (poller, sync,
+        // finalizer, verify) so student.remainingBalance is always up-to-date by the
+        // time any reminder tick runs.  Re-aggregating here would re-introduce the
+        // divergence this fix is eliminating.
+        const remainingBalance = student.remainingBalance != null
+          ? student.remainingBalance
+          : Math.max(0, (student.feeAmount || 0));
 
         if (remainingBalance <= 0) {
           summary.skipped++;

@@ -44,6 +44,7 @@ const {
 } = require("./paymentConfirmationStateMachine");
 const logger = require("../utils/logger").child("StellarService");
 const { getEngineForSchool } = require("./feeAdjustmentEngine");
+const { updateStudentBalance } = require("../utils/studentBalanceUpdater");
 const { recordUnmatchedPayment } = require("./unmatchedPaymentService");
 const { PAYMENT_TYPES } = require("./paymentService");
 
@@ -874,4 +875,3 @@ async function syncPaymentsForSchool(school) {
         });
         studentDeleted = Boolean(student);
         if (studentDeleted) {
-          logger.warn('Transaction matched a soft-deleted student — recording for manual
