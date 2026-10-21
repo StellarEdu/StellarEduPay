@@ -17,6 +17,12 @@
  * `*Stroops` naming convention (e.g. `amountStroops`, `feeAmountStroops`).
  * Use `toStroops`/`fromStroops` for conversion and `sumStroops` for exact
  * aggregation so report totals equal the sum of their line items exactly.
+ *
+ * #1757: every incoming-amount path (verify, manual sync, poller) must parse
+ * Horizon decimal strings through `toStroops` — never `parseFloat` and never
+ * the private SDK `Operation._fromXDRAmount`. `parseAmount` is the single
+ * helper that returns both the exact stroops and the display amount derived
+ * from them, so all paths persist identical values for the same operation.
  */
 
 const DECIMALS = 7;
@@ -151,6 +157,21 @@ function normalizeToNumber(rawAmount) {
   }
 }
 
+/**
+ * Parse a raw Horizon amount into the canonical persisted shape used by every
+ * incoming-amount path (#1757): the exact integer stroops plus the display
+ * amount derived from those stroops. This replaces the old `normalizeAmount`
+ * (which round-tripped through a float and the private SDK
+ * `Operation._fromXDRAmount`) and the inline `parseFloat` calls in sync.
+ *
+ * @param {string|number|bigint} rawAmount
+ * @returns {{ amountStroops: bigint, amount: number }}
+ */
+function parseAmount(rawAmount) {
+  const amountStroops = toStroops(rawAmount);
+  return { amountStroops, amount: stroopsToNumber(amountStroops) };
+}
+
 module.exports = {
   DECIMALS,
   STROOPS_PER_UNIT,
@@ -162,4 +183,5 @@ module.exports = {
   compareAmounts,
   amountsEqual,
   normalizeToNumber,
+  parseAmount,
 };

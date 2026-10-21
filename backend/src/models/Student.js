@@ -58,6 +58,33 @@ const studentSchema = new mongoose.Schema(
       enum: ['active', 'inactive', 'graduated'],
       default: 'active',
     },
+    // Fee entries carry an explicit asset so amounts are never ambiguous.
+    // Existing records without an asset default to XLM.
+    fees: [
+      {
+        feeStructure: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'FeeStructure',
+        },
+        amount: {
+          type: Number,
+        },
+        feeAsset: {
+          type: String,
+          trim: true,
+          uppercase: true,
+          default: 'XLM',
+        },
+        status: {
+          type: String,
+          enum: ['pending', 'paid', 'waived'],
+          default: 'pending',
+        },
+        paidAt: {
+          type: Date,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );

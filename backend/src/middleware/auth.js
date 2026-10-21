@@ -1,12 +1,12 @@
 'use strict';
 
-const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger').child('AuthMiddleware');
 const { logAudit } = require('../services/auditService');
 const { get, set } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { hashIp } = require('../utils/piiRedaction');
+const tokenService = require('../services/tokenService');
 
 // ── IP failure tracking constants ──────────────────────────────────────────────
 const IP_FAIL_WINDOW = 300;  // 5 minutes (seconds)
@@ -127,12 +127,11 @@ async function requireAdminAuth(req, res, next) {
   }
 
   try {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET is not set.', code: 'AUTH_MISCONFIGURED' });
-    }
+    const decoded = tokenService.verify(token);
 
-    const decoded = jwt.verify(token, secret);
+    if (decoded.sid && await tokenService.isSessionRevoked(decoded.sid)) {
+      return handleAuthFailure(req, res, ip, 'Session has been revoked.', 'SESSION_REVOKED', { countTowardsBlock: false });
+    }
 
     // Accept the old role:'admin' shape AND the new roles:['super_admin'] shape
     const isSuperAdmin =
@@ -160,7 +159,7 @@ async function requireAdminAuth(req, res, next) {
 // Usage: router.get('/students', requireSchoolAuth(['owner', 'staff']), handler)
 //
 // Rules:
-//  • JWT must be valid and signed with JWT_SECRET.
+//  • JWT must be valid and signed with the pinned algorithm/issuer/audience.
 //  • Token schoolId must match X-School-ID request header (tenant isolation).
 //  • If allowedRoles is non-empty, the token's roles array must contain at least
 //    one of them.
@@ -206,11 +205,7 @@ function requireSchoolAuth(allowedRoles = []) {
 
     let decoded;
     try {
-      const secret = process.env.JWT_SECRET;
-      if (!secret) {
-        return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET is not set.', code: 'AUTH_MISCONFIGURED' });
-      }
-      decoded = jwt.verify(token, secret);
+      decoded = tokenService.verify(token);
     } catch (err) {
       if (err.name === 'TokenExpiredError') {
         return handleAuthFailure(req, res, ip, 'Token has expired.', 'TOKEN_EXPIRED', { countTowardsBlock: false });
@@ -218,67 +213,33 @@ function requireSchoolAuth(allowedRoles = []) {
       return handleAuthFailure(req, res, ip, 'Invalid token.', 'INVALID_AUTH_TOKEN');
     }
 
-    // Super-admin bypass — break-glass access to all tenants
-    const isSuperAdmin =
-      decoded.role === 'admin' ||
-      (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
-
-    if (!isSuperAdmin) {
-      // Tenant scope: non-super-admin tokens MUST have a schoolId
-      if (!decoded.schoolId) {
-        return res.status(403).json({
-          error: 'Forbidden. Token is not scoped to a school.',
-          code: 'MISSING_TENANT_CLAIM',
-        });
-      }
-
-      // Token schoolId must match the requested school.
-      // Accept schoolId from X-School-ID header, URL param, or route param.
-      // URL param support enables EventSource (which cannot send custom headers).
-      const requestedSchoolId = req.headers['x-school-id'] || req.query?.schoolId || req.params?.schoolId;
-      if (requestedSchoolId && decoded.schoolId !== requestedSchoolId) {
-        return res.status(403).json({
-          error: 'Forbidden. Token schoolId does not match the requested school.',
-          code: 'TENANT_MISMATCH',
-        });
-      }
-
-      // Role check
-      if (allowedRoles.length > 0) {
-        const userRoles = Array.isArray(decoded.roles) ? decoded.roles : [];
-        const hasRole = allowedRoles.some((r) => userRoles.includes(r));
-        if (!hasRole) {
-          return res.status(403).json({
-            error: `Forbidden. Required role: ${allowedRoles.join(' or ')}.`,
-            code: 'INSUFFICIENT_ROLE',
-          });
-        }
-      }
-
-      // Set req.schoolId from token — authoritative source for downstream use
-      req.schoolId = decoded.schoolId;
+    if (decoded.sid && await tokenService.isSessionRevoked(decoded.sid)) {
+      return handleAuthFailure(req, res, ip, 'Session has been revoked.', 'SESSION_REVOKED', { countTowardsBlock: false });
     }
 
-    // #1356 — REQUIRE_MFA enforcement: a token minted while MFA setup was
-    // outstanding may only reach the MFA setup/verify/logout endpoints until
-    // the admin completes setup (see handleLogin/verifyAndEnableUserMfa).
-    if (decoded.mfaSetupPending && !MFA_SETUP_ALLOWED_PATHS.has(req.path)) {
-      return res.status(403).json({
-        error: 'MFA setup is required before accessing this resource.',
-        code: 'MFA_SETUP_REQUIRED',
-      });
+    // Tenant isolation: token schoolId must match X-School-ID header
+    const headerSchoolId = req.headers['x-school-id'];
+    const isEnvSuperAdmin = decoded.role === 'admin';
+    if (!isEnvSuperAdmin && headerSchoolId && decoded.schoolId && String(decoded.schoolId) !== String(headerSchoolId)) {
+      return handleAuthFailure(req, res, ip, 'Token school does not match requested school.', 'TENANT_MISMATCH');
     }
 
-    // req.user is the authoritative identity for downstream handlers:
-    // userId, schoolId, roles, mfaEnabled, mfaSetupPending, exp.
+    // Role check
+    if (Array.isArray(allowedRoles) && allowedRoles.length > 0 && !isEnvSuperAdmin) {
+      const tokenRoles = Array.isArray(decoded.roles) ? decoded.roles : [];
+      const hasRole = tokenRoles.some((r) => allowedRoles.includes(r));
+      if (!hasRole) {
+        return res.status(403).json({ error: 'Forbidden. Insufficient role.', code: 'INSUFFICIENT_ROLE' });
+      }
+    }
+
     req.user = decoded;
-    req.admin = decoded; // alias so downstream code works regardless of which middleware ran
+    req.admin = decoded;
     next();
   };
 }
 
-// Endpoints reachable with a restricted mfaSetupPending token — just enough
-// to complete MFA enrollment or abandon the session.
-const MFA_SETUP_ALLOWED_PATHS = new Set(['/mfa/user/setup', '/mfa/user/verify']);
-
-module.exports = { requireAdminAuth, requireSchoolAuth };
+module.exports = {
+  requireAdminAuth,
+  requireSchoolAuth,
+};

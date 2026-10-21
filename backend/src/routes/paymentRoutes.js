@@ -246,50 +246,37 @@ router.post("/finalize", requireSchoolAuth(['owner', 'staff']), auditContext, fi
 router.post("/dlq/:id/retry", requireSchoolAuth(['owner', 'staff']), auditContext, retryDeadLetterJob);
 // Super-admin retry across schools; school users may only retry their own jobs.
 router.post("/dlq/admin/:id/retry", requireAdminAuth, auditContext, retryDeadLetterJob);
+router.get("/queue/:jobId", requireSchoolAuth(['owner', 'staff']), getQueueJobStatus);
 
-router.get("/balance/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentBalance);
-router.get(
-  "/instructions/:studentId",
-  validateStudentIdParam,
-  validatePaymentInstructionsQuery,
-  getPaymentInstructions,
-);
-router.get("/receipt/:txHash", generateReceipt);
-router.get("/queue/:txHash", requireSchoolAuth(['owner', 'staff', 'read_only']), getQueueJobStatus);
+// Refund listing routes must be registered before the parameterised
+// "/:txHash/*" routes so they are not shadowed (#1594).
+router.get("/refunds/school/list", requireSchoolAuth(['owner', 'staff', 'read_only']), getSchoolRefunds);
 
-// Placeholder correction must be registered before the catch-all "/:studentId"
-// GET and before any "/:paymentId" routes so the txHash path is not shadowed.
-router.patch(
-  "/:txHash/correct-placeholder",
-  validateTxHashParam,
-  requireSchoolAuth(['owner', 'staff']),
-  auditContext,
-  correctPlaceholderPayment,
-);
+// Reconciliation reporting routes must also precede "/:txHash/*".
+router.get("/reconciliation/reports", requireSchoolAuth(['owner', 'staff', 'read_only']), getReconciliationReports);
+router.post("/reconciliation/report", requireSchoolAuth(['owner', 'staff']), auditContext, generateSchoolReconciliationReport);
 
-router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentPayments);
-
-router.post("/:paymentId/lock", requireSchoolAuth(['owner', 'staff']), auditContext, lockPaymentForUpdate);
-router.post("/:paymentId/unlock", requireSchoolAuth(['owner', 'staff']), auditContext, unlockPayment);
-
-// Registered BEFORE "/:txHash/status" on purpose: Express matches in order, so
-// the parameterised route would otherwise capture "bulk" as a txHash.
+// Admin status patches
 router.patch("/bulk/status", requireSchoolAuth(['owner', 'staff']), auditContext, bulkUpdatePaymentStatus);
-router.patch("/:txHash/status", requireSchoolAuth(['owner', 'staff']), auditContext, updatePaymentStatus);
-router.patch("/:txHash/suspicion-review", requireSchoolAuth(['owner', 'staff']), auditContext, reviewSuspiciousPayment);
-router.patch("/:txHash/correct-placeholder", requireSchoolAuth(['owner', 'staff']), auditContext, correctPlaceholderPayment);
+router.patch("/:txHash/status", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, updatePaymentStatus);
+router.patch("/:txHash/suspicion-review", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, reviewSuspiciousPayment);
+router.patch("/:txHash/correct-placeholder", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, correctPlaceholderPayment);
 
-router.post("/:txHash/refund", requireSchoolAuth(['owner', 'staff']), auditContext, initiatePaymentRefund);
+// Refund lifecycle
+router.post("/:txHash/refund", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, initiatePaymentRefund);
 router.post("/refunds/:refundId/approve", requireSchoolAuth(['owner', 'staff']), auditContext, approvePaymentRefund);
 router.post("/refunds/:refundId/reject", requireSchoolAuth(['owner', 'staff']), auditContext, rejectPaymentRefund);
 router.post("/refunds/:refundId/complete", requireSchoolAuth(['owner', 'staff']), auditContext, completePaymentRefund);
-router.get("/:txHash/refunds", requireSchoolAuth(['owner', 'staff', 'read_only']), getPaymentRefunds);
-router.get("/refunds/school/list", requireSchoolAuth(['owner', 'staff', 'read_only']), getSchoolRefunds);
+router.get("/:txHash/refunds", requireSchoolAuth(['owner', 'staff', 'read_only']), validateTxHashParam, getPaymentRefunds);
 
-// Receipt verification is registered at "/receipts/:receiptId/verify" near the
-// top of this file (#1594); "/verify/:receiptId" was shadowed by "/verify/:txHash".
+// Payment locking
+router.post("/:paymentId/lock", requireSchoolAuth(['owner', 'staff']), auditContext, lockPaymentForUpdate);
+router.post("/:paymentId/unlock", requireSchoolAuth(['owner', 'staff']), auditContext, unlockPayment);
 
-router.get("/reconciliation/reports", requireSchoolAuth(['owner', 'staff', 'read_only']), getReconciliationReports);
-router.post("/reconciliation/report", requireSchoolAuth(['owner', 'staff']), auditContext, generateSchoolReconciliationReport);
+// Receipt generation
+router.post("/:txHash/receipt", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, generateReceipt);
+
+// Student-scoped payment listing
+router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentPayments);
 
 module.exports = router;

@@ -1,0 +1,21 @@
+# CODEOWNERS for handshake-org/hsd
+#
+# Owners are requested for review on PRs touching the paths below.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+*                                   @handshake-org/maintainers
+
+# Backend / payments
+/backend/                           @handshake-org/maintainers
+/backend/src/routes/paymentRoutes.js @handshake-org/maintainers
+/backend/src/services/              @handshake-org/maintainers
+
+# Frontend
+/frontend/                          @handshake-org/maintainers
+
+# Deploy / infrastructure
+/deploy/                            @handshake-org/maintainers
+/.github/workflows/                 @handshake-org/maintainers
+/Dockerfile                         @handshake-org/maintainers
+/docker-compose.yml                 @handshake-org/maintainers

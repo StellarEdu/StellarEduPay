@@ -12,6 +12,8 @@
 #   3. A full field-level content fingerprint matches before vs after, so a
 #      dropped/garbled/swapped field or a corrupted subset of documents is
 #      caught even when the total count is unchanged.
+#   4. The seed step actually inserted a realistic fixture (issue #1734): a
+#      metadata-only archive is caught before the backup is even taken.
 #
 # Usage:
 #   MONGO_URI=mongodb://localhost:27017/stellaredupay \
@@ -27,6 +29,10 @@ DB_NAME="${DB_NAME:-stellaredupay}"
 TEST_BACKUP_DIR="$(mktemp -d)"
 BACKEND_INTERNAL_URL="${BACKEND_INTERNAL_URL:-http://localhost:5000}"
 BACKUP_NOTIFY_TOKEN="${BACKUP_NOTIFY_TOKEN:-}"
+# Minimum number of documents the seed fixture must produce. A healthy dump of
+# this fixture is well above backup.sh's MIN_BACKUP_SIZE floor; a metadata-only
+# archive (378 bytes) means the seed wrote nothing or the wrong database.
+MIN_SEED_DOCUMENTS="${MIN_SEED_DOCUMENTS:-100}"
 
 cleanup() { rm -rf "${TEST_BACKUP_DIR}"; }
 trap cleanup EXIT
@@ -54,6 +60,16 @@ index_manifest() {
   " "${MONGO_URI}" 2>/dev/null
 }
 
+# Per-collection document counts as "collection|count", sorted by name.
+collection_counts() {
+  mongosh --quiet --eval "
+    const database = db.getSiblingDB('${DB_NAME}');
+    database.getCollectionNames().sort().forEach(function (name) {
+      print(name + '|' + database.getCollection(name).countDocuments());
+    });
+  " "${MONGO_URI}" 2>/dev/null
+}
+
 # Full field-level content fingerprint: canonical extended JSON of every
 # document (sorted by _id, within collections sorted by name), hashed. Any
 # changed/dropped/swapped field value flips the hash — no sampling gaps.
@@ -69,8 +85,28 @@ content_fingerprint() {
   " "${MONGO_URI}" 2>/dev/null | sha256sum | cut -d' ' -f1
 }
 
+echo "=== [0/4] Seeding realistic fixture and asserting document counts ==="
+# Seed via the shared fixture script so the dump is large enough to clear
+# backup.sh's MIN_BACKUP_SIZE floor (issue #1734). The seed script must target
+# the same database/URI we back up below.
+if [[ -f "$(dirname "$0")/seed-test-data.js" ]]; then
+  MONGO_URI="${MONGO_URI}" DB_NAME="${DB_NAME}" \
+    mongosh --quiet "${MONGO_URI}" "$(dirname "$0")/seed-test-data.js" >/dev/null
+else
+  echo "    WARNING: seed-test-data.js not found — relying on pre-seeded data" >&2
+fi
+
+SEED_COUNT="$(count_documents)"
+echo "    Seeded documents: ${SEED_COUNT} (minimum ${MIN_SEED_DOCUMENTS})"
+if [[ "${SEED_COUNT}" -lt "${MIN_SEED_DOCUMENTS}" ]]; then
+  echo "❌  Seed step inserted only ${SEED_COUNT} documents (expected >= ${MIN_SEED_DOCUMENTS})." >&2
+  echo "    The seed wrote nothing or targeted the wrong database/URI (${MONGO_URI})." >&2
+  exit 1
+fi
+
 echo "=== [1/4] Fingerprinting database before backup ==="
 BEFORE_COUNT="$(count_documents)"
+collection_counts > "${TEST_BACKUP_DIR}/counts-before.txt"
 index_manifest > "${TEST_BACKUP_DIR}/indexes-before.txt"
 BEFORE_CONTENT="$(content_fingerprint)"
 echo "    Documents:   ${BEFORE_COUNT}"
@@ -100,6 +136,7 @@ MONGO_URI="${MONGO_URI}" BACKUP_FILE="${BACKUP_FILE}" DROP="true" \
 
 echo "=== [4/4] Verifying restored database against pre-backup fingerprint ==="
 AFTER_COUNT="$(count_documents)"
+collection_counts > "${TEST_BACKUP_DIR}/counts-after.txt"
 index_manifest > "${TEST_BACKUP_DIR}/indexes-after.txt"
 AFTER_CONTENT="$(content_fingerprint)"
 echo "    Documents:   ${AFTER_COUNT}"
@@ -131,6 +168,22 @@ if [[ "${BEFORE_CONTENT}" != "${AFTER_CONTENT}" ]]; then
   echo "    or swapped during the round trip (content hash differs)." >&2
   FAILED=1
 fi
+
+# Check 4 — per-collection counts must match exactly.
+if ! diff -q "${TEST_BACKUP_DIR}/counts-before.txt" "${TEST_BACKUP_DIR}/counts-after.txt" >/dev/null; then
+  echo "❌  Per-collection document counts differ after restore:" >&2
+  diff "${TEST_BACKUP_DIR}/counts-before.txt" "${TEST_BACKUP_DIR}/counts-after.txt" \
+    | sed 's/^/      /' >&2
+  FAILED=1
+fi
+
+# Summary table of per-collection counts (before vs after).
+echo ""
+echo "    Per-collection counts (before | after):"
+while IFS='|' read -r coll before_n; do
+  after_n="$(grep -F "${coll}|" "${TEST_BACKUP_DIR}/counts-after.txt" | cut -d'|' -f2 || echo '?')"
+  printf '      %-40s %8s | %8s\n' "${coll}" "${before_n}" "${after_n}"
+done < "${TEST_BACKUP_DIR}/counts-before.txt"
 
 echo ""
 if [[ "${FAILED}" -eq 0 ]]; then
