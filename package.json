@@ -1,6 +1,6 @@
 {
   "name": "stellaredupay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "scripts": {
     "check:syntax": "node ./scripts/check-syntax.js",
     "check:i18n": "node ./scripts/check-i18n-coverage.js",
