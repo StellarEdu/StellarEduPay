@@ -1,0 +1,1021 @@
+{
+  "version": 1,
+  "generatedBy": "scripts/route-manifest.js",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/academic-periods",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/academic-periods",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/academic-periods/:periodId",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/academic-periods/:periodId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/academic-periods/:periodId/report",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/academic-periods/:periodId/student-fees/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/academic-periods/current",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/academic-periods/rollover",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/academic-periods/student-fees",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/academic-periods/student-fees/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/health/details",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/log-level",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/outbox/dead-letter",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/admin/outbox/dead-letter/:eventId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/outbox/dead-letter/:eventId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/outbox/dead-letter/:eventId/replay",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/outbox/stats",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/payment-limits",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/admin/payment-limits",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/admin/payment-limits/:schoolId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/pending-verifications/:id",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/pending-verifications/:id/retry",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/pending-verifications/backlog",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/pending-verifications/dead-letter",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/retry-queue/failed",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/admin/retry-queue/failed/:jobId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/retry-queue/failed/:jobId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/retry-queue/failed/:jobId/retry",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/retry-queue/stats",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/streaming",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/users",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/users",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/admin/users/:userId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/users/:userId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/admin/users/:userId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/webhooks/:id/replay",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/webhooks/dlq",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/webhooks/dlq/:id/retry",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/webhooks/v1-endpoints",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/webhooks/v1-endpoints/notify",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/class-completion",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/unpaid-cohorts",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/volume-trend",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/anchor/anchors",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/anchor/initiate",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/anchor/status/:anchorTxId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit-logs",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit-logs/recent",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit/export",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit/recent",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/audit/verify-chain",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/change-password",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/backup-codes/regenerate",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/disable",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/setup",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/user/disable",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/user/setup",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/user/verify",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/mfa/verify",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/refresh",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/sessions",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/auth/sessions/:sessionId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/consistency",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/csp-report",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/disputes",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/disputes",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/disputes/:id",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/disputes/:id/evidence",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/disputes/:id/resolve",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/email-deliveries/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/email-provider-webhook/callback",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/email/suppressions",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/email/suppressions",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/email/suppressions/:email",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/email/webhooks/:provider",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/fee-adjustments",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/fee-adjustments",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fee-adjustments/:id",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/fee-adjustments/:id",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/fee-adjustments/:id/affected-count",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/fee-adjustments/:id/apply",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/fee-adjustments/dry-run",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/fees",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/fees",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fees/:className",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/fees/:className",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/fees/:className",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/payment-plans/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payment-plans/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payment-plans/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/payment-plans/:studentId/installment/:installmentIndex",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/:paymentId/lock",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/:paymentId/unlock",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/payments/:txHash/correct-placeholder",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/:txHash/refund",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/:txHash/refunds",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/payments/:txHash/status",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/payments/:txHash/suspicion-review",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/accepted-assets",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/balance/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/payments/bulk/status",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/dlq",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/dlq/:id/retry",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/events",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/finalize",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/instructions/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/intent",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/limits",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/overpayments",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/pending",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/queue/:txHash",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/rates",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/receipt/:txHash",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/receipts/:receiptId/verify",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/reconciliation/report",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/reconciliation/reports",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/refunds/:refundId/approve",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/refunds/:refundId/complete",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/refunds/:refundId/reject",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/refunds/school/list",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/retry-queue",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/stuck",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/submit",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/summary",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/suspicious",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/sync",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/sync/status",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/payments/verify",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/verify/:receiptId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/verify/:txHash",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/receipts/:txHash",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/reminders/opt-out",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reminders/preview",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/reminders/resubscribe",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/reminders/trigger",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reminders/unsubscribe",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/reminders/unsubscribe",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/dashboard",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/jobs/:jobId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/jobs/:jobId/download",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/schools",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/schools",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/schools/:schoolId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/schools/:schoolId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schools/:schoolId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schools/:schoolId/activate",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schools/:schoolId/deactivate",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/schools/:schoolId/settings",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schools/:schoolId/settings",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/schools/:schoolId/settings/:key",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/schools/:schoolId/stellar-address",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/schools/:schoolId/users",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/schools/:schoolId/users",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/schools/:schoolId/users/:userId",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/schools/:schoolId/webhook-secret",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/schools/:slug/webhooks",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/source-rules",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/source-rules",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/source-rules/:id",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/students/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/students/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/students/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/credit-adjustments",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/:studentId/fee-history",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/:studentId/payments/audit",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/reconcile",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/reminders/resubscribe",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/reset-payment",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/restore",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/bulk",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/export",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/overdue",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/public/:studentId",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/students/summary",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/superadmin/metrics",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/superadmin/schools",
+      "middleware": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/superadmin/schools/:schoolId/quota",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/users/request-password-reset",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/users/reset-password",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/users/set-password",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/webhook-deliveries",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhook-deliveries/:id/replay",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/webhook-endpoints",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhook-endpoints",
+      "middleware": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/webhook-endpoints/:id",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/webhook-endpoints/:id",
+      "middleware": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/webhook-endpoints/:id",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhook-endpoints/:id/rotate-secret",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/webhook-endpoints/:id/test",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "middleware": []
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "middleware": []
+    }
+  ]
+}

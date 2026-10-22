@@ -12,6 +12,7 @@ replicas:
 
 patchesStrategicMerge:
   - backend-patch.yaml
+  - disable-backups-patch.yaml
 
 commonLabels:
   environment: canary

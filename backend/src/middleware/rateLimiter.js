@@ -153,7 +153,7 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
 
     if (count > max) {
       res.set('Retry-After', resetSeconds);
-      return res.status(429).json(message);
+      return res.status(429).json({ ...message, retryAfter: resetSeconds });
     }
 
     next();
@@ -176,13 +176,10 @@ const SYNC_INTERVAL_MS = parseInt(
   10,
 );
 const SYNC_RL_MSG = {
-  success: false,
-  error: {
-    code: 'SYNC_RATE_LIMITED',
-    message:
-      'A manual sync was already requested for this school recently. ' +
-      'Background polling continues regardless; retry after the interval shown in Retry-After.',
-  },
+  error:
+    'A manual sync was already requested for this school recently. ' +
+    'Background polling continues regardless; retry after the interval shown in Retry-After.',
+  code: 'SYNC_RATE_LIMITED',
 };
 const syncLimiter = rl(SYNC_INTERVAL_MS, 1, SYNC_RL_MSG, {
   name: 'rl:sync',
@@ -195,15 +192,109 @@ const reminderTriggerLimiter = rl(
   { error: 'Too many reminder requests. Please wait.', code: 'RATE_LIMIT_EXCEEDED' },
   { name: 'rl:reminders', keyGenerator: (req) => `reminders:${req.schoolId || 'unknown-tenant'}` }
 );
+const BULK_IMPORT_RATE_LIMIT = parseInt(process.env.BULK_IMPORT_RATE_LIMIT, 10) || 5;
 const bulkImportLimiter    = rl(
   60 * 60 * 1000,
-  parseInt(process.env.BULK_IMPORT_RATE_LIMIT, 10) || 5,
-  { error: 'Maximum 5 bulk imports per hour.', code: 'RATE_LIMIT_EXCEEDED' },
+  BULK_IMPORT_RATE_LIMIT,
+  { error: `Maximum ${BULK_IMPORT_RATE_LIMIT} bulk imports per hour.`, code: 'RATE_LIMIT_EXCEEDED' },
   { name: 'rl:bulkimport', keyGenerator: (req) => req.schoolId || 'unknown-tenant' },
+);
+
+// ── Account / credential endpoint limiters (#1776) ──────────────────────────
+//
+// The credential endpoints (set-password, request-password-reset,
+// reset-password) are unauthenticated and the global limiter (100/min per IP)
+// is far too generous for them. They get dedicated limiters:
+//
+//  - resetRequestEmailLimiter: 5/hour per normalised email address, so a
+//    single principal's inbox cannot be flooded and the school's email
+//    provider quota / sender reputation is protected.
+//  - resetRequestIpLimiter: 20/hour per IP, bounding a single source that
+//    cycles through many addresses.
+//  - credentialIpLimiter: 10 per 15 minutes per IP for set-password and
+//    reset-password, bounding token guessing and password-set abuse.
+//
+// The email key is normalised (trimmed + lowercased) so that trivial
+// variations of the same address share one bucket. If the body has no usable
+// email string, the limiter falls back to the IP so the request still gets a
+// bucket rather than sharing a global one.
+const RESET_REQUEST_MSG = {
+  error: 'Too many password reset requests. Please try again later.',
+  code: 'RATE_LIMIT_EXCEEDED',
+};
+
+function _normaliseEmailKey(req) {
+  const raw = req.body && req.body.email;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+const resetRequestEmailLimiter = rl(
+  60 * 60 * 1000,
+  parseInt(process.env.RESET_REQUEST_EMAIL_RATE_LIMIT || '5', 10),
+  RESET_REQUEST_MSG,
+  {
+    name: 'rl:reset-email',
+    keyGenerator: (req) => {
+      const email = _normaliseEmailKey(req);
+      return email ? `reset-email:${email}` : `reset-email-ip:${req.ip}`;
+    },
+  }
+);
+
+const resetRequestIpLimiter = rl(
+  60 * 60 * 1000,
+  parseInt(process.env.RESET_REQUEST_IP_RATE_LIMIT || '20', 10),
+  RESET_REQUEST_MSG,
+  { name: 'rl:reset-ip' }
+);
+
+const credentialIpLimiter = rl(
+  15 * 60 * 1000,
+  parseInt(process.env.CREDENTIAL_IP_RATE_LIMIT || '10', 10),
+  {
+    error: 'Too many password requests. Please try again later.',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+  { name: 'rl:credential-ip' }
 );
 
 // GET /api/students/public/:studentId is a public endpoint that returns student info.
 // Without strict rate limiting, this can be used to enumerate student rosters.
-// Limit to 10 requests per IP per minute AND per school (dual key) with ale
+// Limit to 10 requests per IP per minute AND per school (dual key) with alerting.
+const publicStudentLimiter = rl(
+  60 * 1000,
+  10,
+  { error: 'Too many student lookup requests. Please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
+  { 
+    name: 'rl:publicstudent',
+    keyGenerator: (req) => {
+      // Dual key: IP + school to prevent enumeration across different schools from same IP
+      const schoolId = req.schoolId || req.headers['x-school-id'] || 'unknown';
+      return `${req.ip}:${schoolId}`;
+    }
+  },
+);
 
-/* … truncated 870 chars — edit only what you need near the top … */
+module.exports = {
+  rl,
+  RL_MSG,
+  generalLimiter,
+  strictLimiter,
+  syncLimiter,
+  verifyLimiter,
+  reminderTriggerLimiter,
+  bulkImportLimiter,
+  resetRequestEmailLimiter,
+  resetRequestIpLimiter,
+  credentialIpLimiter,
+  publicStudentLimiter,
+  // Exported for tests only — the shared decision function both the Redis
+  // and in-memory paths call, plus the fallback-store internals.
+  _bucketInfo,
+  _slidingWindowCount,
+  _createFallbackStore,
+  _inMemoryBucketCount,
+  _inMemoryPreviousCount,
+};

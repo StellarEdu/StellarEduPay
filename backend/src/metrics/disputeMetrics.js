@@ -162,7 +162,7 @@ async function refreshOpenDisputeGauge() {
     const byStatus = await Dispute.aggregate([
       { $match: { status: { $in: OPEN_STATUSES } } },
       { $group: { _id: { schoolId: '$schoolId', status: '$status' }, count: { $sum: 1 } } },
-    ]);
+    ]).option({ _bypassTenantScope: true }); // cross-tenant gauge (tenantScope plugin)
 
     disputeOpenTotal.reset();
     for (const { _id, count } of byStatus) {
@@ -179,7 +179,7 @@ async function refreshOpenDisputeGauge() {
         },
       },
       { $group: { _id: '$schoolId', count: { $sum: 1 } } },
-    ]);
+    ]).option({ _bypassTenantScope: true });
 
     disputeSlaAtRiskTotal.reset();
     for (const { _id, count } of atRisk) {

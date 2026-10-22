@@ -51,7 +51,7 @@ async function verifySmtp() {
  * @param {string} [opts.assetCode]   - Asset code for amount display, e.g. 'XLM' or 'USDC'
  * @param {string} [opts.localCurrency] - ISO 4217 fiat currency for fiat equivalent, e.g. 'NGN'
  */
-async function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address, supportContact, locale, timezone, assetCode, localCurrency }) {
+async function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, portalUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address, supportContact, locale, timezone, assetCode, localCurrency }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
   // Issue #1587: use the school's configured locale for translated labels.
   const resolvedLocale = locale || 'en';
@@ -100,6 +100,8 @@ async function buildReminderEmail({ studentName, studentId, className, feeAmount
     urgency: esc.urgency,
     deadline: deadlineStr || '',
     unsubscribeUrl: unsubscribeUrl || '',
+    // #1637: per-family parent portal magic link (opt-in, PARENT_PORTAL_EMAIL_LINKS)
+    portalUrl: portalUrl || '',
     logoUrl: logoUrl || '',
     primaryColor: primaryColor || '#1a56db',
     schoolAddress: address || '',
@@ -151,9 +153,28 @@ async function sendFeeReminder(opts) {
     }
   }
 
+  // #1637: include a short-lived parent portal link so parents can check
+  // balances and receipts themselves. Opt-in; a failure never blocks the email.
+  let portalUrl = '';
+  if (process.env.PARENT_PORTAL_EMAIL_LINKS === 'true' && opts.schoolId && opts.studentId) {
+    try {
+      const { issueParentLink } = require('./parentPortalService');
+      const link = await issueParentLink({
+        schoolId: opts.schoolId,
+        studentIds: [opts.studentId],
+        ttlDays: parseInt(process.env.PARENT_PORTAL_EMAIL_LINK_TTL_DAYS, 10) || 14,
+        createdBy: 'system:reminder',
+      });
+      portalUrl = link.url;
+    } catch (err) {
+      logger.warn('Failed to issue parent portal link for reminder', { schoolId: opts.schoolId, error: err.message });
+    }
+  }
+
   const { subject, text, html } = await buildReminderEmail({
     ...opts,
     unsubscribeUrl,
+    portalUrl,
     logoUrl: school?.logoUrl || '',
     primaryColor: school?.primaryColor || '#1a56db',
     address: school?.address || '',

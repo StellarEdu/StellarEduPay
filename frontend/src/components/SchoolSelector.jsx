@@ -25,10 +25,12 @@ export default function SchoolSelector({ user }) {
       setLoading(true);
       listSchools()
         .then((res) => {
-          setSchools(res.data.schools || []);
+          // GET /api/schools returns a bare array; accept the wrapped shape too.
+          const list = Array.isArray(res.data) ? res.data : res.data?.schools ?? [];
+          setSchools(list);
           // If no school selected yet, select the first one
-          if (!stored && res.data.schools?.length > 0) {
-            const firstSchool = res.data.schools[0].schoolId;
+          if (!stored && list.length > 0) {
+            const firstSchool = list[0].schoolId;
             setSelectedSchool(firstSchool);
             localStorage.setItem('selectedSchoolId', firstSchool);
           }

@@ -18,6 +18,7 @@ const config = require('../config');
  * `stellarNetwork` value instead of the baked-in env var.
  */
 function getPublicConfig(req, res) {
+  res.set('Cache-Control', 'public, max-age=60');
   res.json({
     stellarNetwork: config.STELLAR_NETWORK,
     // The frontend may use this to validate it is talking to the correct backend.

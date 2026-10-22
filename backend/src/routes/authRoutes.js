@@ -27,7 +27,9 @@ const loginLimiter = rl(
 router.post('/login', loginLimiter, handleLogin);
 router.post('/refresh', handleRefresh);
 router.post('/logout', handleLogout);
-router.get('/me', requireAdminAuth, handleMe);
+// #1769 — /me must work for every authenticated role (school owners, staff,
+// read_only), not just super-admins; the frontend derives schoolId/roles here.
+router.get('/me', requireSchoolAuth(), handleMe);
 
 // ── Password management ───────────────────────────────────────────────────────
 // #1360 — Changing the password immediately invalidates all existing sessions
@@ -35,9 +37,11 @@ router.get('/me', requireAdminAuth, handleMe);
 router.post('/change-password', requireSchoolAuth(), auditContext, handleChangePassword);
 
 // ── Session management ────────────────────────────────────────────────────────
-router.get('/sessions', requireAdminAuth, handleListSessions);
+// #1769 — session management is scoped to the caller (any authenticated user);
+// super-admins may still revoke any session (enforced in the controller).
+router.get('/sessions', requireSchoolAuth(), handleListSessions);
 // #1554 — session revocation changes auth state; attribute the actor.
-router.delete('/sessions/:sessionId', requireAdminAuth, auditContext, handleRevokeSession);
+router.delete('/sessions/:sessionId', requireSchoolAuth(), auditContext, handleRevokeSession);
 
 // ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
 // #1554 — all MFA mutations (setup/verify/disable/backup) affect authentication

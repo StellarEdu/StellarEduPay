@@ -1,18 +1,25 @@
 'use strict';
 
 /**
- * Email provider bounce/complaint webhooks and suppression-list admin (Issue #80).
+ * Email provider webhooks and suppression-list admin (Issue #80).
  *
- *   POST /api/email/webhooks/:provider  — provider callbacks (SES/SNS, SendGrid).
+ *   POST /api/email/webhooks/:provider  — the single endpoint for provider
+ *                                         callbacks (SES/SNS, SendGrid, generic).
  *                                         Authenticated per provider — see
- *                                         authenticateWebhook() (Issue #1537).
+ *                                         authenticateWebhook() (Issue #1537) —
+ *                                         with replay protection, and handles
+ *                                         events end to end: suppression list
+ *                                         AND delivery status (Issue #1641).
  *   GET  /api/email/suppressions        — list suppressed addresses (admin).
  *   POST /api/email/suppressions        — manually suppress an address (admin).
  *   DELETE /api/email/suppressions/:email — clear a suppression (admin).
  */
 
 const axios = require('axios');
+const crypto = require('crypto');
 const suppressionList = require('../services/email/suppressionList');
+const { parseEvents, processEvents } = require('../services/email/providerEvents');
+const InboundWebhookNonce = require('../models/inboundWebhookNonceModel');
 const {
   safeEqualSecret,
   isAllowedSnsUrl,
@@ -21,6 +28,9 @@ const {
 } = require('../services/email/webhookVerification');
 const logger = require('../utils/logger').child('EmailWebhook');
 const { logAudit } = require('../services/auditService');
+
+const SUPPORTED_PROVIDERS = ['ses', 'sendgrid', 'generic'];
+const REPLAY_TOLERANCE_S = parseInt(process.env.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS, 10) || 300;
 
 // ── Authentication — Issue #1537 ─────────────────────────────────────────────
 //
@@ -113,6 +123,13 @@ async function authenticateWebhook(req, provider, body) {
     return _reject(req, provider, 400, 'SECRET_IN_QUERY_STRING');
   }
 
+  // generic: HMAC signature, timestamp and delivery-ID dedup are enforced by
+  // the route's validateInboundWebhook middleware (see emailRoutes.js), which
+  // marks the request as verified.
+  if (provider === 'generic') {
+    return req.inboundWebhookVerified ? { ok: true } : _reject(req, provider, 401, 'UNAUTHENTICATED');
+  }
+
   if (production && !isWebhookAuthConfigured()) {
     return _reject(req, provider, 503, 'EMAIL_WEBHOOK_NOT_CONFIGURED');
   }
@@ -178,49 +195,50 @@ async function _confirmSnsSubscription(req, msg) {
 }
 
 /**
- * Normalise provider-specific payloads into a list of
- * { email, kind: 'bounce'|'complaint', bounceType?, detail }.
+ * Replay protection for provider-native callbacks (#1641). Generic callbacks
+ * are deduplicated by validateInboundWebhook already.
+ *
+ *   ses       SNS MessageId is unique per message; a redelivered or replayed
+ *             message is acknowledged without being processed again.
+ *   sendgrid  The signed timestamp must be within the tolerance window, and
+ *             the (timestamp, signature) pair may only be used once.
+ *
+ * @returns {Promise<{ok: true, duplicate?: boolean} | {ok: false, status: number, reason: string}>}
  */
-function parseEvents(provider, body) {
-  const events = [];
-
-  if (provider === 'ses') {
-    // SES delivers via SNS; the Message field is a JSON string.
-    let msg = body;
-    if (body && typeof body.Message === 'string') {
-      try { msg = JSON.parse(body.Message); } catch { msg = body; }
-    }
-    if (msg?.notificationType === 'Bounce' && msg.bounce) {
-      const hard = msg.bounce.bounceType === 'Permanent';
-      for (const r of msg.bounce.bouncedRecipients || []) {
-        events.push({ email: r.emailAddress, kind: 'bounce', bounceType: hard ? 'hard' : 'soft', detail: r.diagnosticCode });
-      }
-    } else if (msg?.notificationType === 'Complaint' && msg.complaint) {
-      for (const r of msg.complaint.complainedRecipients || []) {
-        events.push({ email: r.emailAddress, kind: 'complaint', detail: msg.complaint.complaintFeedbackType });
-      }
-    }
+async function checkReplay(req, provider, body) {
+  let nonce = null;
+  if (provider === 'ses' && body && typeof body.MessageId === 'string') {
+    nonce = `email:ses:${body.MessageId}`;
   } else if (provider === 'sendgrid') {
-    // SendGrid posts an array of event objects.
-    const arr = Array.isArray(body) ? body : [body];
-    for (const ev of arr) {
-      if (!ev || !ev.email) continue;
-      if (ev.event === 'bounce' || ev.event === 'dropped') {
-        const hard = ev.type === 'bounce' || ev.event === 'bounce';
-        events.push({ email: ev.email, kind: 'bounce', bounceType: hard ? 'hard' : 'soft', detail: ev.reason });
-      } else if (ev.event === 'spamreport') {
-        events.push({ email: ev.email, kind: 'complaint', detail: 'spamreport' });
+    const signature = req.headers['x-twilio-email-event-webhook-signature'];
+    const timestamp = req.headers['x-twilio-email-event-webhook-timestamp'];
+    if (signature && timestamp) {
+      const ts = parseInt(timestamp, 10);
+      if (!Number.isFinite(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > REPLAY_TOLERANCE_S) {
+        return _reject(req, provider, 400, 'TIMESTAMP_SKEW');
       }
+      nonce = `email:sendgrid:${crypto.createHash('sha256').update(`${timestamp}.${signature}`).digest('hex')}`;
     }
   }
+  if (!nonce) return { ok: true };
 
-  return events;
+  try {
+    await InboundWebhookNonce.create({ deliveryId: nonce });
+  } catch (err) {
+    if (err.code === 11000) {
+      logger.warn('Duplicate email webhook delivery ignored', { provider });
+      return { ok: true, duplicate: true };
+    }
+    // Nonce store unavailable — log and process rather than drop the event.
+    logger.error('Email webhook nonce store error', { provider, error: err.message });
+  }
+  return { ok: true };
 }
 
 async function handleWebhook(req, res) {
   const { provider } = req.params;
 
-  if (!['ses', 'sendgrid'].includes(provider)) {
+  if (!SUPPORTED_PROVIDERS.includes(provider)) {
     return res.status(400).json({ error: 'Unsupported provider', code: 'UNSUPPORTED_PROVIDER' });
   }
 
@@ -259,17 +277,19 @@ async function handleWebhook(req, res) {
     return res.status(200).json({ processed: 0 });
   }
 
+  const replay = await checkReplay(req, provider, body);
+  if (!replay.ok) {
+    return res.status(replay.status).json({ error: 'Webhook replay check failed', code: 'UNAUTHORIZED', reason: replay.reason });
+  }
+  if (replay.duplicate) {
+    return res.status(200).json({ processed: 0, duplicate: true });
+  }
+
   try {
+    // #1641: one pass updates both the suppression list and delivery status.
     const events = parseEvents(provider, body);
-    for (const ev of events) {
-      if (ev.kind === 'bounce') {
-        await suppressionList.recordBounce(ev.email, { bounceType: ev.bounceType, source: provider, detail: ev.detail });
-      } else if (ev.kind === 'complaint') {
-        await suppressionList.recordComplaint(ev.email, { source: provider, detail: ev.detail });
-      }
-    }
-    logger.info('Processed email webhook', { provider, events: events.length });
-    return res.status(200).json({ processed: events.length });
+    const result = await processEvents(provider, events);
+    return res.status(200).json(result);
   } catch (err) {
     logger.error('Failed to process email webhook', { provider, error: err.message });
     return res.status(500).json({ error: 'Webhook processing failed', code: 'WEBHOOK_ERROR' });
@@ -323,6 +343,7 @@ module.exports = {
   removeSuppression,
   parseEvents,
   authenticateWebhook,
+  checkReplay,
   isWebhookAuthConfigured,
   checkEmailWebhookConfigOnStartup,
 };

@@ -1,0 +1,17 @@
+{{greeting}}
+
+{{message}}
+
+  Dispute Reference : {{reference}}
+  Status            : {{statusLabel}}
+  Transaction Hash  : {{txHash}}
+  Student ID        : {{studentId}}
+{{#if raisedBy}}  Raised By         : {{raisedBy}}
+{{/if}}{{#if reason}}  Reason            : {{reason}}
+{{/if}}{{#if resolutionNote}}  Note              : {{resolutionNote}}
+{{/if}}{{#if slaDeadline}}  Target Resolution : {{slaDeadline}}
+{{/if}}
+{{#if footer}}{{footer}}
+
+{{/if}}Thank you,
+{{schoolName}} Administration

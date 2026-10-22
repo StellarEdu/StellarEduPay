@@ -30,8 +30,6 @@ const {
   getSyncStatus,
   finalizePayments,
   generateReceipt,
-  lockPaymentForUpdate,
-  unlockPayment,
   getDeadLetterJobs,
   retryDeadLetterJob,
   getQueueJobStatus,
@@ -229,6 +227,9 @@ router.get("/stuck", requireSchoolAuth(['owner', 'staff']), getStuckPayments);
 router.get("/retry-queue", requireSchoolAuth(['owner', 'staff']), getRetryQueue);
 router.get("/rates", requireSchoolAuth(['owner', 'staff', 'read_only']), getExchangeRates);
 router.get("/dlq", requireSchoolAuth(['owner', 'staff']), getDeadLetterJobs);
+// Super-admin view of the global dead-letter queue (all schools). School users
+// are restricted to their own jobs by getDeadLetterJobs (#1768).
+router.get("/dlq/admin", requireAdminAuth, getDeadLetterJobs);
 
 router.post(
   "/verify",
@@ -241,18 +242,38 @@ router.post(
 router.post("/sync", strictLimiter, requireSchoolAuth(['owner', 'staff']), syncLimiter, auditContext, syncAllPayments);
 router.post("/finalize", requireSchoolAuth(['owner', 'staff']), auditContext, finalizePayments);
 router.post("/dlq/:id/retry", requireSchoolAuth(['owner', 'staff']), auditContext, retryDeadLetterJob);
+// Super-admin retry across schools; school users may only retry their own jobs.
+router.post("/dlq/admin/:id/retry", requireAdminAuth, auditContext, retryDeadLetterJob);
+router.get("/queue/:jobId", requireSchoolAuth(['owner', 'staff']), getQueueJobStatus);
 
-router.get("/balance/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentBalance);
-router.get(
-  "/instructions/:studentId",
-  validateStudentIdParam,
-  validatePaymentInstructionsQuery,
-  getPaymentInstructions,
-);
-router.get("/receipt/:txHash", generateReceipt);
-router.get("/queue/:txHash", requireSchoolAuth(['owner', 'staff', 'read_only']), getQueueJobStatus);
+// Refund listing routes must be registered before the parameterised
+// "/:txHash/*" routes so they are not shadowed (#1594).
+router.get("/refunds/school/list", requireSchoolAuth(['owner', 'staff', 'read_only']), getSchoolRefunds);
+
+// Reconciliation reporting routes must also precede "/:txHash/*".
+router.get("/reconciliation/reports", requireSchoolAuth(['owner', 'staff', 'read_only']), getReconciliationReports);
+router.post("/reconciliation/report", requireSchoolAuth(['owner', 'staff']), auditContext, generateSchoolReconciliationReport);
+
+// Admin status patches
+router.patch("/bulk/status", requireSchoolAuth(['owner', 'staff']), auditContext, bulkUpdatePaymentStatus);
+router.patch("/:txHash/status", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, updatePaymentStatus);
+router.patch("/:txHash/suspicion-review", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, reviewSuspiciousPayment);
+router.patch("/:txHash/correct-placeholder", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, correctPlaceholderPayment);
+
+// Refund lifecycle
+router.post("/:txHash/refund", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, initiatePaymentRefund);
+router.post("/refunds/:refundId/approve", requireSchoolAuth(['owner', 'staff']), auditContext, approvePaymentRefund);
+router.post("/refunds/:refundId/reject", requireSchoolAuth(['owner', 'staff']), auditContext, rejectPaymentRefund);
+router.post("/refunds/:refundId/complete", requireSchoolAuth(['owner', 'staff']), auditContext, completePaymentRefund);
+router.get("/:txHash/refunds", requireSchoolAuth(['owner', 'staff', 'read_only']), validateTxHashParam, getPaymentRefunds);
+
+// Payment locking
+router.post("/:paymentId/lock", requireSchoolAuth(['owner', 'staff']), auditContext, lockPaymentForUpdate);
+router.post("/:paymentId/unlock", requireSchoolAuth(['owner', 'staff']), auditContext, unlockPayment);
+
+// Receipt generation
+router.post("/:txHash/receipt", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, generateReceipt);
+
+// Student-scoped payment listing
 router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentPayments);
-
-router.post("/:paymentId/
-
-/* … truncated 1838 chars — edit only what you need near the top … */
+module.exports = router;

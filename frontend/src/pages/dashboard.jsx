@@ -169,6 +169,18 @@ function Dashboard() {
     fetchStudents(page, debouncedSearch, statusFilter, classFilter);
   }
 
+  // Per-asset collected totals.  Amounts of different assets (XLM, USDC, …)
+  // must never be summed together (#1767), so each asset gets its own card.
+  const assetTotals = summary?.totals && typeof summary.totals === "object"
+    ? Object.entries(summary.totals)
+    : [];
+
+  const formatAssetAmount = (raw) => {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return String(raw ?? "0");
+    return num.toLocaleString(undefined, { maximumFractionDigits: 7 });
+  };
+
   const stats = [
     {
       label: t("dashboard.statTotalStudents"),
@@ -188,15 +200,23 @@ function Dashboard() {
       Icon: IconAlertTriangle,
       color: "amber",
     },
-    {
-      label: t("dashboard.statXlmCollected"),
-      value: summary
-        ? (summary.totalXlmCollected || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
-        : "—",
-      sub: t("dashboard.statXlmTotalSub"),
-      Icon: IconDollarSign,
-      color: "violet",
-    },
+    ...(assetTotals.length > 0
+      ? assetTotals.map(([asset, amount]) => ({
+          label: t("dashboard.statAssetCollected", { asset }),
+          value: formatAssetAmount(amount),
+          sub: asset,
+          Icon: IconDollarSign,
+          color: "violet",
+        }))
+      : [{
+          label: t("dashboard.statXlmCollected"),
+          value: summary
+            ? (summary.totalXlmCollected || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : "—",
+          sub: t("dashboard.statXlmTotalSub"),
+          Icon: IconDollarSign,
+          color: "violet",
+        }]),
   ];
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;

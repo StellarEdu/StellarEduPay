@@ -1,0 +1,70 @@
+name: Staging load and soak test
+
+on:
+  schedule:
+    - cron: '30 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      soak_duration:
+        description: 'Soak duration passed to k6 (use 24h for the full soak)'
+        required: false
+        default: '24h'
+      enable_traffic:
+        description: 'Submit funded testnet traffic during the run'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  load-test:
+    if: vars.RUN_STAGING_LOAD_TESTS == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      AUTH_TOKEN: ${{ secrets.STAGING_AUTH_TOKEN }}
+      MONGO_URI: ${{ secrets.STAGING_LOAD_TEST_MONGO_URI }}
+      SCHOOL_ID: ${{ vars.STAGING_SCHOOL_ID }}
+      SCHOOL_IDS: ${{ vars.STAGING_SCHOOL_IDS }}
+      STUDENT_IDS: ${{ vars.STAGING_STUDENT_IDS }}
+      LOAD_TEST_HORIZON_URL: ${{ vars.STAGING_HORIZON_URL }}
+      LOAD_TEST_SOURCE_SECRET_KEYS: ${{ secrets.STAGING_LOAD_TEST_SOURCE_SECRET_KEYS }}
+      LOAD_TEST_DESTINATION_ADDRESSES: ${{ secrets.STAGING_LOAD_TEST_DESTINATION_ADDRESSES }}
+      LOAD_TEST_SCHOOL_IDS: ${{ vars.STAGING_SCHOOL_IDS }}
+      LOAD_TEST_DURATION_SECONDS: ${{ vars.STAGING_TRAFFIC_DURATION_SECONDS || '600' }}
+      LOAD_TEST_PAYMENTS_PER_MINUTE: ${{ vars.STAGING_PAYMENTS_PER_MINUTE || '60' }}
+      LOAD_TEST_OUTPUT_DIR: load-test-results
+      LOAD_TEST_SEED: 'true'
+      LOAD_TEST_START_TRAFFIC: ${{ github.event_name == 'schedule' || inputs.enable_traffic == true }}
+      SEED_SCHOOL_COUNT: ${{ vars.STAGING_SEED_SCHOOL_COUNT || '200' }}
+      SEED_STUDENTS_PER_SCHOOL: ${{ vars.STAGING_SEED_STUDENTS_PER_SCHOOL || '500' }}
+      SEED_CLEAN: 'false'
+      SOAK_DURATION: ${{ inputs.soak_duration || '24h' }}
+      BASELINE_API_READ_P95_MS: ${{ vars.BASELINE_API_READ_P95_MS || '0' }}
+      BASELINE_DETECTION_P95_MS: ${{ vars.BASELINE_DETECTION_P95_MS || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 20
+      - name: Set up k6
+        uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+      - name: Install traffic-generator dependencies
+        run: npm ci --ignore-scripts && cd backend && npm ci --ignore-scripts
+      - name: Run staging load and soak test
+        run: |
+          chmod +x tests/loadsim/run-load-test.sh
+          tests/loadsim/run-load-test.sh
+      - name: Upload load-test artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-load-test-${{ github.run_id }}
+          path: load-test-results/
+          if-no-files-found: warn
+          retention-days: 30

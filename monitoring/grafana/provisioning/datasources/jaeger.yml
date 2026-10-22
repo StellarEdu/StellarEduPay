@@ -1,0 +1,9 @@
+# #1636 — Jaeger traces datasource (docker-compose.monitoring.yml `jaeger`).
+apiVersion: 1
+
+datasources:
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false

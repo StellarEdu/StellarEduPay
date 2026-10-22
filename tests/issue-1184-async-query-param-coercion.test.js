@@ -28,10 +28,6 @@ jest.mock('../backend/src/queue/reportQueue', () => ({
   setJobFailed: jest.fn(),
 }));
 
-jest.mock('../backend/src/services/reportCacheInvalidator', () => ({
-  invalidate: jest.fn(),
-}));
-
 jest.mock('../backend/src/models/schoolModel', () => ({
   findOne: jest.fn().mockReturnValue({
     lean: jest.fn().mockResolvedValue({ schoolId: 'school-1', timezone: 'UTC', isActive: true }),

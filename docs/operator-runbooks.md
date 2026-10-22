@@ -132,6 +132,29 @@ Compare restored payments with on-chain transaction state.
 Decide whether to promote the backup or repair selected records.
 Communicate RPO impact before production promotion.
 Resume workers only after database and queue state are consistent.
+Backups — RPO / RTO and how they are produced (issue #1630)
+Targets
+- RPO (maximum data loss): 24 hours — one point-in-time backup per night. On-chain payments made after the last backup are recoverable by re-running reconciliation against Horizon after a restore, so the effective RPO for confirmed payments is lower; admin edits, audit entries and webhook state made since the backup are lost.
+- RTO (time to restore service): 4 hours for a database up to ~20 GB — download + decrypt + restore into staging, integrity checks, promotion.
+- Operators who need a tighter RPO should move to a managed MongoDB with continuous PITR (Atlas, DocumentDB) and set BACKUP_OPLOG=false; keep the nightly encrypted export as an independent copy.
+
+What a backup is
+- Consistent: mongodump --oplog captures a point-in-time snapshot across every collection, so payments, student balances and the hash-chained audit log agree with each other in a restore. It needs a replica set (both Compose and the StatefulSet run rs0), and dumps the whole instance; restore.sh replays the oplog automatically using the archive's .manifest sidecar.
+- Encrypted: the archive is encrypted with an age (BACKUP_AGE_RECIPIENT) or GPG (BACKUP_GPG_RECIPIENT_FILE) public key before it leaves the backup process. The private key is held outside the production host/cluster (password manager / HSM / recovery cluster). backup.sh refuses to run without a key unless BACKUP_REQUIRE_ENCRYPTION=false (local dev only).
+- Off-site: the encrypted archive and manifest are uploaded to object storage (BACKUP_S3_URI via the aws CLI, or BACKUP_RCLONE_REMOTE) and existence is confirmed after upload. Enable versioning, a lifecycle rule for retention, and object lock (compliance mode) on the bucket, and give the backup job PutObject-only credentials. backup.sh refuses to run without a target unless BACKUP_REQUIRE_OFFSITE=false.
+- Verified: every archive passes mongorestore --dryRun before it is encrypted, and its sha256 is recorded in the manifest and checked again on restore.
+
+Where it runs
+- Compose: the backup service (daily) and backup-verify service (weekly), both built from deploy/backup/Dockerfile. backup-verify restores the newest off-site archive into the disposable mongo-verify instance.
+- Kubernetes: deploy/k8s/backup-cronjob.yaml — CronJob mongodb-backup (nightly 02:15 UTC) and CronJob mongodb-restore-verify (Sundays 04:45 UTC). The verify job downloads the newest off-site archive, decrypts it, restores it into a scratch mongod sidecar and runs backend/scripts/verify-restored-db.js (student balances vs payments, orphaned payments). Alert on kube_job_status_failed for either CronJob, and on the existing backup staleness metrics.
+
+Restoring an encrypted archive
+MONGO_URI=mongodb://localhost:27017/stellaredupay?replicaSet=rs0 \
+BACKUP_FILE=./backups/20260324T120000Z.archive.gz.age \
+BACKUP_AGE_IDENTITY_FILE=/secure/backup-identity.txt \
+  ./scripts/restore.sh --dry-run
+The archive's .manifest must sit next to it (download both from the bucket) so restore.sh can verify the checksum and enable --oplogReplay. Legacy plaintext .gz archives are still accepted.
+
 Running the Restore Script
 The restore script (scripts/restore.sh) uses safe defaults — it will not drop
 existing collections unless you explicitly request it.

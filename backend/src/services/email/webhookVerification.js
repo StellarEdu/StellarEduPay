@@ -169,16 +169,20 @@ function _parseSendGridPublicKey(key) {
  * @param {string} opts.publicKey   EMAIL_SENDGRID_WEBHOOK_PUBLIC_KEY
  * @param {string} opts.signature   X-Twilio-Email-Event-Webhook-Signature (base64 DER ECDSA)
  * @param {string} opts.timestamp   X-Twilio-Email-Event-Webhook-Timestamp
- * @param {string} opts.rawBody     exact request body bytes
+ * @param {Buffer|string} opts.rawBody  exact request body bytes
  * @returns {{ valid: boolean, reason?: string }}
  */
 function verifySendGridSignature({ publicKey, signature, timestamp, rawBody }) {
   if (!signature || !timestamp) return { valid: false, reason: 'MISSING_SENDGRID_SIGNATURE' };
-  if (typeof rawBody !== 'string') return { valid: false, reason: 'MISSING_RAW_BODY' };
+  // Issue #1797 — accept the raw Buffer so the signature covers the exact bytes.
+  const bodyBytes = Buffer.isBuffer(rawBody)
+    ? rawBody
+    : typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : null;
+  if (!bodyBytes) return { valid: false, reason: 'MISSING_RAW_BODY' };
   try {
     const key = _parseSendGridPublicKey(publicKey);
     const verifier = crypto.createVerify('SHA256');
-    verifier.update(String(timestamp) + rawBody, 'utf8');
+    verifier.update(Buffer.concat([Buffer.from(String(timestamp), 'utf8'), bodyBytes]));
     const ok = verifier.verify(key, Buffer.from(String(signature), 'base64'));
     return ok ? { valid: true } : { valid: false, reason: 'INVALID_SENDGRID_SIGNATURE' };
   } catch {

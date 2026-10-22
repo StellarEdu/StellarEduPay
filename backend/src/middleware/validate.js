@@ -18,6 +18,13 @@ const {
   getStudentFeeHistoryQuerySchema,
 } = require('./schemas/studentQuerySchemas');
 
+const {
+  setPasswordSchema,
+  requestPasswordResetSchema,
+  resetPasswordSchema,
+  updateSchoolUserSchema,
+} = require('./schemas/accountSchemas');
+
 function validate(schema, source = 'body') {
   return (req, res, next) => {
     const { error, value } = schema.validate(req[source], {
@@ -41,6 +48,15 @@ function validate(schema, source = 'body') {
 const validateCreatePaymentIntent = validate(createPaymentIntentSchema, 'body');
 const validateSubmitTransaction = validate(submitTransactionSchema, 'body');
 const validateVerifyPayment = validate(verifyPaymentSchema, 'body');
+
+// Issue #1776: unauthenticated credential endpoints must validate bodies so
+// non-string input (e.g. {"email": {"a":1}}) cannot reach the controllers.
+const validateSetPassword = validate(setPasswordSchema, 'body');
+const validateRequestPasswordReset = validate(requestPasswordResetSchema, 'body');
+const validateResetPassword = validate(resetPasswordSchema, 'body');
+
+// Issue #1772: validate school-user updates (roles / isActive).
+const validateUpdateSchoolUser = validate(updateSchoolUserSchema, 'body');
 
 const STUDENT_ID_RE = /^[\w-]{1,28}$/;
 
@@ -237,6 +253,10 @@ module.exports = {
   validateCreatePaymentIntent,
   validateSubmitTransaction,
   validateVerifyPayment,
+  validateSetPassword,
+  validateRequestPasswordReset,
+  validateResetPassword,
+  validateUpdateSchoolUser,
   validateStudentIdParam,
   validatePaymentInstructionsQuery,
   validateTxHashParam,

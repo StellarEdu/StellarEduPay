@@ -4,21 +4,33 @@ StellarEduPay notifies external systems in real-time when payment events occur.
 
 ## Setup
 
-### 1. Register a webhook URL
+### 1. Register a webhook endpoint
 
-Register your HTTPS endpoint per school via the admin API:
+Webhooks are configured only through `WebhookEndpoint` subscriptions (#1640) —
+see [Multiple endpoints and per-event subscriptions](#multiple-endpoints-and-per-event-subscriptions-865):
 
 ```
-POST /api/schools/:slug/webhooks
-Authorization: Bearer <admin-token>
+POST /api/webhook-endpoints
+Authorization: Bearer <school-token>
 Content-Type: application/json
 
 {
-  "webhookUrl": "https://your-server.com/webhook"
+  "url": "https://your-server.com/webhook",
+  "subscribedEvents": ["payment.confirmed", "dispute.created", "dispute.resolved"]
 }
 ```
 
-Your school's HMAC signing secret is provisioned automatically when the school is created. Retrieve it from the admin dashboard to use in signature verification.
+The response contains the endpoint's signing `secret`, shown **once**. Send a
+test event before going live — see [Testing an endpoint](#testing-an-endpoint).
+
+> **Deprecated:** `POST /api/schools/:slug/webhooks` (and
+> `PUT /api/schools/:schoolId/webhook-secret`) still work for one release but
+> respond with a `Deprecation` header. They now create/update the school's
+> legacy `WebhookEndpoint` (`source: "legacy_school_webhook"`) instead of
+> `School.webhookUrl`, which has been removed. Existing `School.webhookUrl`
+> registrations were converted to endpoints by migration 036, keeping their
+> URL, secret, signature versions and the events they received. The
+> `PAYMENT_WEBHOOK_URL` global fallback has been removed.
 
 ### 2. Receive events
 
@@ -46,6 +58,13 @@ Your endpoint receives `POST` requests with a JSON body:
 | `payment.pending` | Payment detected, awaiting confirmation |
 | `payment.failed` | Payment failed on Stellar network |
 | `payment.suspicious` | Flagged by fraud detection |
+| `payment.refunded` / `payment.refund_rejected` | Refund confirmed / rejected |
+| `dispute.created` | A payment dispute was raised |
+| `dispute.under_review` | A dispute moved to review |
+| `dispute.resolved` | A dispute was closed (`status` is `resolved` or `rejected`) |
+| `dispute.reopened` | A closed dispute was reopened |
+| `dispute.sla_breached` | An open dispute passed its SLA deadline (sent once per dispute) |
+| `webhook.test` | Only sent by `POST /api/webhook-endpoints/:id/test`; not subscribable |
 
 ---
 
@@ -57,7 +76,7 @@ Every delivery is signed with HMAC-SHA256 using your school's secret. Always ver
 
 | Header | Example | Purpose |
 |--------|---------|---------|
-| `X-StellarEduPay-Signature-V2` | `sha256=a1b2c3...` | **V2 HMAC-SHA256** covering timestamp, delivery-ID, and body (recommended) |
+| `X-StellarEduPay-Signature-V2` | `sha256=a1b2c3...` | **V2 HMAC-SHA256** covering timestamp, delivery-ID, and body (recommended). During a secret-rotation overlap it carries two comma-separated values, `sha256=<new>,sha256=<old>` — accept the delivery if **any** value verifies |
 | `X-StellarEduPay-Signature` | `sha256=d4e5f6...` | V1 HMAC-SHA256 of the JSON body only (deprecated — only sent to endpoints whose `signatureVersions` include `v1`, and never after `WEBHOOK_V1_SUNSET`) |
 | `X-StellarEduPay-Signature-V2-Previous` | `sha256=0a1b2c...` | V2 signature computed with your **previous** secret — only sent during a secret-rotation overlap window (see [Rotating your signing secret](#rotating-your-signing-secret)) |
 | `X-StellarEduPay-Timestamp` | `1711532400` | Unix timestamp (seconds) of delivery |
@@ -226,15 +245,40 @@ POST /api/webhook-endpoints/:id/rotate-secret
 { "overlapSeconds": 86400 }        # optional; default 24h, max 7 days, 0 = no overlap
 ```
 
-The response contains the new `secret` (shown only once) and
-`previousSecretExpiresAt`. Until that time every delivery carries both
-`X-StellarEduPay-Signature-V2` (new secret) and
-`X-StellarEduPay-Signature-V2-Previous` (old secret), so you can deploy the new
-secret without dropping events: accept a delivery if **either** header
-verifies against the secret your receiver currently holds.
+The new secret is generated server-side and returned once, with
+`previousSecretExpiresAt`. Until that time every delivery is signed with
+**both** secrets (#1639):
 
-`PUT /api/webhook-endpoints/:id` with a `secret` replaces it immediately with
-no overlap.
+- `X-StellarEduPay-Signature-V2: sha256=<new>,sha256=<old>` — split on `,` and
+  accept the delivery if any value verifies against the secret your receiver
+  currently holds (Stripe-style);
+- `X-StellarEduPay-Signature-V2-Previous: sha256=<old>` — kept for receivers
+  written against the earlier contract.
+
+So you can deploy the new secret at any point inside the window without a
+single failed delivery. When the window closes the old secret is deleted.
+
+`PUT /api/webhook-endpoints/:id` with a caller-supplied `secret` now uses the
+same overlap (`overlapSeconds`, default 24h; pass `0` to switch immediately).
+Prefer `rotate-secret`, which also guarantees a strong secret. Both actions
+are recorded in the audit log.
+
+### Testing an endpoint
+
+```
+POST /api/webhook-endpoints/:id/test
+```
+
+Sends a signed `webhook.test` event with sample payment data through the
+normal delivery path (same signatures, SSRF checks and delivery log) and
+returns the result:
+
+```json
+{ "success": true, "event": "webhook.test", "deliveryId": "…", "statusCode": 200, "latencyMs": 84, "error": null }
+```
+
+A failed test is not retried. The endpoint does not need to be active, so you
+can verify a receiver before switching it on. Each test is audited.
 
 ---
 
@@ -393,6 +437,8 @@ Response includes the `secret` (shown **once** at creation — store it securely
 | `GET`    | `/api/webhook-endpoints/:id`    | Get single endpoint |
 | `PUT`    | `/api/webhook-endpoints/:id`    | Update url / events / isActive |
 | `DELETE` | `/api/webhook-endpoints/:id`    | Delete endpoint |
+| `POST`   | `/api/webhook-endpoints/:id/test` | Send a signed `webhook.test` event and get status code + latency |
+| `POST`   | `/api/webhook-endpoints/:id/rotate-secret` | Generate a new secret with a dual-signing overlap |
 
 **Disabling an endpoint**: set `isActive: false` — it is silently skipped on all deliveries.
 
@@ -431,7 +477,7 @@ By default, webhook payloads are **minimal — no PII**. The fields `studentId` 
 
 ### Opt-in to PII fields
 
-Update the school's `webhookPayloadConfig` via `PUT /api/schools/:id`:
+Update the school's `webhookPayloadConfig` via `PATCH /api/schools/:schoolId`:
 
 ```json
 {

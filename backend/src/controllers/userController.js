@@ -2,10 +2,14 @@
 
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const Joi = require('joi');
 const User = require('../models/userModel');
+const config = require('../config');
 const logger = require('../utils/logger').child('UserController');
 const { logAudit } = require('../services/auditService');
 const { sendEmail } = require('../services/emailService');
+const { renderEmailTemplate } = require('../services/emailTemplateService');
+const { revokeAllUserSessions } = require('../services/sessionStore');
 
 // ── Password policy ────────────────────────────────────────────────────────────
 const MIN_PASSWORD_LENGTH = 12;
@@ -17,6 +21,19 @@ function validatePassword(password) {
   return { valid: true };
 }
 
+// ── Body validation schemas ────────────────────────────────────────────────────
+const updateSchoolUserSchema = Joi.object({
+  roles: Joi.array()
+    .items(Joi.string().valid('owner', 'staff', 'read_only'))
+    .min(1)
+    .optional(),
+  isActive: Joi.boolean().optional(),
+}).min(1);
+
+const emailBodySchema = Joi.object({
+  email: Joi.string().trim().lowercase().email().max(254).required(),
+});
+
 // ── Token generation and storage ───────────────────────────────────────────────
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
@@ -24,6 +41,59 @@ function generateToken() {
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+// ── Public URL helper ──────────────────────────────────────────────────────────
+function getAppUrl() {
+  const baseUrl = (config && config.APP_URL) || process.env.APP_URL;
+  if (!baseUrl) {
+    // Should never happen in production (boot fails), but keep a safe fallback for dev/test.
+    return 'http://localhost:3000';
+  }
+  return String(baseUrl).replace(/\/+$/, '');
+}
+
+// ── Session revocation helper ──────────────────────────────────────────────────
+async function revokeUserSessions(userId) {
+  const userIdStr = userId.toString();
+
+  // Bump tokenVersion so any outstanding access tokens are rejected by the auth middleware.
+  try {
+    await User.findByIdAndUpdate(userIdStr, { $inc: { tokenVersion: 1 } });
+  } catch (err) {
+    logger.warn('[UserController] Failed to bump tokenVersion', { error: err.message, userId: userIdStr });
+  }
+
+  // Revoke refresh-token sessions and families.
+  try {
+    const authController = require('./authController');
+    const store = authController.getStore?.() || null;
+    if (store) {
+      const refreshTTL = authController.parseTTL?.('JWT_REFRESH_TOKEN_TTL', 30 * 86400) || 30 * 86400;
+      const sessions = await store.listUserSessions(userIdStr);
+      await Promise.all(
+        sessions.map(async ({ sessionId, familyId }) => {
+          if (familyId) await store.revokeFamily(familyId, refreshTTL).catch(() => {});
+          await store.delSession(sessionId).catch(() => {});
+        })
+      );
+    }
+  } catch (err) {
+    logger.warn('[UserController] Failed to revoke sessions', { error: err.message, userId: userIdStr });
+  }
+}
+
+// ── Email dispatch helper (async, non-blocking) ────────────────────────────────
+function dispatchEmail(payload) {
+  // Fire-and-forget: never await in the request path so latency is identical
+  // regardless of whether the account exists.
+  setImmediate(() => {
+    Promise.resolve()
+      .then(() => sendEmail(payload))
+      .catch(err => {
+        logger.warn('[UserController] Failed to send email', { error: err.message, to: payload?.to });
+      });
+  });
 }
 
 // ── Super-admin endpoints: /api/admin/users ────────────────────────────────────
@@ -80,22 +150,19 @@ async function createUser(req, res) {
   await user.save();
 
   // Send invitation email
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const invitationLink = `${baseUrl}/set-password?token=${invitationToken}`;
+  const baseUrl = getAppUrl();
+  const invitationLink = `${baseUrl}/set-password#token=${invitationToken}`;
 
   try {
-    await sendEmail({
-      to: normalizedEmail,
-      subject: 'You have been invited to join the school management system',
-      html: `
-        <p>You have been invited to join as a user with roles: ${roles.join(', ')}.</p>
-        <p>Click the link below to set your password and activate your account:</p>
-        <p><a href="${invitationLink}">${invitationLink}</a></p>
-        <p>This link will expire in 7 days.</p>
-      `,
+    const { html, text, subject } = await renderEmailTemplate('invitation', {
+      locale: user.emailLocale,
+      roles,
+      invitationLink,
+      expiresInDays: 7,
     });
+    dispatchEmail({ to: normalizedEmail, subject, html, text });
   } catch (err) {
-    logger.warn('[UserController] Failed to send invitation email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: normalizedEmail });
   }
 
   await logAudit({
@@ -167,6 +234,16 @@ async function updateUser(req, res) {
 
   await User.findByIdAndUpdate(userId, { $set: updates });
 
+  // Any change to roles or isActive must revoke sessions immediately.
+  if (updates.roles !== undefined || updates.isActive !== undefined) {
+    await revokeUserSessions(userId);
+  }
+
+  // Deactivating a user must invalidate every existing session and refresh token.
+  if (isActive === false) {
+    await revokeAllUserSessions(userId);
+  }
+
   await logAudit({
     schoolId: user.schoolId || 'system',
     action: 'user_updated',
@@ -190,7 +267,13 @@ async function deleteUser(req, res) {
     return res.status(404).json({ error: 'User not found.', code: 'NOT_FOUND' });
   }
 
+  // Revoke sessions before deletion so outstanding tokens cannot be used.
+  await revokeUserSessions(userId);
+
   await User.findByIdAndDelete(userId);
+
+  // Deleting a user must invalidate every existing session and refresh token.
+  await revokeAllUserSessions(userId);
 
   await logAudit({
     schoolId: user.schoolId || 'system',
@@ -276,22 +359,19 @@ async function createSchoolUser(req, res) {
   await user.save();
 
   // Send invitation email
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const invitationLink = `${baseUrl}/set-password?token=${invitationToken}`;
+  const baseUrl = getAppUrl();
+  const invitationLink = `${baseUrl}/set-password#token=${invitationToken}`;
 
   try {
-    await sendEmail({
-      to: normalizedEmail,
-      subject: 'You have been invited to join the school management system',
-      html: `
-        <p>You have been invited to join as a user with roles: ${roles.join(', ')}.</p>
-        <p>Click the link below to set your password and activate your account:</p>
-        <p><a href="${invitationLink}">${invitationLink}</a></p>
-        <p>This link will expire in 7 days.</p>
-      `,
+    const { html, text, subject } = await renderEmailTemplate('invitation', {
+      locale: user.emailLocale,
+      roles,
+      invitationLink,
+      expiresInDays: 7,
     });
+    dispatchEmail({ to: normalizedEmail, subject, html, text });
   } catch (err) {
-    logger.warn('[UserController] Failed to send invitation email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: normalizedEmail });
   }
 
   await logAudit({
@@ -332,7 +412,20 @@ async function listSchoolUsers(req, res) {
 
 async function updateSchoolUser(req, res) {
   const { schoolId, userId } = req.params;
-  const { roles, isActive } = req.body;
+
+  // Validate body
+  const { value, error } = updateSchoolUserSchema.validate(req.body || {}, {
+    abortEarly: false,
+    stripUnknown: true,
+  });
+  if (error) {
+    return res.status(400).json({
+      error: error.details.map(d => d.message).join('; '),
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const { roles, isActive } = value;
 
   const user = await User.findById(userId);
   if (!user) {
@@ -355,6 +448,25 @@ async function updateSchoolUser(req, res) {
     });
   }
 
+  const requestingUserId = req.user?.userId || req.admin?.userId;
+  const isSelf = requestingUserId && requestingUserId.toString() === userId.toString();
+
+  // Forbid self-demotion and self-deactivation
+  if (isSelf) {
+    if (roles !== undefined && !roles.includes('owner')) {
+      return res.status(409).json({
+        error: 'You cannot remove your own owner role.',
+        code: 'SELF_DEMOTION_FORBIDDEN',
+      });
+    }
+    if (isActive === false) {
+      return res.status(409).json({
+        error: 'You cannot deactivate your own account.',
+        code: 'SELF_DEACTIVATION_FORBIDDEN',
+      });
+    }
+  }
+
   const updates = {};
   if (roles !== undefined) {
     // School owners cannot grant super_admin
@@ -364,25 +476,46 @@ async function updateSchoolUser(req, res) {
         code: 'FORBIDDEN',
       });
     }
-
-    const validRoles = ['owner', 'staff', 'read_only'];
-    const invalidRoles = roles.filter(r => !validRoles.includes(r));
-    if (invalidRoles.length > 0) {
-      return res.status(400).json({
-        error: `Invalid roles: ${invalidRoles.join(', ')}`,
-        code: 'INVALID_ROLES',
-      });
-    }
     updates.roles = roles;
   }
   if (isActive !== undefined) updates.isActive = isActive;
 
+  // Last-owner protection: refuse if the change would leave zero active owners.
+  const removesOwnerRole = updates.roles !== undefined && !updates.roles.includes('owner');
+  const deactivates = updates.isActive === false;
+  const currentlyOwner = Array.isArray(user.roles) && user.roles.includes('owner');
+  const currentlyActive = user.isActive === true;
+
+  if (currentlyOwner && currentlyActive && (removesOwnerRole || deactivates)) {
+    const activeOwnerCount = await User.countDocuments({
+      schoolId,
+      roles: 'owner',
+      isActive: true,
+    });
+    if (activeOwnerCount <= 1) {
+      return res.status(409).json({
+        error: 'Cannot remove or deactivate the last active owner of the school.',
+        code: 'LAST_OWNER',
+      });
+    }
+  }
+
   await User.findByIdAndUpdate(userId, { $set: updates });
+
+  // Any change to roles or isActive must revoke sessions immediately.
+  if (updates.roles !== undefined || updates.isActive !== undefined) {
+    await revokeUserSessions(userId);
+  }
+
+  // Deactivating a user must invalidate every existing session and refresh token.
+  if (isActive === false) {
+    await revokeAllUserSessions(userId);
+  }
 
   await logAudit({
     schoolId,
     action: 'user_updated',
-    performedBy: req.user?.userId || req.admin?.userId,
+    performedBy: requestingUserId,
     targetId: userId,
     targetType: 'user',
     details: updates,
@@ -447,19 +580,25 @@ async function setPassword(req, res) {
 }
 
 async function requestPasswordReset(req, res) {
-  const { email } = req.body;
+  const genericMessage = 'If an account exists with that email, a password reset link has been sent.';
 
-  if (!email) {
-    // Generic response to avoid account enumeration
-    return res.json({ message: 'If an account exists with that email, a password reset link has been sent.' });
+  // Guard against non-string bodies and validate email format.
+  const { value, error } = emailBodySchema.validate(req.body || {}, {
+    abortEarly: true,
+    stripUnknown: true,
+  });
+  if (error) {
+    // Return the same generic response to avoid account enumeration.
+    return res.json({ message: genericMessage });
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = value.email;
+
   const user = await User.findOne({ email: normalizedEmail, isActive: true });
 
   if (!user) {
-    // Generic response to avoid account enumeration
-    return res.json({ message: 'If an account exists with that email, a password reset link has been sent.' });
+    // Generic response to avoid account enumeration.
+    return res.json({ message: genericMessage });
   }
 
   // Generate reset token
@@ -467,28 +606,28 @@ async function requestPasswordReset(req, res) {
   const resetTokenHash = hashToken(resetToken);
   const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
+  // Overwrite any existing reset token so only one is active at a time.
   await User.findByIdAndUpdate(user._id, {
-    $set: { resetToken: resetTokenHash, resetExpires },
+    $set: {
+      resetToken: resetTokenHash,
+      resetExpires,
+      resetRequestIp: req.ip,
+    },
   });
 
-  // Send reset email
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+  // Send reset email asynchronously so latency is identical for known/unknown accounts.
+  const baseUrl = getAppUrl();
+  const resetLink = `${baseUrl}/reset-password#token=${resetToken}`;
 
   try {
-    await sendEmail({
-      to: normalizedEmail,
-      subject: 'Password Reset Request',
-      html: `
-        <p>You requested a password reset.</p>
-        <p>Click the link below to reset your password:</p>
-        <p><a href="${resetLink}">${resetLink}</a></p>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you did not request this, please ignore this email.</p>
-      `,
+    const { html, text, subject } = await renderEmailTemplate('passwordReset', {
+      locale: user.emailLocale,
+      resetLink,
+      expiresInMinutes: 60,
     });
+    dispatchEmail({ to: normalizedEmail, subject, html, text });
   } catch (err) {
-    logger.warn('[UserController] Failed to send password reset email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render password reset email', { error: err.message, email: normalizedEmail });
   }
 
   await logAudit({
@@ -497,13 +636,13 @@ async function requestPasswordReset(req, res) {
     performedBy: user._id.toString(),
     targetId: user._id.toString(),
     targetType: 'user',
-    details: { email: normalizedEmail },
+    details: { email: normalizedEmail, ip: req.ip },
     result: 'success',
     ipAddress: req.ip,
     userAgent: req.headers?.['user-agent'],
   });
 
-  return res.json({ message: 'If an account exists with that email, a password reset link has been sent.' });
+  return res.json({ message: genericMessage });
 }
 
 async function resetPassword(req, res) {
@@ -538,27 +677,15 @@ async function resetPassword(req, res) {
 
   await User.findByIdAndUpdate(user._id, {
     $set: { passwordHash },
-    $unset: { resetToken: '', resetExpires: '' },
+    $unset: { resetToken: '', resetExpires: '', resetRequestIp: '' },
   });
 
-  // Revoke all existing sessions (already implemented in authController.handleChangePassword logic)
-  const { getStore } = require('./authController');
-  const { parseTTL } = require('./authController');
-  const store = getStore?.() || null;
-  if (store) {
-    const refreshTTL = parseTTL?.('JWT_REFRESH_TOKEN_TTL', 30 * 86400) || 30 * 86400;
-    try {
-      const sessions = await store.listUserSessions(user._id.toString());
-      await Promise.all(
-        sessions.map(async ({ sessionId, familyId }) => {
-          if (familyId) await store.revokeFamily(familyId, refreshTTL).catch(() => {});
-          await store.delSession(sessionId).catch(() => {});
-        })
-      );
-    } catch (err) {
-      logger.warn('[UserController] Failed to revoke sessions after password reset', { error: err.message });
-    }
-  }
+  // Revoke all existing sessions after a password reset.
+  await revokeUserSessions(user._id);
+
+  // A password reset is typically performed because the account is compromised:
+  // every pre-existing session and refresh token must be revoked.
+  await revokeAllUserSessions(user._id.toString());
 
   await logAudit({
     schoolId: user.schoolId || 'system',

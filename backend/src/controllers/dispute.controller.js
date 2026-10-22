@@ -7,16 +7,20 @@
  *  - #895: Explicit state machine with validated transitions; authenticated actor required.
  *  - #894: Audit every transition (with actor + note); emit dispute.* webhook, SSE event,
  *          and notification email; synchronise linked payment status on resolution.
+ *  - #1638: Capture the raiser's contact; notify the raiser on creation and every status
+ *          change, alert admins on new disputes (SLA breaches: disputeNotificationService).
  */
 
 const Dispute = require('../models/disputeModel');
+const { decryptLeanDispute } = require('../models/disputeModel');
 const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
 const { emit: sseEmit } = require('../services/sseService');
-const { fireWebhook, fireWebhookToEndpoints, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
+const { dispatchToSchool, notifyDisputeCreated, notifyDisputeResolved } = require('../services/webhookService');
+const { notifyRaiser, notifyAdmins, disputeReference } = require('../services/disputeNotificationService');
+const { isValidE164 } = require('../services/smsService');
 const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
-const School = require('../models/schoolModel');
 const logger = require('../utils/logger').child('DisputeController');
 const {
   recordDisputeRaised,
@@ -94,50 +98,56 @@ async function _notifyDisputeChange(schoolId, eventName, disputeDoc) {
     logger.warn('SSE emit failed for dispute event', { schoolId, eventName, error: err.message });
   }
 
-  // Webhook — HMAC-signed HTTP call to the school's registered endpoint.
-  // Route through the dispute.* notification helpers so the payload shape stays
-  // consistent with the other webhook events (mirrors notifyPaymentConfirmed/…).
+  // Webhook — HMAC-signed delivery to the school's WebhookEndpoints (#1640:
+  // the only outbound webhook path). Created/resolved go through the dispute.*
+  // helpers so the payload shape stays consistent; intermediate transitions
+  // (under_review / reopened) keep their own event name.
   try {
-    const school = await School.findOne({ schoolId }, { webhookUrl: 1, webhookSecret: 1, webhookPayloadConfig: 1 });
-    const webhookUrl = school?.webhookUrl || null;
-    const secret = school?.webhookSecret || null;
-
-    // #1478: Route through both unified per-endpoint system and legacy single-URL
     if (eventName === 'dispute.created') {
-      await notifyDisputeCreated(webhookUrl, disputeDoc, secret, schoolId);
+      await notifyDisputeCreated(disputeDoc);
     } else if (holdLifted) {
-      await notifyDisputeResolved(webhookUrl, disputeDoc, secret, schoolId);
-    } else if (webhookUrl || school) {
-      // Intermediate transitions (under_review / reopened) keep their own event name.
-      // Still fire through unified system if school exists
-      if (school) {
-        const allowedFields = school.webhookPayloadConfig?.allowedFields || null;
-        await fireWebhookToEndpoints(schoolId, eventName, {
-          disputeId:  String(disputeDoc._id),
-          schoolId,
-          txHash:     disputeDoc.txHash,
-          studentId:  disputeDoc.studentId,
-          status:     disputeDoc.status,
-          resolvedBy: disputeDoc.resolvedBy,
-          updatedAt:  disputeDoc.updatedAt,
-        }, allowedFields);
-      }
-      // Fallback to legacy path
-      if (webhookUrl) {
-        await fireWebhook(webhookUrl, eventName, {
-          disputeId:  String(disputeDoc._id),
-          schoolId,
-          txHash:     disputeDoc.txHash,
-          studentId:  disputeDoc.studentId,
-          status:     disputeDoc.status,
-          resolvedBy: disputeDoc.resolvedBy,
-          updatedAt:  disputeDoc.updatedAt,
-        }, secret);
-      }
+      await notifyDisputeResolved(disputeDoc);
+    } else {
+      await dispatchToSchool(schoolId, eventName, {
+        disputeId:  String(disputeDoc._id),
+        schoolId,
+        txHash:     disputeDoc.txHash,
+        studentId:  disputeDoc.studentId,
+        status:     disputeDoc.status,
+        resolvedBy: disputeDoc.resolvedBy,
+        updatedAt:  disputeDoc.updatedAt,
+      });
     }
   } catch (err) {
     logger.warn('Webhook fire failed for dispute event', { schoolId, eventName, error: err.message });
   }
+}
+
+/**
+ * Fire a notification without delaying the response. The notification
+ * service never throws; the catch is a last-resort guard.
+ */
+function _notifyInBackground(promise, context) {
+  Promise.resolve(promise).catch((err) => {
+    logger.warn('Dispute notification failed', { ...context, error: err.message });
+  });
+}
+
+/**
+ * Add derived, read-only fields used by the Disputes page to surface ageing
+ * disputes (#1638): reference, ageHours, and whether an open dispute is past
+ * its SLA deadline.
+ */
+function _withAgeing(dispute, now = Date.now()) {
+  if (!dispute) return dispute;
+  const created = dispute.createdAt ? new Date(dispute.createdAt).getTime() : now;
+  const isOpen = dispute.status === 'open' || dispute.status === 'under_review';
+  return {
+    ...dispute,
+    reference: disputeReference(dispute),
+    ageHours: Math.max(0, Math.round(((now - created) / 36e5) * 10) / 10),
+    slaOverdue: Boolean(isOpen && dispute.slaDeadline && new Date(dispute.slaDeadline).getTime() < now),
+  };
 }
 
 /**
@@ -201,7 +211,7 @@ async function _syncPaymentStatus(schoolId, txHash, newDisputeStatus) {
 async function flagDispute(req, res, next) {
   try {
     const { schoolId } = req;
-    const { txHash, studentId, raisedBy, reason, txReference, evidence } = req.body;
+    const { txHash, studentId, raisedBy, reason, txReference, evidence, raisedByEmail, raisedByPhone } = req.body;
     if (!txHash || !studentId || !raisedBy || !reason) {
       return res.status(400).json({ error: 'txHash, studentId, raisedBy, and reason are all required.', code: 'VALIDATION_ERROR' });
     }
@@ -225,9 +235,31 @@ async function flagDispute(req, res, next) {
       return res.status(400).json({ error: 'reason must not exceed 1000 characters.', code: 'VALIDATION_ERROR' });
     }
 
+    // #1638 — optional contact channel for progress/resolution notifications.
+    // When omitted, notifications go to the student's parent contact.
+    let contactEmail = null;
+    let contactPhone = null;
+    if (raisedByEmail !== undefined && raisedByEmail !== null && raisedByEmail !== '') {
+      contactEmail = typeof raisedByEmail === 'string' ? raisedByEmail.trim().toLowerCase() : '';
+      if (!contactEmail || contactEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+        return res.status(400).json({ error: 'raisedByEmail must be a valid email address.', code: 'VALIDATION_ERROR' });
+      }
+    }
+    if (raisedByPhone !== undefined && raisedByPhone !== null && raisedByPhone !== '') {
+      contactPhone = typeof raisedByPhone === 'string' ? raisedByPhone.replace(/[\s()-]/g, '') : '';
+      if (!isValidE164(contactPhone)) {
+        return res.status(400).json({ error: 'raisedByPhone must be an E.164 phone number, e.g. +2348012345678.', code: 'VALIDATION_ERROR' });
+      }
+    }
+
     const payment = await Payment.findOne({ txHash, schoolId });
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found for this school.', code: 'NOT_FOUND' });
+    }
+    // #1810 — a dispute and its disputeHold must attach to the student the
+    // payment actually belongs to, not whichever studentId the body claims.
+    if (String(payment.studentId) !== String(studentId)) {
+      return res.status(404).json({ error: 'Payment not found for this student.', code: 'NOT_FOUND' });
     }
     const existing = await Dispute.findOne({ schoolId, txHash, status: { $in: ['open', 'under_review'] } });
     if (existing) {
@@ -243,6 +275,8 @@ async function flagDispute(req, res, next) {
       txHash,
       studentId,
       raisedBy: raisedByTrimmed,
+      raisedByEmail: contactEmail,
+      raisedByPhone: contactPhone,
       reason: reasonTrimmed,
       txReference: txReference ? txReference.trim() : undefined,
       evidence: evidence || [],
@@ -266,7 +300,10 @@ async function flagDispute(req, res, next) {
         performedBy: req.auditContext.performedBy,
         targetId:    String(dispute._id),
         targetType:  'dispute',
-        details:     { txHash, studentId, raisedBy: raisedByTrimmed, reason: reasonTrimmed },
+        details:     {
+          txHash, studentId, raisedBy: raisedByTrimmed, reason: reasonTrimmed,
+          contactProvided: Boolean(contactEmail || contactPhone),
+        },
         result:      'success',
         ipAddress:   req.auditContext.ipAddress,
         userAgent:   req.auditContext.userAgent,
@@ -275,6 +312,13 @@ async function flagDispute(req, res, next) {
 
     // Notify (best-effort)
     await _notifyDisputeChange(schoolId, 'dispute.created', dispute);
+
+    // #1638 — confirmation (with reference) to the raiser and an alert to the
+    // school's admins. Sent in the background so email retries never delay
+    // the response.
+    const notifyCtx = { schoolId, disputeId: String(dispute._id) };
+    _notifyInBackground(notifyRaiser(dispute, 'created'), notifyCtx);
+    _notifyInBackground(notifyAdmins(dispute, 'created'), notifyCtx);
 
     // Metrics (#1375). Recorded after the write succeeded, and never allowed to
     // fail the request — a scrape value is not worth a 500 to the caller.
@@ -285,7 +329,7 @@ async function flagDispute(req, res, next) {
       logger.warn('Failed to record dispute metrics', { error: metricsErr.message });
     }
 
-    res.status(201).json(dispute);
+    res.status(201).json({ ...dispute.toJSON(), reference: disputeReference(dispute) });
   } catch (err) { next(err); }
 }
 
@@ -307,7 +351,8 @@ async function getDisputes(req, res, next) {
       Dispute.find(filter).sort(sortOption).skip(skip).limit(pageSize).lean(),
       Dispute.countDocuments(filter),
     ]);
-    res.json({ disputes, pagination: { page: pageNum, limit: pageSize, total, totalPages: Math.ceil(total / pageSize) } });
+    const now = Date.now();
+    res.json({ disputes: disputes.map((d) => _withAgeing(decryptLeanDispute(d), now)), pagination: { page: pageNum, limit: pageSize, total, totalPages: Math.ceil(total / pageSize) } });
   } catch (err) { next(err); }
 }
 
@@ -315,7 +360,7 @@ async function getDisputeById(req, res, next) {
   try {
     const dispute = await Dispute.findOne({ _id: req.params.id, schoolId: req.schoolId }).lean();
     if (!dispute) return res.status(404).json({ error: 'Dispute not found.', code: 'NOT_FOUND' });
-    res.json(dispute);
+    res.json(_withAgeing(decryptLeanDispute(dispute)));
   } catch (err) { next(err); }
 }
 
@@ -441,6 +486,12 @@ async function resolveDispute(req, res, next) {
     // #894 — Emit SSE + webhook (best-effort)
     const eventName = newStatus === 'open' ? 'dispute.reopened' : `dispute.${newStatus}`;
     await _notifyDisputeChange(schoolId, eventName, dispute);
+
+    // #1638 — tell the raiser about every status change (background).
+    _notifyInBackground(
+      notifyRaiser(dispute, newStatus === 'open' ? 'reopened' : newStatus),
+      { schoolId, disputeId: String(dispute._id) },
+    );
 
     // Metrics (#1375). Resolution duration and the SLA breach are only recorded
     // on a terminal status; a reopen just moves the gauges. Never allowed to

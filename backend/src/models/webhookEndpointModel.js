@@ -13,11 +13,47 @@ const WEBHOOK_EVENTS = [
   'payment.failed',
   'payment.suspicious',
   'payment.refunded',
+  'payment.refund_rejected',
   'dispute.created',
+  'dispute.under_review',
   'dispute.resolved',
+  'dispute.reopened',
+  'dispute.sla_breached',
   'refund.initiated',
   'refund.completed',
 ];
+
+/**
+ * Event sent by POST /api/webhook-endpoints/:id/test (#1639). Not
+ * subscribable — it is only ever delivered on explicit request.
+ */
+const TEST_EVENT = 'webhook.test';
+
+/**
+ * Events the retired School.webhookUrl delivery path emitted (#1640).
+ * Endpoints created by migration 036 or the deprecated
+ * POST /api/schools/:slug/webhooks route subscribe to exactly these so
+ * integrators keep receiving what they received before.
+ */
+const LEGACY_SCHOOL_EVENTS = [
+  'payment.confirmed',
+  'payment.refunded',
+  'dispute.created',
+  'dispute.under_review',
+  'dispute.resolved',
+  'dispute.reopened',
+];
+
+/**
+ * How an endpoint came to exist (#1640).
+ *   api                    — created through /api/webhook-endpoints
+ *   legacy_school_webhook  — created from School.webhookUrl by migration 036,
+ *                            or by the deprecated per-school webhook route
+ */
+const ENDPOINT_SOURCES = Object.freeze({
+  API: 'api',
+  LEGACY_SCHOOL_WEBHOOK: 'legacy_school_webhook',
+});
 
 /**
  * Signature schemes an endpoint can receive (#1539).
@@ -50,10 +86,12 @@ const DEFAULT_SIGNATURE_VERSIONS = ['v2'];
  *                       are additionally signed with it until
  *                       previousSecretExpiresAt so receivers can roll over (#1538).
  *   signatureVersions — which signature headers this endpoint receives (#1539).
+ *   eventSequence     — last per-endpoint delivery sequence issued (#1815)
  *   subscribedEvents  — subset of WEBHOOK_EVENTS this endpoint receives
  *   isActive          — when false, the endpoint is skipped on all deliveries
  *   description       — optional human-readable label for admin UIs
  *   createdBy         — userId/email of the operator who registered it
+ *   source            — 'api' or 'legacy_school_webhook' (#1640)
  */
 const webhookEndpointSchema = new mongoose.Schema(
   {
@@ -95,6 +133,9 @@ const webhookEndpointSchema = new mongoose.Schema(
         message: 'signatureVersions must contain at least one signature version',
       },
     },
+    // #1815: last sequence number issued to this endpoint. Incremented
+    // atomically per delivery so consumers can detect gaps and reorder.
+    eventSequence: { type: Number, default: 0, min: 0 },
     subscribedEvents: {
       type: [String],
       enum: WEBHOOK_EVENTS,
@@ -120,6 +161,11 @@ const webhookEndpointSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    source: {
+      type: String,
+      enum: Object.values(ENDPOINT_SOURCES),
+      default: ENDPOINT_SOURCES.API,
+    },
   },
   { timestamps: true }
 );
@@ -129,6 +175,12 @@ webhookEndpointSchema.index({ schoolId: 1, subscribedEvents: 1, isActive: 1 });
 
 // Operator report of endpoints still receiving V1 signatures (#1539)
 webhookEndpointSchema.index({ signatureVersions: 1, isActive: 1 });
+
+// Lookup of a school's legacy endpoint by the deprecated per-school routes (#1640)
+webhookEndpointSchema.index({ schoolId: 1, source: 1 });
+
+// Purge of expired rotation secrets (#1639)
+webhookEndpointSchema.index({ previousSecretExpiresAt: 1 }, { sparse: true });
 
 // toJSON: strip the secrets from serialised output (never expose them over API)
 webhookEndpointSchema.set('toJSON', {
@@ -183,6 +235,9 @@ function decryptLeanEndpoint(ep) {
 
 module.exports = mongoose.model('WebhookEndpoint', webhookEndpointSchema);
 module.exports.WEBHOOK_EVENTS = WEBHOOK_EVENTS;
+module.exports.TEST_EVENT = TEST_EVENT;
+module.exports.LEGACY_SCHOOL_EVENTS = LEGACY_SCHOOL_EVENTS;
+module.exports.ENDPOINT_SOURCES = ENDPOINT_SOURCES;
 module.exports.SIGNATURE_VERSIONS = SIGNATURE_VERSIONS;
 module.exports.DEFAULT_SIGNATURE_VERSIONS = DEFAULT_SIGNATURE_VERSIONS;
 module.exports.decryptLeanEndpoint = decryptLeanEndpoint;

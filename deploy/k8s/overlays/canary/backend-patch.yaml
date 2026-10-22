@@ -12,7 +12,7 @@ spec:
     spec:
       initContainers:
         - name: migrate
-          image: stellaredupay/backend:canary
+          image: ghcr.io/mystery-cli/stellaredupay-backend:sha-PLACEHOLDER
           env:
             - name: MONGO_URI
               valueFrom:
@@ -21,7 +21,7 @@ spec:
                   key: MONGO_URI
       containers:
         - name: backend
-          image: stellaredupay/backend:canary
+          image: ghcr.io/mystery-cli/stellaredupay-backend:sha-PLACEHOLDER
           readinessProbe:
             httpGet:
               path: /health/ready

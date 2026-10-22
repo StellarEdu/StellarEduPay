@@ -1,0 +1,37 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-stellaredupay-images
+  annotations:
+    policies.kyverno.io/title: Verify StellarEduPay images
+    policies.kyverno.io/category: Software Supply Chain
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Application images must be published by the protected main-branch
+      container workflow and carry a keyless Sigstore signature. Kyverno
+      resolves the tag to the signed digest before admission.
+spec:
+  background: false
+  validationFailureAction: Enforce
+  rules:
+    - name: verify-stellaredupay-application-images
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - "*"
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/mystery-cli/stellaredupay-backend:*"
+            - "ghcr.io/mystery-cli/stellaredupay-frontend:*"
+          mutateDigest: true
+          verifyDigest: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    subject: https://github.com/Mystery-CLI/StellarEduPay/.github/workflows/container-publish.yml@refs/heads/main
+                    rekor:
+                      url: https://rekor.sigstore.dev

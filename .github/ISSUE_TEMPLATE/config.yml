@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/Mystery-CLI/StellarEduPay/security/advisories/new
+    about: Report vulnerabilities privately. Do not include secrets, payment data, or exploit details in a public issue.
+  - name: Questions and support
+    url: https://github.com/Mystery-CLI/StellarEduPay/discussions
+    about: Ask usage and development questions in Discussions.

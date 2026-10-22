@@ -86,7 +86,6 @@ describe('shared Redis client ownership', () => {
     require('../src/services/idempotencyStore');
     require('../src/services/sseService');
     require('../src/services/schoolCacheInvalidator');
-    require('../src/services/reportCacheInvalidator');
 
     expect(mockRedisConnections).toHaveLength(2);
     expect(mockDuplicateCalls).toBe(1);

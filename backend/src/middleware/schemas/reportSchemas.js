@@ -7,13 +7,19 @@ const MAX_RANGE_DAYS = parseInt(process.env.REPORT_MAX_RANGE_DAYS || '366', 10);
 /**
  * #884 — Versioned export schema.
  * format: 'json' | 'csv' (legacy)  | 'accounting_csv' (versioned, accounting-friendly)
- * schema_version: only meaningful for accounting_csv; defaults to 1 (current).
+ * schema_version: only meaningful for accounting_csv; defaults to 2 (current).
+ *
+ * #1767 — Version 2 carries per-asset totals (`totals: { XLM, USDC }`) instead of
+ * a single summed `totalAmount`, so amounts of different assets are never added
+ * together. Version 1 remains requestable for legacy integrators.
  */
+const CURRENT_SCHEMA_VERSION = 2;
+
 const reportQuerySchema = Joi.object({
   startDate:      Joi.string().isoDate().optional(),
   endDate:        Joi.string().isoDate().optional(),
   format:         Joi.string().valid('json', 'csv', 'accounting_csv').default('json'),
-  schema_version: Joi.number().integer().min(1).max(1).default(1),
+  schema_version: Joi.number().integer().min(1).max(CURRENT_SCHEMA_VERSION).default(CURRENT_SCHEMA_VERSION),
   async:          Joi.boolean().optional(),
 }).custom((value, helpers) => {
   const { startDate, endDate } = value;
@@ -31,4 +37,4 @@ const reportQuerySchema = Joi.object({
   return value;
 }).messages({ 'any.invalid': '{{#message}}' });
 
-module.exports = { reportQuerySchema, MAX_RANGE_DAYS };
+module.exports = { reportQuerySchema, MAX_RANGE_DAYS, CURRENT_SCHEMA_VERSION };

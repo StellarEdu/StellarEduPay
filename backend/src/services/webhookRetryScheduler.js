@@ -1,6 +1,7 @@
 'use strict';
 
 const { processPendingRetries } = require('./webhookService');
+const { purgeExpiredPreviousSecrets } = require('./webhookEndpointService');
 const logger = require('../utils/logger');
 
 const INTERVAL_MS = parseInt(process.env.WEBHOOK_RETRY_INTERVAL_MS, 10) || 60_000;
@@ -19,6 +20,13 @@ async function runOnce() {
     const result = await processPendingRetries();
     if (result.processed > 0) {
       logger.info('WEBHOOK_RETRY_PROCESSED', { count: result.processed });
+    }
+    // #1639: discard rotated-out secrets once their overlap window has closed.
+    try {
+      const purged = await purgeExpiredPreviousSecrets();
+      if (purged > 0) logger.info('WEBHOOK_PREVIOUS_SECRETS_PURGED', { count: purged });
+    } catch (purgeErr) {
+      logger.warn('WEBHOOK_PREVIOUS_SECRET_PURGE_FAILED', { error: purgeErr.message });
     }
     logger.info('WEBHOOK_RETRY_SCHEDULER_RUN', {
       durationMs: Date.now() - startedAt,

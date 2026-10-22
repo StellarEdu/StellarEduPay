@@ -62,7 +62,7 @@
  *
  *   // When submitting a transaction on behalf of a school:
  *   const keypair = getKeypair(school.encryptedSigningKey);
- *   const mgr = new StellarTransactionManager({ signingKeypair: keypair });
+ *   // ...build and sign the Stellar transaction with the keypair...
  */
 
 const crypto = require('crypto');

@@ -10,6 +10,9 @@ on:
     - cron: '0 3 * * 1' # every Monday at 03:00 UTC
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   backup-restore-test:
     name: Run test-backup-recovery.sh
@@ -26,7 +29,7 @@ jobs:
           --health-retries 12
           --health-start-period 10s
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install MongoDB Database Tools (mongodump/mongorestore/mongosh)
         run: |
@@ -35,13 +38,55 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y ./mongosh.deb ./db-tools.deb
 
-      - name: Seed a small amount of test data
+      - name: Seed a realistic test fixture
+        env:
+          MONGO_URI: mongodb://localhost:27017/stellaredupay
         run: |
-          mongosh --quiet --eval "db.getSiblingDB('stellaredupay').restore_test_smoke.insertOne({ seededAt: new Date() })" mongodb://localhost:27017
+          # Seed a realistic fixture (hundreds of students, payments and audit
+          # logs) into the SAME database/URI that the backup step will dump.
+          # A metadata-only archive (~378 bytes) is what previously slipped
+          # below the integrity floor, so we assert the seed actually wrote
+          # documents before taking the backup.
+          node scripts/seed-test-data.js
+
+          echo "Verifying seeded document counts..."
+          mongosh --quiet "$MONGO_URI" --eval '
+            const db = db.getSiblingDB("stellaredupay");
+            const collections = ["students", "payments", "auditlogs"];
+            let failed = false;
+            for (const name of collections) {
+              const count = db.getCollection(name).countDocuments();
+              print(`${name}: ${count}`);
+              if (count === 0) {
+                print(`ERROR: ${name} is empty after seeding`);
+                failed = true;
+              }
+            }
+            if (failed) { quit(1); }
+          '
 
       - name: Run backup + restore verification
         env:
           MONGO_URI: mongodb://localhost:27017/stellaredupay
+          # The CI service container is a standalone mongod, which cannot serve
+          # --oplog dumps (production runs a replica set and keeps the default).
+          BACKUP_OPLOG: "false"
+          # Sized for the realistic fixture above so the integrity floor is
+          # intentional rather than tripping on a metadata-only archive.
+          MIN_BACKUP_SIZE: "1024"
           BACKEND_INTERNAL_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
           BACKUP_NOTIFY_TOKEN: ${{ secrets.BACKUP_NOTIFY_TOKEN }}
         run: bash scripts/test-backup-recovery.sh
+
+      - name: Notify on scheduled-run failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.BACKUP_ALERT_SLACK_WEBHOOK }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::BACKUP_ALERT_SLACK_WEBHOOK not set; skipping failure notification"
+            exit 0
+          fi
+          payload=$(printf '{"text":"Backup restore test failed on main: %s"}' "$RUN_URL")
+          curl -sS -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"

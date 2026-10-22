@@ -115,6 +115,41 @@ async function processPaymentOperation({ op, opIndex, txHash, txMemo, schoolId, 
  * in a multi-operation transaction. We now iterate all payment-type
  * operations so no funds are lost.
  */
+/**
+ * Fetch every operation of a transaction, following Horizon pagination.
+ *
+ * Horizon returns at most 10 operations per page by default, while a
+ * transaction may contain up to 100 operations. We therefore page through
+ * the results so operations beyond the first page are not missed.
+ */
+async function fetchAllOperations(txHash) {
+  const operations = [];
+  let page = await server.operations().forTransaction(txHash).limit(200).call();
+
+  while (page && page.records) {
+    operations.push(...page.records);
+    if (typeof page.next !== 'function') break;
+    page = await page.next();
+  }
+
+  return operations;
+}
+
+/**
+ * Extract every creditable operation targeting the school wallet from a
+ * transaction, preserving each operation's index within the transaction.
+ *
+ * This is the single source of truth for multi-operation crediting and is
+ * reused by stellarService so extraction logic is not duplicated.
+ */
+async function extractCreditableOperations(txHash, walletAddress) {
+  const records = await fetchAllOperations(txHash);
+
+  return records
+    .map((op, index) => ({ op, opIndex: index }))
+    .filter(({ op }) => PAYMENT_TYPES.includes(op.type) && op.to === walletAddress);
+}
+
 async function processTransaction(txHash, schoolId) {
   const walletAddress = await getSchoolWallet(schoolId);
   if (!walletAddress) {
@@ -125,11 +160,7 @@ async function processTransaction(txHash, schoolId) {
   const tx = await server.transactions().transaction(txHash).call();
   const txMemo = tx.memo;
 
-  const ops = await server.operations().forTransaction(txHash).call();
-
-  const paymentOps = ops.records
-    .map((op, index) => ({ op, opIndex: index }))
-    .filter(({ op }) => PAYMENT_TYPES.includes(op.type) && op.to === walletAddress);
+  const paymentOps = await extractCreditableOperations(txHash, walletAddress);
 
   if (paymentOps.length === 0) {
     return [];
@@ -152,8 +183,11 @@ async function processTransaction(txHash, schoolId) {
 }
 
 module.exports = {
+  PAYMENT_TYPES,
   processTransaction,
   processPaymentOperation,
+  extractCreditableOperations,
+  fetchAllOperations,
   getOperationAmount,
   getOperationAsset,
 };

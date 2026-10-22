@@ -93,7 +93,11 @@ async function handleEmailProviderEvent(event) {
   if (record) {
     const updates = { ...updateFields, status };
     if (status === 'delivered' && !record.sentAt) updates.sentAt = record.sentAt || new Date();
-    const updated = await EmailDelivery.findByIdAndUpdate(record._id, { $set: updates }, { new: true }).bypassTenantScope();
+    const updated = await EmailDelivery.findOneAndUpdate(
+      { _id: record._id, schoolId: record.schoolId },
+      { $set: updates },
+      { new: true }
+    ).bypassTenantScope();
     if (shouldSuppress(status) && record.schoolId && record.studentId) {
       await suppressStudentEmail(record.schoolId, record.studentId, status, reason);
     }

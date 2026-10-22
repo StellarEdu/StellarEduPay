@@ -216,12 +216,82 @@ async function unlockPayment(req, res, next) {
   }
 }
 
+/** Default page size for the dead-letter listing. */
+const DLQ_DEFAULT_PAGE_SIZE = 100;
+/** Upper bound on how many dead-letter jobs one page may return. */
+const DLQ_MAX_PAGE_SIZE = 500;
+
+/**
+ * Parses ?start=&end= into a BullMQ range. `end` is inclusive, matching
+ * BullMQ's getFailed(start, end) semantics.
+ * @param {object} query
+ * @returns {{start: number, end: number}}
+ */
+function parseDlqRange(query) {
+  const start = Math.max(0, parseInt(query.start, 10) || 0);
+  const rawEnd = parseInt(query.end, 10);
+  const end = Number.isFinite(rawEnd) && rawEnd >= start
+    ? Math.min(rawEnd, start + DLQ_MAX_PAGE_SIZE - 1)
+    : start + DLQ_DEFAULT_PAGE_SIZE - 1;
+  return { start, end };
+}
+
+/**
+ * Whether the caller may see dead-letter jobs across all schools.
+ * Only super-admins (requireAdminAuth) get the unscoped view; school
+ * owner/staff callers are always scoped to req.schoolId.
+ * @param {object} req
+ * @returns {boolean}
+ */
+function isDlqCrossTenantViewer(req) {
+  return Boolean(req.admin) && !req.schoolId;
+}
+
+/**
+ * Whether a dead-letter job belongs to the given school.
+ * @param {object} job
+ * @param {string} schoolId
+ * @returns {boolean}
+ */
+function jobBelongsToSchool(job, schoolId) {
+  return Boolean(job && job.data && String(job.data.schoolId) === String(schoolId));
+}
+
 async function getDeadLetterJobs(req, res, next) {
   try {
     const { getDeadLetterQueue } = require('../config/retryQueueSetup');
     const queue = getDeadLetterQueue();
-    const jobs = queue ? await queue.getFailed(0, 99) : [];
-    res.json({ jobs: jobs.map((j) => ({ id: j.id, name: j.name, data: j.data, failedReason: j.failedReason })) });
+    if (!queue) return res.json({ jobs: [], total: 0 });
+
+    const { start, end } = parseDlqRange(req.query || {});
+    const crossTenant = isDlqCrossTenantViewer(req);
+    const schoolId = req.schoolId;
+
+    // The BullMQ dead-letter queue is global, so school callers must filter by
+    // job.data.schoolId. Scan in batches until the requested page is filled or
+    // the queue is exhausted, so a school's jobs are not hidden behind other
+    // schools' failures.
+    const scanBatch = DLQ_MAX_PAGE_SIZE;
+    const jobs = [];
+    let total = 0;
+    let offset = 0;
+    let exhausted = false;
+
+    while (!exhausted && jobs.length <= end) {
+      const batch = await queue.getFailed(offset, offset + scanBatch - 1);
+      if (!batch || batch.length === 0) break;
+      for (const job of batch) {
+        if (!crossTenant && !jobBelongsToSchool(job, schoolId)) continue;
+        if (total >= start && jobs.length <= end) {
+          jobs.push({ id: job.id, name: job.name, data: job.data, failedReason: job.failedReason });
+        }
+        total += 1;
+      }
+      offset += batch.length;
+      if (batch.length < scanBatch) exhausted = true;
+    }
+
+    res.json({ jobs, total, start, end });
   } catch (err) {
     next(err);
   }
@@ -234,7 +304,12 @@ async function retryDeadLetterJob(req, res, next) {
     const queue = getDeadLetterQueue();
     if (!queue) return res.status(503).json({ error: 'Retry queue unavailable', code: 'SERVICE_UNAVAILABLE' });
     const job = await queue.getJob(jobId);
+    // Return 404 (not 403) for another school's job so job ids are not
+    // enumerable across tenants.
     if (!job) return res.status(404).json({ error: 'Job not found', code: 'NOT_FOUND' });
+    if (!isDlqCrossTenantViewer(req) && !jobBelongsToSchool(job, req.schoolId)) {
+      return res.status(404).json({ error: 'Job not found', code: 'NOT_FOUND' });
+    }
     await job.retry();
     res.json({ message: 'Job queued for retry', jobId });
   } catch (err) {
@@ -624,7 +699,7 @@ async function approvePaymentRefund(req, res, next) {
       return res.status(403).json({ error: principalErr.message, code: principalErr.code });
     }
 
-    const refund = await approveRefund(refundId, principal);
+    const refund = await approveRefund(refundId, principal, schoolId);
 
     await logAudit({
       schoolId,
@@ -678,7 +753,7 @@ async function rejectPaymentRefund(req, res, next) {
       return res.status(403).json({ error: principalErr.message, code: principalErr.code });
     }
 
-    const refund = await rejectRefund(refundId, principal, reason);
+    const refund = await rejectRefund(refundId, principal, reason, schoolId);
 
     await logAudit({
       schoolId,
@@ -736,7 +811,7 @@ async function completePaymentRefund(req, res, next) {
       return res.status(403).json({ error: principalErr.message, code: principalErr.code });
     }
 
-    const refund = await completeRefund(refundId, refundTxHash, principal);
+    const refund = await completeRefund(refundId, refundTxHash, principal, schoolId);
 
     await logAudit({
       schoolId,
@@ -796,7 +871,7 @@ async function verifyReceipt(req, res, next) {
   try {
     const { receiptId } = req.params;
 
-    const receipt = await Receipt.findById(receiptId).lean();
+    const receipt = await Receipt.findOne({ _id: receiptId, schoolId: req.schoolId }).lean();
     if (!receipt) return res.status(404).json({ error: 'Receipt not found', code: 'NOT_FOUND' });
 
     try {
@@ -875,88 +950,4 @@ async function correctPlaceholderPayment(req, res, next) {
       return res.status(400).json({
         error: 'studentId, amount, status, and reason are required',
         code: 'VALIDATION_ERROR',
-      });
-    }
-
-    // Find the placeholder payment (zero amount, FAILED status)
-    const placeholder = await Payment.findOne({ schoolId, txHash, amount: 0, status: PAYMENT_STATUS.FAILED });
-    if (!placeholder) {
-      return res.status(404).json({
-        error: 'Placeholder payment not found (must have amount 0 and status FAILED)',
-        code: 'NOT_FOUND',
-      });
-    }
-
-    // Update with the actual transaction data
-    const previousStatus = placeholder.status;
-    const previousAmount = placeholder.amount;
-    const previousStudentId = placeholder.studentId;
-
-    placeholder.studentId = studentId;
-    placeholder.amount = amount;
-    placeholder.status = status;
-    placeholder.feeValidationStatus = 'unknown'; // Will be recalculated as needed
-
-    // Ensure admin override is set for the transition
-    placeholder.$locals.adminOverride = true;
-    const updated = await placeholder.save();
-
-    await logAudit({
-      schoolId,
-      action: 'payment_placeholder_corrected',
-      performedBy: req.auditContext?.performedBy || 'unknown',
-      targetId: txHash,
-      targetType: 'payment',
-      details: {
-        from: {
-          studentId: previousStudentId,
-          amount: previousAmount,
-          status: previousStatus,
-        },
-        to: {
-          studentId,
-          amount,
-          status,
-        },
-        reason,
-      },
-      result: 'success',
-      ipAddress: req.auditContext?.ipAddress,
-      userAgent: req.auditContext?.userAgent,
-    });
-
-    res.json(updated);
-  } catch (err) {
-    next(err);
-  }
-}
-
-module.exports = {
-  syncAllPayments,
-  getSyncStatus,
-  finalizePayments,
-  generateReceipt,
-  lockPaymentForUpdate,
-  unlockPayment,
-  getDeadLetterJobs,
-  retryDeadLetterJob,
-  getQueueJobStatus,
-  getStuckPayments,
-  updatePaymentStatus,
-  bulkUpdatePaymentStatus,
-  BULK_STATUS_UPDATE_LIMIT,
-  reviewSuspiciousPayment,
-  streamPaymentEvents,
-  initiatePaymentRefund,
-  approvePaymentRefund,
-  rejectPaymentRefund,
-  completePaymentRefund,
-  getPaymentRefunds,
-  getSchoolRefunds,
-  verifyReceipt,
-  getReconciliationReports,
-  generateSchoolReconciliationReport,
-  correctPlaceholderPayment,
-  // Exposed for testing — callers can introspect the lock state
-  _lock: lock,
-};
+     

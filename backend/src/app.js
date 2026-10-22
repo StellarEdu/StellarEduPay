@@ -1,6 +1,9 @@
 'use strict';
 
 require('dotenv').config();
+// #1636: OpenTelemetry must start before express/mongoose/ioredis are required
+// so auto-instrumentation can patch them. No-op unless OTEL_TRACING_ENABLED=true.
+require('./tracing').initTracing();
 const config = require('./config');
 const express = require('express');
 const cors = require('cors');
@@ -39,6 +42,7 @@ const emailDeliveryRoutes = require('./routes/emailDeliveryRoutes');
 const emailProviderWebhookRoutes = require('./routes/emailProviderWebhookRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const authRoutes = require('./routes/authRoutes');
+const internalRoutes = require('./routes/internalRoutes');
 const emailRoutes = require('./routes/emailRoutes');
 const metricsRoute = require('./routes/metricsRoute');
 const webhookEndpointRoutes = require('./routes/webhookEndpointRoutes');
@@ -51,6 +55,10 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const userRoutes = require('./routes/userRoutes');
 const academicPeriodRoutes = require('./routes/academicPeriodRoutes');
 const anchorRoutes = require('./routes/anchorRoutes');
+const parentPortalRoutes = require('./routes/parentPortalRoutes');
+const publicConfigRoutes = require('./routes/publicConfigRoutes');
+const internalRoutes = require('./routes/internalRoutes');
+const retryQueueRoutes = require('./routes/retryQueueRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
 const { startPolling, stopPolling } = require('./services/transactionPollingService');
@@ -69,6 +77,7 @@ const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./ser
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
+const { startDisputeSlaScheduler, stopDisputeSlaScheduler } = require('./services/disputeNotificationService');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
 const { closeQueue } = require('./queue/transactionQueue');
 const { closeRedisClients } = require('./config/redisClient');
@@ -80,7 +89,7 @@ const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRe
 const { requireAdminAuth } = require('./middleware/auth');
 const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
-const { healthCheck, healthLive, healthReady } = require('./controllers/healthController');
+const { healthCheck, healthLive, healthReady, version: versionInfo } = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
 const logger = require('./utils/logger');
 const { startHeapMonitoring } = require('./utils/heapMonitoring');
@@ -144,6 +153,8 @@ app.use(cors({
     'Idempotency-Key',
     'X-Correlation-ID',
     'X-Request-ID',
+    // #1637: parent portal magic-link token (never sent in the query string)
+    'X-Parent-Token',
   ],
   // Issue #1584: Expose response headers so the browser JS can read them.
   // Rate-limit headers let the frontend back off gracefully; correlation IDs
@@ -174,10 +185,17 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
+// Issue #1797 — the raw body is only kept for inbound webhook routes that verify
+// a signature over the exact bytes. Keeping a UTF-8 copy of every JSON body
+// doubled memory use (including bulk imports) and made the signed bytes depend
+// on re-decoding. The Buffer is stored as-is so signatures match the wire bytes.
+const RAW_BODY_ROUTE_RE = /^\/api\/(email-provider-webhook|email\/webhooks)(\/|$)/;
 app.use(express.json({
   limit: config.MAX_BODY_SIZE,
   verify: (req, res, buf) => {
-    req.rawBody = buf.toString('utf8');
+    if (RAW_BODY_ROUTE_RE.test(req.originalUrl.split('?')[0])) {
+      req.rawBody = buf;
+    }
   },
 }));
 app.use(requestLogger());
@@ -185,7 +203,7 @@ app.use(requestLogger());
 // ── Cache-Control: no-store on auth and sensitive data routes ─────────────────
 // Prevents intermediaries (CDNs, shared proxies) from caching tokens,
 // payment data, audit logs, and other sensitive JSON responses.
-const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries)\b/;
+const SENSITIVE_PATH_RE = /^\/api\/(auth|payments|students|reports|audit|receipts|disputes|fee-adjustments|payment-plans|reminders|webhook-endpoints|webhook-deliveries|parent)\b/;
 app.use((req, res, next) => {
   if (SENSITIVE_PATH_RE.test(req.path)) {
     res.setHeader('Cache-Control', 'no-store');
@@ -207,6 +225,10 @@ const concurrentMiddleware = createConcurrentRequestMiddleware({
 // ── Metrics ───────────────────────────────────────────────────────────────────
 // Mounted before the rate-limiter so Prometheus scrapes are never throttled.
 app.use('/metrics', metricsRoute);
+
+// Issue #1792 — unauthenticated runtime config read on every frontend page load
+// (TestnetBanner network-mismatch guard), so it is mounted before the rate limiter.
+app.use('/api/public-config', publicConfigRoutes);
 
 app.use(concurrentMiddleware.rateLimiter((req) => req.ip));
 app.use(concurrentMiddleware.requestQueue());
@@ -232,19 +254,12 @@ app.use('/api/email-deliveries', emailDeliveryRoutes);
 app.use('/api/email-provider-webhook', emailProviderWebhookRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/internal', internalRoutes);
 app.use('/api/webhook-endpoints', webhookEndpointRoutes);
 app.use('/api/webhook-deliveries', webhookDeliveryRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/payment-plans', paymentPlanRoutes);
 app.use('/api/audit', auditRoutes);
-// Issue #1575 — alias /api/audit-logs → /api/audit for one release so
-// integrators following the old API spec docs get a 200 with a Deprecation
-// header rather than a hard 404.  Remove this alias in the next major version.
-app.use('/api/audit-logs', (req, res, next) => {
-  res.set('Deprecation', 'true');
-  res.set('Link', '</api/audit>; rel="successor-version"');
-  next();
-}, auditRoutes);
 // Issue #1575 — alias /api/audit-logs → /api/audit for one release so
 // integrators following the old API spec docs get a 200 with a Deprecation
 // header rather than a hard 404.  Remove this alias in the next major version.
@@ -259,10 +274,18 @@ app.use('/api/csp-report', cspReportRoutes);
 app.use('/api', userRoutes);
 app.use('/api/academic-periods', academicPeriodRoutes);
 app.use('/api/anchor', anchorRoutes);
+app.use('/api/parent', parentPortalRoutes);
+// #1583 / #1593 / #1592: these routers document themselves as mounted here
+// but the mounts were lost in a merge; restored as part of #1632 so every
+// route in docs/openapi.json is actually reachable.
+app.use('/api/public-config', publicConfigRoutes);
+app.use('/api/internal', internalRoutes);
+app.use('/api/retry-queue', retryQueueRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
 app.get('/health/live', healthLive);
 app.get('/health/ready', healthReady);
+app.get('/api/version', versionInfo);
 
 // Issue #671: OpenAPI/Swagger documentation
 try {
@@ -377,6 +400,7 @@ connectDatabase().then(async () => {
     startReconciliationReportScheduler();
     startMetricsRollupScheduler();
     startJobRecoveryScheduler();
+    startDisputeSlaScheduler();
   };
 
   const stopLeaderSchedulers = () => {
@@ -392,6 +416,7 @@ connectDatabase().then(async () => {
     stopReconciliationReportScheduler();
     stopMetricsRollupScheduler();
     stopJobRecoveryScheduler();
+    stopDisputeSlaScheduler();
   };
 
   leaderElection.register(startLeaderSchedulers, stopLeaderSchedulers);
@@ -491,6 +516,7 @@ async function shutdown(signal) {
       await closeRedisClients();
       await mongoose.disconnect();
       logger.info('MongoDB disconnected — clean exit');
+      await require('./tracing').shutdownTracing();
       clearTimeout(forceExitTimer);
       process.exit(0);
     } catch (err) {

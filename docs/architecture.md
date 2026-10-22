@@ -372,7 +372,7 @@ School
 StellarEduPay's concurrency primitive for financial operations is **Redis-backed distributed locking**, not MongoDB multi-document transactions.
 
 - **Lock service**: `backend/src/services/distributedLock.js` provides Redis-backed locks with `studentBalanceLockKey`.
-- **Call sites**: `stellarService.js`, `paymentController.js`, `underpaidReconciliationService.js` use distributed locks to serialize access to shared resources (e.g. a student's balance during concurrent payments).
+- **Call sites**: `stellarService.js`, `paymentController.js` use distributed locks to serialize access to shared resources (e.g. a student's balance during concurrent payments).
 
 **Rationale:** Distributed locks are simpler to reason about than MongoDB transactions, are not affected by replica set configuration, and work across both MongoDB and external state (Stellar blockchain). They scale better under contention because lock holders are individually bounded and timeouts prevent indefinite hangs.
 
@@ -521,7 +521,7 @@ All workers start on server boot inside the `connectDatabase().then(...)` callba
 | Retry worker | `startRetryWorker()` | `RETRY_INTERVAL_MS` (60s) | Re-attempt failed verifications (MongoDB-backed when Redis is absent) |
 | Consistency scheduler | `startConsistencyScheduler()` | configurable | Detect DB/chain drift |
 | Reminder scheduler | `startReminderScheduler()` | `REMINDER_INTERVAL_MS` (24h) | Send fee reminder emails |
-| TX processing queue worker | `startTxQueueWorker()` | event-driven (BullMQ, **Durable via MongoDB outbox — see Queue Durability below**) | Process queued transactions submitted via `POST /api/payments/process-queue`, the stuck-payment reconciler, and any internal pathway |
+| TX processing queue worker | `startTxQueueWorker()` | event-driven (BullMQ, **Durable via MongoDB outbox — see Queue Durability below**) | Process transactions enqueued by the stuck-payment reconciler and other internal pathways (`enqueueTransaction`) |
 | Transaction retry + DLQ worker | `initializeRetryQueue()` | event-driven (BullMQ, configurable backoff with jitter) | Re-attempt transaction verifications on transient Horizon errors; permanent failures and retry exhaustion land in the dedicated dead-letter queue |
 | Report generation worker | `startReportQueueWorker()` | event-driven (BullMQ, **durable via `ReportJob` collection**) | Generate CSV/JSON reports and update `ReportJob` status to `completed` / `failed` |
 
@@ -612,6 +612,39 @@ Each school has its own `stellarAddress`. The transaction poller fans out to all
 
 ---
 
+## Payment Processing Backpressure
+
+**There is currently no backpressure mechanism on payment processing.** This is a deliberate statement of fact, not an oversight, and it is recorded here so that operators do not infer coverage from monitoring configuration that no longer exists.
+
+### What was removed
+
+`backend/src/services/concurrentPaymentProcessor.js` was deleted (issue #1036). It was an in-process queue that serialized payment processing and exposed a `getStats()` snapshot (`queueDepth`, `maxQueueDepth`) used to throttle intake. Its removal was never completed, which left three artifacts behind:
+
+- **In-process queue and thresholds.** The `MAX_QUEUE_DEPTH` and `QUEUE_BACKPRESSURE_HIGH_WATER` thresholds lived in that module. They no longer exist anywhere in the codebase, and no equivalent constant has replaced them.
+- **Prometheus gauges.** `payment_processor_queue_depth`, `payment_processor_queue_backpressure_high_water`, and `payment_processor_queue_max_depth` were declared in `backend/src/metrics/index.js` and are now removed. `payment_processor_queue_depth` was never actually set after the module was deleted — its `collect()` hook swallowed a `MODULE_NOT_FOUND` on every scrape — so it was exported with no value.
+- **Alert rules.** `monitoring/alerts/queue_backpressure.yml` contained two alerts (`PaymentProcessorQueueBackpressure`, `PaymentProcessorQueueSaturation`) comparing `payment_processor_queue_depth` against the two threshold gauges. Both were permanently unfireable and have been deleted along with the file.
+
+`transactionPollingService.getQueueBackpressureState()` previously attempted to read the processor's stats on every polling cycle, always took its `catch` branch, and logged an identical warning each time. It now returns an explicit `{ active: false }` fallback with no warning, matching the hardcoded `queueDepth = 0` fallback in `healthController.js`.
+
+### What provides backpressure today
+
+Nothing at the payment-processing layer. The mechanisms that do exist bound *adjacent* concerns, not payment intake:
+
+| Mechanism | Where | What it actually bounds |
+|---|---|---|
+| `concurrentRequestHandler` middleware | `backend/src/middleware/` | Concurrent outbound Horizon calls: circuit breaker (opens after 5 failures, resets after 30s) plus a request queue (max 50 concurrent, max 1000 queued). This protects Horizon from request bursts; it does not throttle payment submission. |
+| BullMQ worker concurrency | `queue/transactionQueue.js`, `queue/transactionRetryQueue.js` | How many queued jobs a worker processes at once. Excess work waits in Redis/MongoDB rather than being rejected — this is buffering, not backpressure. |
+| MongoDB-backed outbox | `PendingVerification` collection | Durability of queued work across restarts. Unbounded in size; it absorbs load rather than shedding it. |
+| `rateLimiter` middleware | `backend/src/middleware/rateLimiter.js` | Per-IP HTTP request rate. A coarse abuse control, not a payment-pipeline saturation control. |
+
+### Operator guidance
+
+- **Do not rely on queue-saturation alerting for payment processing.** No such alert exists. If payment intake needs to be throttled, that must be designed and implemented — it is not currently enforced anywhere.
+- **Watch the adjacent signals instead.** Horizon error rates and `concurrentRequestHandler` circuit-breaker state indicate upstream pressure; BullMQ queue depth and `PendingVerification` backlog growth indicate downstream accumulation. Neither is a substitute for intake throttling, but together they show whether the pipeline is falling behind.
+- **If a payment processor is reintroduced**, it must bring its own metrics and alerts. Do not re-add gauge declarations or alert rules that reference a module that does not exist — that is precisely the failure mode this section documents.
+
+---
+
 ## Money Representation on the Payment-Verification Path
 
 `paymentController.verifyPayment` and the `studentBalanceUpdater` it shares with
@@ -683,7 +716,7 @@ payment, the order rules run in — and what happens when they disagree — is
 not visible from the UI alone, so it's documented here in full.
 
 **Live path:** admin page (`frontend/src/pages/fee-adjustments.jsx`) →
-`POST/PUT /api/fee-adjustments` → `feeAdjustmentController.js` →
+`POST /api/fee-adjustments` / `PUT /api/fee-adjustments/:id` → `feeAdjustmentController.js` →
 `FeeAdjustmentRule` Mongo model → `feeAdjustmentService.js`, which is what
 actually computes the fee used at payment time. See the doc comments atop
 `feeAdjustmentRuleModel.js` and `feeAdjustmentService.js` for the

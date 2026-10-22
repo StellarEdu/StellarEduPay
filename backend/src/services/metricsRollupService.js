@@ -13,6 +13,43 @@ const Payment = require('../models/paymentModel');
 const { DailyMetrics, MonthlyMetrics } = require('../models/metricsModel');
 const logger = require('../utils/logger');
 
+// #1766 — 'partial' and 'underpaid' are distinct statuses (see
+// docs/payment-plans-underpaid-reconciliation.md); both are counted so the
+// buckets always sum to paymentCount.
+const FEE_STATUSES = ['valid', 'partial', 'underpaid', 'overpaid', 'unknown'];
+
+/** Normalise a feeValidationStatus to one of FEE_STATUSES. */
+function _normaliseFeeStatus(status) {
+  return FEE_STATUSES.includes(status) ? status : 'unknown';
+}
+
+/** Build the per-status $inc/$sum counters for a single payment. */
+function _statusCounters(status) {
+  const normalised = _normaliseFeeStatus(status);
+  const counters = {};
+  for (const s of FEE_STATUSES) {
+    counters[`${s}Count`] = s === normalised ? 1 : 0;
+  }
+  return counters;
+}
+
+/** Merge per-asset amount maps ({ XLM: 1.2, USDC: 3 }) into a plain object. */
+function _mergeAssetTotals(target, source) {
+  for (const [asset, amount] of Object.entries(source || {})) {
+    target[asset] = (target[asset] || 0) + amount;
+  }
+  return target;
+}
+
+/** Round every asset total to 7 decimals. */
+function _roundAssetTotals(totals) {
+  const out = {};
+  for (const [asset, amount] of Object.entries(totals || {})) {
+    out[asset] = parseFloat(amount.toFixed(7));
+  }
+  return out;
+}
+
 /** Format a Date as 'YYYY-MM-DD' (UTC). */
 function _dayKey(date) {
   return new Date(date).toISOString().slice(0, 10);
@@ -34,13 +71,13 @@ async function incrementPaymentMetrics(payment) {
   const day   = _dayKey(confirmedAt);
   const month = _monthKey(confirmedAt);
 
+  const assetCode = payment.assetCode || 'XLM';
   const inc = {
-    paymentCount:   1,
-    totalAmount:    payment.amount || 0,
+    paymentCount:    1,
     totalFiatAmount: payment.fiatSnapshot?.fiatAmount || 0,
-    validCount:     payment.feeValidationStatus === 'valid'      ? 1 : 0,
-    overpaidCount:  payment.feeValidationStatus === 'overpaid'   ? 1 : 0,
-    underpaidCount: payment.feeValidationStatus === 'underpaid'  ? 1 : 0,
+    ..._statusCounters(payment.feeValidationStatus),
+    // #1767 — amounts are tracked per asset; never summed across assets.
+    [`assetTotals.${assetCode}`]: payment.amount || 0,
   };
 
   const setOnInsert = {
@@ -85,13 +122,26 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
       $group: {
         _id: { $dateToString: { format: '%Y-%m-%d', date: '$confirmedAt', timezone: 'UTC' } },
         paymentCount:   { $sum: 1 },
-        totalAmount:    { $sum: '$amount' },
         totalFiatAmount:{ $sum: { $ifNull: ['$fiatSnapshot.fiatAmount', 0] } },
         fiatCurrency:   { $first: '$fiatSnapshot.fiatCurrency' },
         validCount:     { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'valid'] }, 1, 0] } },
-        overpaidCount:  { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'overpaid'] }, 1, 0] } },
+        partialCount:   { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'partial'] }, 1, 0] } },
         underpaidCount: { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
+        overpaidCount:  { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'overpaid'] }, 1, 0] } },
+        unknownCount:   { $sum: { $cond: [{ $in: ['$feeValidationStatus', ['valid', 'partial', 'underpaid', 'overpaid']] }, 0, 1] } },
+        // #1767 — group amounts by asset so XLM and USDC are never added together.
+        assetTotals: {
+          $push: {
+            k: { $ifNull: ['$assetCode', 'XLM'] },
+            v: { $ifNull: ['$amount', 0] },
+          },
+        },
         uniqueStudents: { $addToSet: '$studentId' },
+      },
+    },
+    {
+      $addFields: {
+        assetTotals: { $arrayToObject: '$assetTotals' },
       },
     },
   ]);
@@ -105,12 +155,14 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
           schoolId,
           period:          r._id,
           paymentCount:    r.paymentCount,
-          totalAmount:     parseFloat(r.totalAmount.toFixed(7)),
+          assetTotals:     _roundAssetTotals(r.assetTotals),
           totalFiatAmount: parseFloat(r.totalFiatAmount.toFixed(2)),
           fiatCurrency:    r.fiatCurrency || null,
           validCount:      r.validCount,
-          overpaidCount:   r.overpaidCount,
+          partialCount:    r.partialCount,
           underpaidCount:  r.underpaidCount,
+          overpaidCount:   r.overpaidCount,
+          unknownCount:    r.unknownCount,
           uniqueStudents:  r.uniqueStudents.length,
           reconciledAt:    now,
         },
@@ -126,15 +178,17 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
   for (const r of dailyRows) {
     const m = r._id.slice(0, 7); // 'YYYY-MM'
     if (!monthMap[m]) {
-      monthMap[m] = { paymentCount: 0, totalAmount: 0, totalFiatAmount: 0, validCount: 0, overpaidCount: 0, underpaidCount: 0, students: new Set(), fiatCurrency: r.fiatCurrency };
+      monthMap[m] = { paymentCount: 0, assetTotals: {}, totalFiatAmount: 0, validCount: 0, partialCount: 0, underpaidCount: 0, overpaidCount: 0, unknownCount: 0, students: new Set(), fiatCurrency: r.fiatCurrency };
     }
     const mm = monthMap[m];
     mm.paymentCount   += r.paymentCount;
-    mm.totalAmount    += r.totalAmount;
+    _mergeAssetTotals(mm.assetTotals, r.assetTotals);
     mm.totalFiatAmount+= r.totalFiatAmount;
     mm.validCount     += r.validCount;
-    mm.overpaidCount  += r.overpaidCount;
+    mm.partialCount   += r.partialCount;
     mm.underpaidCount += r.underpaidCount;
+    mm.overpaidCount  += r.overpaidCount;
+    mm.unknownCount   += r.unknownCount;
     r.uniqueStudents.forEach(s => mm.students.add(s));
   }
 
@@ -146,12 +200,14 @@ async function reconcileMetrics(schoolId, { startDate, endDate } = {}) {
           schoolId,
           period,
           paymentCount:    m.paymentCount,
-          totalAmount:     parseFloat(m.totalAmount.toFixed(7)),
+          assetTotals:     _roundAssetTotals(m.assetTotals),
           totalFiatAmount: parseFloat(m.totalFiatAmount.toFixed(2)),
           fiatCurrency:    m.fiatCurrency || null,
           validCount:      m.validCount,
-          overpaidCount:   m.overpaidCount,
+          partialCount:    m.partialCount,
           underpaidCount:  m.underpaidCount,
+          overpaidCount:   m.overpaidCount,
+          unknownCount:    m.unknownCount,
           uniqueStudents:  m.students.size,
           reconciledAt:    now,
         },
@@ -292,4 +348,5 @@ module.exports = {
   reconcileMetrics,
   startMetricsRollupScheduler,
   stopMetricsRollupScheduler,
+  FEE_STATUSES,
 };

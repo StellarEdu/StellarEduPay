@@ -17,6 +17,7 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
   const { t } = useTranslation();
   const [raisedBy, setRaisedBy] = useState("");
   const [reason, setReason] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState(null);
@@ -26,6 +27,9 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
     const e = {};
     if (!raisedBy.trim()) e.raisedBy = t("disputeForm.nameRequired");
     else if (raisedBy.trim().length > 200) e.raisedBy = t("disputeForm.nameTooLong");
+    if (contactEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) {
+      e.contactEmail = "Enter a valid email address.";
+    }
     if (!reason.trim()) e.reason = t("disputeForm.reasonRequired");
     else if (reason.trim().length > 1000) e.reason = t("disputeForm.reasonTooLong");
     const hashVal = validateStellarTxHash(txHash);
@@ -49,7 +53,13 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
     setSubmitting(true);
 
     try {
-      const res = await flagDispute({ txHash, studentId, raisedBy: raisedBy.trim(), reason: reason.trim() });
+      const res = await flagDispute({
+        txHash,
+        studentId,
+        raisedBy: raisedBy.trim(),
+        reason: reason.trim(),
+        ...(contactEmail.trim() ? { raisedByEmail: contactEmail.trim() } : {}),
+      });
       onSuccess && onSuccess(res.data);
     } catch (err) {
       const data = err.response?.data;
@@ -119,6 +129,25 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
           />
           {errors.raisedBy && (
             <span id="df-raisedBy-err" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{errors.raisedBy}</span>
+          )}
+        </div>
+
+        <div style={{ marginBottom: "1.25rem" }}>
+          <label htmlFor="df-contactEmail" style={{ display: "block", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", marginBottom: "0.3rem" }}>
+            Contact email for updates (optional)
+          </label>
+          <input
+            id="df-contactEmail"
+            type="email"
+            value={contactEmail}
+            onChange={(ev) => setContactEmail(ev.target.value)}
+            placeholder="Defaults to the parent email on file"
+            aria-describedby={errors.contactEmail ? "df-contactEmail-err" : undefined}
+            aria-invalid={!!errors.contactEmail}
+            style={{ width: "100%", padding: "0.6rem 0.75rem", border: `1px solid ${errors.contactEmail ? "#f87171" : "var(--border)"}`, borderRadius: 6, background: "var(--bg)", color: "var(--text)", fontSize: "0.9rem", boxSizing: "border-box" }}
+          />
+          {errors.contactEmail && (
+            <span id="df-contactEmail-err" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{errors.contactEmail}</span>
           )}
         </div>
 

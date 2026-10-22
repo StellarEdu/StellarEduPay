@@ -5,7 +5,7 @@ const router  = express.Router();
 
 const { flagDispute, getDisputes, getDisputeById, resolveDispute, addEvidence } = require('../controllers/dispute.controller');
 const { resolveSchool } = require('../middleware/schoolContext');
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 // All dispute routes require school context

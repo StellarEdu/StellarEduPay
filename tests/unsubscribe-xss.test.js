@@ -140,11 +140,6 @@ jest.mock('../backend/src/services/metricsRollupService', () => ({ startMetricsR
 jest.mock('../backend/src/services/paymentSavedSubscribers', () => ({ registerPaymentSavedSubscribers: jest.fn() }));
 jest.mock('../backend/src/services/transactionPollingService', () => ({ startPolling: jest.fn(), stopPolling: jest.fn() }));
 jest.mock('../backend/src/services/consistencyScheduler', () => ({ startConsistencyScheduler: jest.fn() }));
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  concurrentPaymentProcessor: {
-    getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 1000 }),
-  },
-}), { virtual: true });
 jest.mock('../backend/src/services/reminderService', () => ({
   startReminderScheduler: jest.fn(),
   stopReminderScheduler:  jest.fn(),

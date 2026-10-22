@@ -1,6 +1,7 @@
 'use strict';
 
 const logger = require('./logger').child('StellarRetry');
+const { withSpan } = require('../tracing');
 
 const MAX_ATTEMPTS = parseInt(process.env.STELLAR_CALL_RETRY_ATTEMPTS, 10) || 3;
 const BASE_DELAY   = parseInt(process.env.STELLAR_CALL_RETRY_DELAY_MS, 10) || 1000;
@@ -19,8 +20,7 @@ function isTransient(err) {
 
 function classifyHorizonError(err, context = '') {
   const s = getStatus(err);
-  // originalError is attached to every classified error (mirroring the
-  // StellarAPIError convention in stellarRateLimitedClient.js) so the raw
+  // originalError is attached to every classified error so the raw
   // Horizon/axios failure — status, message, Horizon `extras`/result_codes —
   // is never fully discarded, even though the classified .status/.code/.message
   // are deliberately normalized for callers that branch on error type.
@@ -51,17 +51,28 @@ async function withStellarRetry(fn, opts = {}) {
   const label       = opts.label       || 'StellarCall';
   const context     = opts.context     || label;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (!isTransient(err) || attempt === maxAttempts) throw classifyHorizonError(err, context);
-      const delay = Math.min(baseDelay * 2 ** (attempt - 1), MAX_DELAY);
-      const wait  = delay + Math.floor(Math.random() * delay * 0.3);
-      logger.warn(`${label} attempt ${attempt}/${maxAttempts} failed — retrying in ${wait}ms`, { error: err.message });
-      await new Promise((r) => setTimeout(r, wait));
+  // #1636: one span for the whole retry loop; each retry is a span event, and
+  // the horizon.call child spans (horizonFailoverClient) show the endpoints.
+  return withSpan(`stellar.${label}`, {
+    'stellar.operation': label,
+    'stellar.context': context,
+    'stellar.tx_hash': opts.txHash,
+    'stellar.max_attempts': maxAttempts,
+  }, async (span) => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      span.setAttribute('stellar.attempts', attempt);
+      try {
+        return await fn();
+      } catch (err) {
+        if (!isTransient(err) || attempt === maxAttempts) throw classifyHorizonError(err, context);
+        const delay = Math.min(baseDelay * 2 ** (attempt - 1), MAX_DELAY);
+        const wait  = delay + Math.floor(Math.random() * delay * 0.3);
+        span.addEvent('stellar.retry', { attempt, wait_ms: wait, error: err.message });
+        logger.warn(`${label} attempt ${attempt}/${maxAttempts} failed — retrying in ${wait}ms`, { error: err.message });
+        await new Promise((r) => setTimeout(r, wait));
+      }
     }
-  }
+  });
 }
 
 module.exports = { withStellarRetry, isTransient, classifyHorizonError };

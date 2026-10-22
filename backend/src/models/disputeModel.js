@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const tenantScope = require('../plugins/tenantScope');
+const { encryptStudentPii, decryptStudentPii } = require('../services/studentPiiEncryption');
 
 const DISPUTE_SLA_HOURS = parseInt(process.env.DISPUTE_SLA_HOURS, 10) || 72; // default 72h
 
@@ -16,7 +17,15 @@ const DISPUTE_SLA_HOURS = parseInt(process.env.DISPUTE_SLA_HOURS, 10) || 72; // 
  * SLA: disputes auto-escalate if not resolved within DISPUTE_SLA_HOURS
  * of creation. Evidence (screenshots, tx references) can be attached
  * to support the dispute.
+ *
+ * Notifications (#1638): the raiser's contact (raisedByEmail / raisedByPhone,
+ * falling back to the student's parent contact) receives a confirmation on
+ * creation and an update on every status change. Contact fields are PII and
+ * are encrypted at rest with the same key as the student parent contact
+ * (STUDENT_PII_ENCRYPTION_KEY, #1480).
  */
+const DISPUTE_CONTACT_FIELDS = ['raisedByEmail', 'raisedByPhone'];
+
 const evidenceSchema = new mongoose.Schema(
   {
     type: {
@@ -47,6 +56,11 @@ const disputeSchema = new mongoose.Schema(
     raisedBy:    { type: String, required: true, trim: true, maxlength: 200 },   // e.g. parent name / admin ID
     reason:      { type: String, required: true, trim: true, maxlength: 1000 },   // free-text description
 
+    // Contact channel for the raiser (#1638) — encrypted at rest. When neither
+    // is supplied, notifications go to the student's parent contact.
+    raisedByEmail: { type: String, default: null, trim: true },
+    raisedByPhone: { type: String, default: null, trim: true },
+
     // Supporting evidence
     evidence:    { type: [evidenceSchema], default: [] },
 
@@ -68,6 +82,9 @@ const disputeSchema = new mongoose.Schema(
       },
     },
     slaBreachedAt: { type: Date, default: null },
+    // Set once admins have been alerted about the SLA breach (#1638), so the
+    // SLA sweep notifies exactly once per dispute.
+    slaBreachNotifiedAt: { type: Date, default: null },
 
     // Escalation
     escalationLevel: {
@@ -105,6 +122,7 @@ disputeSchema.index({ schoolId: 1, studentId: 1 });
 
 // SLA and escalation queries
 disputeSchema.index({ slaDeadline: 1, status: 1 });
+disputeSchema.index({ status: 1, slaBreachNotifiedAt: 1, slaDeadline: 1 });
 disputeSchema.index({ escalationLevel: 1, status: 1 });
 
 // One open/under_review dispute per payment per school — prevent duplicate open disputes
@@ -147,6 +165,34 @@ disputeSchema.pre('save', function (next) {
   next();
 });
 
+// ── Raiser contact encryption at rest — Issue #1638 ─────────────────────────
+// Mirrors the Student parent contact hooks (#1480): encrypt before persisting,
+// decrypt back onto the in-memory document. No-ops without
+// STUDENT_PII_ENCRYPTION_KEY.
+
+disputeSchema.pre('save', function (next) {
+  for (const field of DISPUTE_CONTACT_FIELDS) {
+    if (this.isModified(field) && this[field] != null) {
+      this[field] = encryptStudentPii(this[field]);
+    }
+  }
+  next();
+});
+
+function _decryptContact(doc) {
+  if (!doc) return doc;
+  for (const field of DISPUTE_CONTACT_FIELDS) {
+    if (doc[field] != null) doc[field] = decryptStudentPii(doc[field]);
+  }
+  return doc;
+}
+
+disputeSchema.post('save', function () { _decryptContact(this); });
+disputeSchema.post('init', function () { _decryptContact(this); });
+
 disputeSchema.plugin(tenantScope, { modelName: 'Dispute' });
 
 module.exports = mongoose.model('Dispute', disputeSchema);
+/** Decrypt contact fields on a .lean() result (post('init') does not run). */
+module.exports.decryptLeanDispute = _decryptContact;
+module.exports.DISPUTE_SLA_HOURS = DISPUTE_SLA_HOURS;

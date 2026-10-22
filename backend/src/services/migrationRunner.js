@@ -55,6 +55,36 @@ async function runMigrations(_require = require, _db = null) {
     .filter(f => f.endsWith('.js'))
     .sort();
 
+  // Validate every migration file before running any of them. A missing or
+  // mismatched version would cause the runner to silently skip migrations
+  // (multiple files sharing version: undefined collapse to one DB document),
+  // so we fail the entire run immediately rather than let that happen.
+  const validationErrors = [];
+  for (const file of files) {
+    const migration = _require(path.join(MIGRATIONS_DIR, file));
+    const expectedVersion = path.basename(file, '.js');
+
+    if (!migration.version || typeof migration.version !== 'string' || migration.version.trim() === '') {
+      validationErrors.push(
+        `  • ${file}: missing or empty "version" export ` +
+        `(expected version: '${expectedVersion}')`
+      );
+    } else if (migration.version !== expectedVersion) {
+      validationErrors.push(
+        `  • ${file}: version mismatch — ` +
+        `exported '${migration.version}' but filename requires '${expectedVersion}'`
+      );
+    }
+  }
+
+  if (validationErrors.length > 0) {
+    throw new Error(
+      '[Migration] One or more migration files fail the export contract. ' +
+      'Every migration must export { version, up, down } where version === basename(file, ".js").\n' +
+      validationErrors.join('\n')
+    );
+  }
+
   for (const file of files) {
     const migration = _require(path.join(MIGRATIONS_DIR, file));
 

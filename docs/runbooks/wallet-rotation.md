@@ -65,7 +65,7 @@ curl -s "https://horizon.stellar.org/accounts/<OLD_ADDRESS>/payments?order=desc&
 ```
 
 Cross-reference the results against `StellarEduPay`'s `Payment` records for
-the school (`GET /api/students/:studentId/payments` per student, or a direct
+the school (`GET /api/payments/:studentId` per student, or a direct
 `Payment.find({ schoolId })` query) to confirm every payment the pre-rotation
 poller already saw is recorded. Any payment on Horizon that isn't yet in
 `Payment` is still in flight — wait for it to confirm before rotating, or be
@@ -78,23 +78,29 @@ gap.
 
 ## 2. Cursor management during the transition
 
-`rotateStellarAddress` always sets `syncCursor` to `null` when it updates
-`stellarAddress` — the old cursor has no meaning against the new address's
-history, and starting from `null` makes the poller walk the new address's
-**entire** transaction history from genesis on the first cycle after
-rotation. This is intentional: it guarantees nothing sent to the new address
-before StellarEduPay started watching it (e.g. a test payment, or a payment
-sent slightly before you called the endpoint) is missed.
+Rotation no longer replays history. The new address's `syncCursor` is set to
+the paging token of its **newest** transaction (`latestPagingToken`), so the
+poller only sees payments made after the cutover. This protects an existing
+account from having its old transactions re-credited against memos.
+
+If you genuinely need the new address's full history replayed (for example, a
+brand-new account that already received payments you want credited), send
+`"backfill": true` in the rotation request. That sets `syncCursor` to `null`
+and the poller walks the address from genesis.
+
+The old address is not dropped. It is moved into `walletHistory` with its own
+cursor and a `drainUntil` date **90 days** after the cutover. Until that date,
+every poll cycle also polls each draining address, resuming from its stored
+cursor, and credits any payment it finds. Those payments are saved with
+`receivedOnRetiredAddress: true`, and the poller logs a warning for each one.
 
 Two things follow from this:
 
-- The first poll cycle after rotation may take noticeably longer than usual
-  for an address with existing history — this is expected, not a hang.
-- The **old address keeps its own `previousStellarAddress` record** but is no
-  longer polled at all once `stellarAddress` changes. Anything sent to it
-  after the cutover will never be picked up automatically — this is why the
-  drain step (above) and the parent-facing cutover window matter more than
-  the cursor mechanics.
+- A payment sent to an old address inside the drain window is still credited,
+  but it is flagged. Review flagged payments and tell the school that the old
+  address was used.
+- After `drainUntil` passes, the address is no longer polled. Anything sent to
+  it after that point will not be picked up automatically.
 
 ## 3. Perform the rotation
 
@@ -122,8 +128,14 @@ The endpoint:
   `202` with a `warning` field (instead of `200`) if it isn't yet — the
   rotation still succeeds, but expect no payments to confirm until the new
   account is funded.
-- Copies the current `stellarAddress` into `previousStellarAddress`, sets the
-  new `stellarAddress`, and resets `syncCursor` to `null`.
+- Retires the current `stellarAddress` into `walletHistory`
+  (`{ address, activeFrom, activeUntil, drainUntil, cursor }`), with
+  `drainUntil` 90 days out. `previousStellarAddress` is still set for existing
+  consumers.
+- Sets the new `stellarAddress` and `syncCursor` to the new address's latest
+  paging token (or `null` with `"backfill": true`). Returns `503
+  HORIZON_UNAVAILABLE` if Horizon cannot report that position. In that case the
+  rotation is refused, not guessed.
 - Writes an `AuditLog` entry: `action: 'school_stellar_address_rotated'`,
   `details: { previousStellarAddress, newStellarAddress, reason, severity: 'high' }`.
 - Invalidates the school cache (`schoolCacheInvalidator`) so every replica
@@ -145,7 +157,7 @@ The endpoint:
   docker compose logs --tail=200 backend | grep -i "<schoolId>"
   ```
 - Send (or ask the school to confirm) a small test payment to the new
-  address and verify it appears in `GET /api/students/:studentId/payments`
+  address and verify it appears in `GET /api/payments/:studentId`
   within one poll cycle.
 - If the drain step found any unresolved in-flight payment to the **old**
   address, manually reconcile it: the payment recording pipeline keys off

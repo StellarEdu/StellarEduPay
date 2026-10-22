@@ -30,6 +30,10 @@ const Student = require('../models/studentModel');
 const { logAudit } = require('./auditService');
 const logger = require('../utils/logger').child('AcademicPeriodService');
 
+// Students per bulkWrite round trip during rollover (#1784). Keeps each
+// transaction well inside MongoDB's transactionLifetimeLimitSeconds.
+const ROLLOVER_BATCH_SIZE = 500;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,18 +293,16 @@ async function rolloverToNextPeriod({
     );
   }
 
-  // Fetch all active students for fee assignment.
-  const students = await Student.find({ schoolId, deletedAt: null }).lean();
-  // Fetch all fee structures (keyed by className) for the school.
-  const feeStructures = await FeeStructure.find({ schoolId, isActive: true, deletedAt: null }).lean();
-  const feeByClass = new Map(feeStructures.map(f => [f.className, f.feeAmount]));
-
   const session = await mongoose.connection.startSession();
   let studentsRolledOver = 0;
   let totalArrears = 0;
 
   try {
     await session.withTransaction(async () => {
+      // Reset counters: withTransaction may re-run this callback on a transient error.
+      studentsRolledOver = 0;
+      totalArrears = 0;
+
       // 1. Close the current period.
       await AcademicPeriod.updateOne(
         { _id: currentPeriod._id },
@@ -315,68 +317,88 @@ async function rolloverToNextPeriod({
         { session }
       );
 
-      // 3. Process each student.
-      for (const student of students) {
-        const existingAssignment = await StudentPeriodFee.findOne(
-          { schoolId, studentId: student.studentId, periodId: currentPeriod._id },
-          null,
-          { session }
-        ).lean();
+      // Read students and fee structures inside the transaction so a student
+      // registered mid-rollover is not skipped (#1784).
+      const students = await Student.find({ schoolId, deletedAt: null }).session(session).lean();
+      const feeStructures = await FeeStructure.find({ schoolId, isActive: true, deletedAt: null }).session(session).lean();
+      const feeByClass = new Map(feeStructures.map(f => [f.className, f.feeAmount]));
 
-        let arrears = 0;
-        if (existingAssignment) {
-          const totalDue = existingAssignment.feeAmount + (existingAssignment.carriedArrears || 0);
-          arrears = Math.max(0, totalDue - (existingAssignment.totalPaid || 0));
-        } else {
-          // Student had no assignment in the closing period — treat outstanding fee as arrears.
-          arrears = student.remainingBalance != null
-            ? Math.max(0, student.remainingBalance)
-            : 0;
+      // One query for every closing-period assignment, instead of one per student.
+      const closingAssignments = await StudentPeriodFee.find(
+        { schoolId, periodId: currentPeriod._id }
+      ).session(session).lean();
+      const closingByStudent = new Map(closingAssignments.map(a => [a.studentId, a]));
+
+      // 3. Process students in batches: one bulkWrite per collection per batch,
+      // rather than several awaited round trips per student (#1784).
+      for (let i = 0; i < students.length; i += ROLLOVER_BATCH_SIZE) {
+        const batch = students.slice(i, i + ROLLOVER_BATCH_SIZE);
+        const periodOps = [];
+        const studentOps = [];
+
+        for (const student of batch) {
+          const existingAssignment = closingByStudent.get(student.studentId);
+
+          let arrears = 0;
+          if (existingAssignment) {
+            const totalDue = existingAssignment.feeAmount + (existingAssignment.carriedArrears || 0);
+            arrears = Math.max(0, totalDue - (existingAssignment.totalPaid || 0));
+          } else {
+            // Student had no assignment in the closing period — treat outstanding fee as arrears.
+            arrears = student.remainingBalance != null
+              ? Math.max(0, student.remainingBalance)
+              : 0;
+          }
+
+          totalArrears += arrears;
+
+          // Determine the fee for the new period from the active fee structure.
+          const newFeeAmount = feeByClass.get(student.class) ?? student.feeAmount;
+          const totalDueNew = newFeeAmount + arrears;
+
+          periodOps.push({
+            updateOne: {
+              filter: { schoolId, studentId: student.studentId, periodId: nextPeriodId },
+              update: {
+                $setOnInsert: { createdAt: new Date() },
+                $set: {
+                  periodName: nextPeriod.name,
+                  feeAmount: newFeeAmount,
+                  carriedArrears: arrears,
+                  totalPaid: 0,
+                  remainingBalance: totalDueNew,
+                  feePaid: totalDueNew <= 0,
+                  updatedAt: new Date(),
+                },
+              },
+              upsert: true,
+            },
+          });
+
+          // Sync the Student top-level scalars to reflect the new period.
+          studentOps.push({
+            updateOne: {
+              filter: { schoolId, studentId: student.studentId },
+              update: {
+                $set: {
+                  feeAmount: newFeeAmount,
+                  totalPaid: 0,
+                  remainingBalance: totalDueNew,
+                  feePaid: totalDueNew <= 0,
+                  academicYear: nextPeriod.name,
+                },
+              },
+            },
+          });
+
+          studentsRolledOver++;
         }
 
-        totalArrears += arrears;
-
-        // Determine the fee for the new period from the active fee structure.
-        const newFeeAmount = feeByClass.get(student.class) ?? student.feeAmount;
-        const totalDueNew = newFeeAmount + arrears;
-
-        // Upsert the StudentPeriodFee for the new period.
-        await StudentPeriodFee.updateOne(
-          { schoolId, studentId: student.studentId, periodId: nextPeriodId },
-          {
-            $setOnInsert: { createdAt: new Date() },
-            $set: {
-              periodName: nextPeriod.name,
-              feeAmount: newFeeAmount,
-              carriedArrears: arrears,
-              totalPaid: 0,
-              remainingBalance: totalDueNew,
-              feePaid: totalDueNew <= 0,
-              updatedAt: new Date(),
-            },
-          },
-          { upsert: true, session }
-        );
-
-        // 4. Sync the Student top-level scalars to reflect the new period.
-        await Student.updateOne(
-          { schoolId, studentId: student.studentId },
-          {
-            $set: {
-              feeAmount: newFeeAmount,
-              totalPaid: 0,
-              remainingBalance: totalDueNew,
-              feePaid: totalDueNew <= 0,
-              academicYear: nextPeriod.name,
-            },
-          },
-          { session }
-        );
-
-        studentsRolledOver++;
+        await StudentPeriodFee.bulkWrite(periodOps, { session });
+        await Student.bulkWrite(studentOps, { session });
       }
 
-      // 5. Store aggregate arrears on the new period.
+      // 4. Store aggregate arrears on the new period.
       await AcademicPeriod.updateOne(
         { _id: nextPeriodId },
         { $set: { carriedForwardArrears: totalArrears } },

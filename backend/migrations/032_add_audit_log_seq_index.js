@@ -12,7 +12,11 @@
  * service detect and retry duplicate-key conflicts instead of forking.
  */
 
+const VERSION = '032_add_audit_log_seq_index';
+
 module.exports = {
+  version: VERSION,
+
   async up(db) {
     const collection = db.collection('auditlogs');
 

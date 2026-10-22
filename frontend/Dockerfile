@@ -1,11 +1,15 @@
 # ── Stage 1: build ────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# Node major version — keep in sync with the root .nvmrc.
+# Override at build time: docker build --build-arg NODE_VERSION=24 ...
+ARG NODE_VERSION=24
+# node:20-alpine pinned to this immutable manifest digest.
+FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS builder
 
 WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # Issue #1583: NEXT_PUBLIC_STELLAR_NETWORK is now read at runtime from
 # GET /api/public-config, so this image is environment-agnostic.
@@ -24,7 +28,20 @@ COPY . .
 RUN npm run build
 
 # ── Stage 2: run ──────────────────────────────────────────────
-FROM node:20-alpine AS runner
+# Re-declare ARG so the runner stage resolves the same image as the builder.
+ARG NODE_VERSION=24
+# node:20-alpine pinned to the same immutable manifest digest as the builder.
+FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner
+
+# Build metadata (#1634), supplied by .github/workflows/release.yml.
+ARG APP_VERSION=""
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV APP_VERSION=${APP_VERSION} \
+    GIT_SHA=${GIT_SHA} \
+    BUILD_TIME=${BUILD_TIME}
+LABEL org.opencontainers.image.version=${APP_VERSION} \
+      org.opencontainers.image.revision=${GIT_SHA}
 
 # Non-root user for security
 RUN addgroup -S -g 1001 appgroup && adduser -S -u 1001 -G appgroup appuser

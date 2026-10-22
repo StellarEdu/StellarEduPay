@@ -266,6 +266,4 @@ outgrown its Horizon allowance. In rough order of preference:
 
 - `backend/src/services/horizonPollBudget.js` — implementation and rationale
 - `backend/src/services/transactionPollingService.js` — the poll loop
-- `backend/src/services/stellarRateLimitedClient.js` — per-call throttling for
-  non-poll Horizon traffic (Bottleneck, optionally Redis-backed)
 - `tests/loadsim/horizonPollLoadModel.js` — the load model

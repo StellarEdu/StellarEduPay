@@ -172,4 +172,38 @@ describe('Issue #396 — Frontend CSP (next.config.js)', () => {
     expect(xcto).toBeDefined();
     expect(xcto.value).toBe('nosniff');
   });
+
+  // Issue #1796 — HSTS, Permissions-Policy and COOP for the payment pages
+  test('headers include Strict-Transport-Security with a long max-age in production', () => {
+    const hsts = headers.find((h) => h.key === 'Strict-Transport-Security');
+    expect(hsts).toBeDefined();
+    expect(hsts.value).toMatch(/max-age=(\d+)/);
+    expect(Number(hsts.value.match(/max-age=(\d+)/)[1])).toBeGreaterThanOrEqual(31536000);
+    expect(hsts.value).toMatch(/includeSubDomains/);
+  });
+
+  test('headers include a Permissions-Policy that disables unused powerful features', () => {
+    const pp = headers.find((h) => h.key === 'Permissions-Policy');
+    expect(pp).toBeDefined();
+    for (const feature of ['camera', 'microphone', 'geolocation', 'payment', 'usb']) {
+      expect(pp.value).toMatch(new RegExp(`${feature}=\\(\\)`));
+    }
+  });
+
+  test('headers include Cross-Origin-Opener-Policy: same-origin', () => {
+    const coop = headers.find((h) => h.key === 'Cross-Origin-Opener-Policy');
+    expect(coop).toBeDefined();
+    expect(coop.value).toBe('same-origin');
+  });
+
+  test('HSTS is not sent outside production', async () => {
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    jest.resetModules();
+    const devConfig = require('../frontend/next.config.js');
+    const devHeaders = (await devConfig.headers())[0].headers;
+    process.env.NODE_ENV = prevEnv;
+    jest.resetModules();
+    expect(devHeaders.find((h) => h.key === 'Strict-Transport-Security')).toBeUndefined();
+  });
 });

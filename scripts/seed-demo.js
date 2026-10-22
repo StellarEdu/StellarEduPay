@@ -44,6 +44,85 @@ const STUDENTS = [
 
 function daysAgo(n) { return new Date(Date.now() - n * 86400000); }
 
+const SCALE_MODE = Boolean(process.env.SEED_SCHOOL_COUNT || process.env.SEED_STUDENTS_PER_SCHOOL);
+const SCALE_SCHOOL_COUNT = Math.max(1, parseInt(process.env.SEED_SCHOOL_COUNT || '1', 10));
+const SCALE_STUDENTS_PER_SCHOOL = Math.max(1, parseInt(process.env.SEED_STUDENTS_PER_SCHOOL || '10', 10));
+const SCALE_SCHOOL_PREFIX = process.env.SEED_SCHOOL_ID_PREFIX || 'LOAD';
+
+function scaledSchool(index) {
+  const number = String(index + 1).padStart(4, '0');
+  return {
+    schoolId: `${SCALE_SCHOOL_PREFIX}${number}`,
+    name: `${process.env.SEED_SCHOOL_NAME_PREFIX || 'Load Test School'} ${index + 1}`,
+    slug: `${(process.env.SEED_SCHOOL_SLUG_PREFIX || 'load-school').toLowerCase()}-${index + 1}`,
+    stellarAddress: process.env.SCHOOL_WALLET_ADDRESS || WALLET,
+    network: process.env.STELLAR_NETWORK || 'testnet',
+    isActive: true,
+  };
+}
+
+async function seedScaledPopulation() {
+  const schoolIds = Array.from({ length: SCALE_SCHOOL_COUNT }, (_, index) => scaledSchool(index).schoolId);
+  if (process.env.SEED_CLEAN === 'true') {
+    await Promise.all([
+      FeeStructure.deleteMany({ schoolId: { $in: schoolIds } }),
+      Student.deleteMany({ schoolId: { $in: schoolIds } }),
+      School.deleteMany({ schoolId: { $in: schoolIds } }),
+    ]);
+  }
+  let students = 0;
+  for (let schoolIndex = 0; schoolIndex < SCALE_SCHOOL_COUNT; schoolIndex += 1) {
+    const school = scaledSchool(schoolIndex);
+    await School.findOneAndUpdate({ schoolId: school.schoolId }, school, { upsert: true, new: true, runValidators: true });
+    const feeMap = {};
+    for (const fee of FEES) {
+      const doc = await FeeStructure.findOneAndUpdate(
+        { schoolId: school.schoolId, className: fee.className },
+        { schoolId: school.schoolId, ...fee, isActive: true },
+        { upsert: true, new: true, runValidators: true },
+      );
+      feeMap[doc.className] = doc.feeAmount;
+    }
+    const operations = [];
+    for (let studentIndex = 0; studentIndex < SCALE_STUDENTS_PER_SCHOOL; studentIndex += 1) {
+      const className = FEES[studentIndex % FEES.length].className;
+      const studentId = `STU${String(studentIndex + 1).padStart(6, '0')}`;
+      operations.push({
+        updateOne: {
+          filter: { schoolId: school.schoolId, studentId },
+          update: {
+            $set: {
+              schoolId: school.schoolId,
+              studentId,
+              name: `Load Student ${school.schoolId}-${studentIndex + 1}`,
+              class: className,
+              feeAmount: feeMap[className],
+              feePaid: false,
+              totalPaid: 0,
+              remainingBalance: feeMap[className],
+            },
+          },
+          upsert: true,
+        },
+      });
+      if (operations.length === 1000) {
+        await Student.bulkWrite(operations.splice(0), { ordered: false });
+      }
+    }
+    if (operations.length) await Student.bulkWrite(operations, { ordered: false });
+    students += SCALE_STUDENTS_PER_SCHOOL;
+    if ((schoolIndex + 1) % 10 === 0 || schoolIndex === SCALE_SCHOOL_COUNT - 1) {
+      console.log('scaled seed progress:', schoolIndex + 1, '/', SCALE_SCHOOL_COUNT, 'schools;', students, 'students');
+    }
+  }
+  console.log('scaled seed complete:', JSON.stringify({
+    schoolCount: SCALE_SCHOOL_COUNT,
+    studentsPerSchool: SCALE_STUDENTS_PER_SCHOOL,
+    students,
+    schoolIdPrefix: SCALE_SCHOOL_PREFIX,
+  }));
+}
+
 const POOL_CONFIG = {
   maxPoolSize: parseInt(process.env.MONGODB_POOL_SIZE || process.env.DB_MAX_POOL_SIZE || '20', 10),
   minPoolSize: parseInt(process.env.DB_MIN_POOL_SIZE || '10', 10),
@@ -66,6 +145,10 @@ async function main() {
     w: 'majority',
     readPreference: 'primaryPreferred',
   });
+  if (SCALE_MODE) {
+    await seedScaledPopulation();
+    return;
+  }
   console.log('connected to', process.env.MONGO_URI.replace(/:\/\/[^@]*@/, '://***@'));
 
   // 1. School

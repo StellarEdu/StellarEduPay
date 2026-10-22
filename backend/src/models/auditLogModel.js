@@ -12,7 +12,12 @@ const auditLogSchema = new mongoose.Schema(
     action:       { type: String, required: true, index: true },
     performedBy:  { type: String, required: true },
     targetId:     { type: String, required: true, index: true },
-    targetType:   { type: String, enum: ['student', 'payment', 'fee', 'school'], required: true, index: true },
+    targetType:   {
+      type: String,
+      enum: ['student', 'payment', 'fee', 'school', 'user', 'webhook', 'academicPeriod', 'auth'],
+      required: true,
+      index: true,
+    },
     details:      { type: mongoose.Schema.Types.Mixed, default: {} },
     result:       { type: String, enum: ['success', 'failure'], default: 'success' },
     errorMessage: { type: String, default: null },

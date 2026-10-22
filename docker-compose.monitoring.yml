@@ -11,6 +11,7 @@ version: "3.8"
 #
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3001  (admin / <GRAFANA_PASSWORD>)
+# Jaeger UI:  http://localhost:16686  (traces — see docs/tracing.md, #1636)
 #
 # NOTE: GRAFANA_PASSWORD is a required environment variable. Docker Compose will
 # refuse to start the monitoring stack if it is not set.
@@ -53,6 +54,24 @@ services:
       - prometheus
     networks:
       - monitoring
+
+  # ── Distributed tracing (#1636) ─────────────────────────────────────────
+  # Jaeger all-in-one receives OTLP traces from the backend. Enable tracing in
+  # the backend with OTEL_TRACING_ENABLED=true and
+  # OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 (see docs/tracing.md).
+  # In-memory storage — traces are lost on restart; use Tempo/Jaeger with a
+  # persistent backend in production.
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks:
+      - monitoring
+    restart: unless-stopped
 
   # ── Infrastructure exporters ──────────────────────────────────────────────
 

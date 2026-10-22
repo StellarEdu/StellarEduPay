@@ -1,0 +1,11 @@
+'use strict';
+process.env.NODE_ENV = 'test';
+process.env.STELLAR_INTEGRATION_TESTS = 'true';
+process.env.JWT_SECRET = 'integration-test-jwt-secret';
+process.env.RECEIPT_SIGNATURE_SECRET = 'integration-test-receipt-signature-secret';
+process.env.SIGNER_MASTER_KEY = 'integration-only-signer-master-key-32';
+process.env.SCHOOL_WALLET_ADDRESS = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+process.env.REDIS_HOST = '';
+process.env.REDIS_MOCK = 'true';
+process.env.SWAGGER_ENABLED = 'false';
+process.env.STELLAR_HORIZON_URL = 'http://127.0.0.1:0';

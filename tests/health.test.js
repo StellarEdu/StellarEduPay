@@ -98,12 +98,6 @@ jest.mock('../backend/src/middleware/concurrentRequestHandler', () => ({
   })),
 }));
 
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  concurrentPaymentProcessor: {
-    getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 1000 }),
-  },
-}));
-
 // Route mocks — bypass pre-existing syntax errors in some route files
 jest.mock('../backend/src/routes/schoolRoutes', () => {
   const fn = jest.fn((req, res, next) => next && next());

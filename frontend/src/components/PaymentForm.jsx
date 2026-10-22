@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
 import { generateStellarPaymentUri, availableMemoTypes } from "../utils/stellarUri";
 import { encodeMemo } from "../utils/stellarMemo";
-import { getStudent, getPublicStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds } from "../services/api";
+import { getStudent, getPublicStudent, getPaymentInstructions, getStudentPayments, getStudentBalance, getPaymentRefunds, getPaymentPlan } from "../services/api";
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
@@ -49,6 +49,7 @@ function InfoRow({ label, children }) {
 }
 
 export default function PaymentForm({ initialStudentId = "", publicMode = false }) {
+  const { t } = useTranslation();
   const [studentId, setStudentId]             = useState(initialStudentId);
   const [shareCopied, setShareCopied]         = useState(false);
   const [student, setStudent]                 = useState(null);
@@ -284,7 +285,6 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
   }
 
   const isTestnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK === "testnet";
-  const { t } = useTranslation();
 
   return (
     <>

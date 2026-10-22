@@ -1,12 +1,13 @@
 'use strict';
 
-const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger').child('AuthMiddleware');
 const { logAudit } = require('../services/auditService');
 const { get, set } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { hashIp } = require('../utils/piiRedaction');
+const User = require('../models/User');
+const tokenService = require('../services/tokenService');
 
 // ── IP failure tracking constants ──────────────────────────────────────────────
 const IP_FAIL_WINDOW = 300;  // 5 minutes (seconds)
@@ -19,6 +20,46 @@ function ipFailKey(ip) {
 
 function ipBlockKey(ip) {
   return `ip_blocked:${ip}`;
+}
+
+// ── Session revocation check ──────────────────────────────────────────────────
+// Deactivation and role changes bump user.tokenVersion and revoke refresh
+// families. Access tokens carry the tokenVersion they were minted with, so a
+// mismatch (or an inactive user) means the session must be rejected now rather
+// than at access-token expiry.
+//
+// Returns null when the token is still valid, or a { status, body } object to
+// send back when it has been revoked.
+async function checkSessionRevoked(decoded) {
+  // Env super-admin tokens (role:'admin') are not backed by a DB user row.
+  if (decoded.role === 'admin' && !decoded.userId && !decoded.sub) return null;
+
+  const userId = decoded.userId || decoded.sub || decoded.id;
+  if (!userId) return null;
+
+  let user;
+  try {
+    user = await User.findById(userId).select('isActive tokenVersion').lean();
+  } catch (err) {
+    logger.error('[AuthMiddleware] Failed to load user for session check', { error: err.message, userId });
+    return { status: 500, body: { error: 'Server error validating session.', code: 'SESSION_CHECK_FAILED' } };
+  }
+
+  if (!user) {
+    return { status: 401, body: { error: 'Session is no longer valid.', code: 'SESSION_REVOKED' } };
+  }
+
+  if (user.isActive === false) {
+    return { status: 401, body: { error: 'Account is deactivated.', code: 'SESSION_REVOKED' } };
+  }
+
+  const storedVersion = user.tokenVersion || 0;
+  const tokenVersion = decoded.tokenVersion || 0;
+  if (storedVersion !== tokenVersion) {
+    return { status: 401, body: { error: 'Session has been revoked.', code: 'SESSION_REVOKED' } };
+  }
+
+  return null;
 }
 
 // ── Shared failure handler (used by both middleware factories) ────────────────
@@ -127,12 +168,11 @@ async function requireAdminAuth(req, res, next) {
   }
 
   try {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET is not set.', code: 'AUTH_MISCONFIGURED' });
-    }
+    const decoded = tokenService.verify(token);
 
-    const decoded = jwt.verify(token, secret);
+    if (decoded.sid && await tokenService.isSessionRevoked(decoded.sid)) {
+      return handleAuthFailure(req, res, ip, 'Session has been revoked.', 'SESSION_REVOKED', { countTowardsBlock: false });
+    }
 
     // Accept the old role:'admin' shape AND the new roles:['super_admin'] shape
     const isSuperAdmin =
@@ -141,6 +181,12 @@ async function requireAdminAuth(req, res, next) {
 
     if (!isSuperAdmin) {
       return res.status(403).json({ error: 'Forbidden. Admin role required.', code: 'INSUFFICIENT_ROLE' });
+    }
+
+    // Reject tokens whose session has been revoked (deactivated/demoted user).
+    const revoked = await checkSessionRevoked(decoded);
+    if (revoked) {
+      return res.status(revoked.status).json(revoked.body);
     }
 
     req.admin = decoded;
@@ -160,7 +206,7 @@ async function requireAdminAuth(req, res, next) {
 // Usage: router.get('/students', requireSchoolAuth(['owner', 'staff']), handler)
 //
 // Rules:
-//  • JWT must be valid and signed with JWT_SECRET.
+//  • JWT must be valid and signed with the pinned algorithm/issuer/audience.
 //  • Token schoolId must match X-School-ID request header (tenant isolation).
 //  • If allowedRoles is non-empty, the token's roles array must contain at least
 //    one of them.
@@ -206,16 +252,22 @@ function requireSchoolAuth(allowedRoles = []) {
 
     let decoded;
     try {
-      const secret = process.env.JWT_SECRET;
-      if (!secret) {
-        return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET is not set.', code: 'AUTH_MISCONFIGURED' });
-      }
-      decoded = jwt.verify(token, secret);
+      decoded = tokenService.verify(token);
     } catch (err) {
       if (err.name === 'TokenExpiredError') {
         return handleAuthFailure(req, res, ip, 'Token has expired.', 'TOKEN_EXPIRED', { countTowardsBlock: false });
       }
       return handleAuthFailure(req, res, ip, 'Invalid token.', 'INVALID_AUTH_TOKEN');
+    }
+
+    if (decoded.sid && await tokenService.isSessionRevoked(decoded.sid)) {
+      return handleAuthFailure(req, res, ip, 'Session has been revoked.', 'SESSION_REVOKED', { countTowardsBlock: false });
+    }
+
+    // Reject tokens whose session has been revoked (deactivated/demoted user).
+    const revoked = await checkSessionRevoked(decoded);
+    if (revoked) {
+      return res.status(revoked.status).json(revoked.body);
     }
 
     // Super-admin bypass — break-glass access to all tenants
@@ -259,24 +311,29 @@ function requireSchoolAuth(allowedRoles = []) {
       req.schoolId = decoded.schoolId;
     }
 
-    // #1356 — REQUIRE_MFA enforcement: a token minted while MFA setup was
-    // outstanding may only reach the MFA setup/verify/logout endpoints until
-    // the admin completes setup (see handleLogin/verifyAndEnableUserMfa).
-    if (decoded.mfaSetupPending && !MFA_SETUP_ALLOWED_PATHS.has(req.path)) {
-      return res.status(403).json({
-        error: 'MFA setup is required before accessing this resource.',
-        code: 'MFA_SETUP_REQUIRED',
-      });
+    // Tenant isolation: token schoolId must match X-School-ID header
+    const headerSchoolId = req.headers['x-school-id'];
+    const isEnvSuperAdmin = decoded.role === 'admin';
+    if (!isEnvSuperAdmin && headerSchoolId && decoded.schoolId && String(decoded.schoolId) !== String(headerSchoolId)) {
+      return handleAuthFailure(req, res, ip, 'Token school does not match requested school.', 'TENANT_MISMATCH');
+    }
+
+    // Role check
+    if (Array.isArray(allowedRoles) && allowedRoles.length > 0 && !isEnvSuperAdmin) {
+      const tokenRoles = Array.isArray(decoded.roles) ? decoded.roles : [];
+      const hasRole = tokenRoles.some((r) => allowedRoles.includes(r));
+      if (!hasRole) {
+        return res.status(403).json({ error: 'Forbidden. Insufficient role.', code: 'INSUFFICIENT_ROLE' });
+      }
     }
 
     req.user = decoded;
-    req.admin = decoded; // alias so downstream code works regardless of which middleware ran
+    req.admin = decoded;
     next();
   };
 }
 
-// Endpoints reachable with a restricted mfaSetupPending token — just enough
-// to complete MFA enrollment or abandon the session.
-const MFA_SETUP_ALLOWED_PATHS = new Set(['/mfa/user/setup', '/mfa/user/verify']);
-
-module.exports = { requireAdminAuth, requireSchoolAuth };
+module.exports = {
+  requireAdminAuth,
+  requireSchoolAuth,
+};

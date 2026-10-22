@@ -29,6 +29,26 @@ const { makePaymentAuditLogger } = require('../utils/paymentAuditLogger');
 const lock = require('../services/distributedLock');
 const logger = require('../utils/logger');
 const { toMoney, decimalFromMongo, classifyFeePayment } = require('../utils/money');
+const { Decimal } = require('decimal.js');
+
+/**
+ * Compute the outstanding balance for a fee category (#1759).
+ * `remainingBalance || amount` treated a fully-paid category (0) as "missing"
+ * and reported the full amount as still owed. Prefer the stored value when it
+ * is a real number, otherwise derive it as max(0, amount - totalPaid) in exact
+ * Decimal space so a fully-paid category always reports 0.
+ */
+function computeRemainingBalance(fee) {
+  if (fee.remainingBalance !== undefined && fee.remainingBalance !== null) {
+    return toMoneyNumber(toMoney(fee.remainingBalance));
+  }
+  const remaining = Decimal.max(0, toMoney(fee.amount).minus(toMoney(fee.totalPaid || 0)));
+  return toMoneyNumber(remaining);
+}
+
+function toMoneyNumber(value) {
+  return Number(value.toString());
+}
 
 // TTL for the per-school distributed verify lock.  Verify is a fast Horizon
 // round-trip; 30 s is more than enough while still auto-expiring on crash.
@@ -50,6 +70,32 @@ const PERMANENT_FAIL_CODES = [
   'AMOUNT_TOO_HIGH',
   'UNDERPAID',
 ];
+
+/**
+ * Persist a verification failure for audit/support (#1761).
+ * Failures are recorded outside the `payments` collection so they never appear
+ * in payment lists, never block sync/poller duplicate checks and never prevent
+ * a later re-verification from crediting the real payment.
+ */
+async function recordVerificationAttempt({ schoolId, txHash, code, message }) {
+  try {
+    const PaymentVerificationAttempt = require('../models/paymentVerificationAttemptModel');
+    await PaymentVerificationAttempt.create({
+      schoolId,
+      txHash,
+      code,
+      message,
+      attemptedAt: new Date(),
+    });
+  } catch (err) {
+    logger.error('[PaymentController] failed to persist verification attempt', {
+      txHash,
+      schoolId,
+      code,
+      error: err.message,
+    });
+  }
+}
 
 function getExplorerUrl(txHash) {
   if (!txHash) return null;
@@ -95,7 +141,7 @@ async function getPaymentInstructions(req, res, next) {
       const fee = student.fees.find((f) => f.category === feeCategory);
       if (fee) {
         feeAmount = fee.amount;
-        categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: fee.remainingBalance || fee.amount };
+        categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: computeRemainingBalance(fee) };
       }
     }
 
@@ -104,7 +150,7 @@ async function getPaymentInstructions(req, res, next) {
     }
 
     const fees = student?.fees?.length > 0
-      ? student.fees.map((f) => ({ category: f.category, amount: f.amount, paid: f.paid, totalPaid: f.totalPaid || 0, remainingBalance: f.remainingBalance || f.amount }))
+      ? student.fees.map((f) => ({ category: f.category, amount: f.amount, paid: f.paid, totalPaid: f.totalPaid || 0, remainingBalance: computeRemainingBalance(f) }))
       : [];
 
     res.json({
@@ -149,7 +195,7 @@ async function createPaymentIntent(req, res, next) {
       const fee = student.fees.find((f) => f.category === feeCategory);
       if (!fee) return res.status(400).json({ error: `Fee category '${feeCategory}' not found for student`, code: 'INVALID_FEE_CATEGORY' });
       feeAmount = fee.amount;
-      categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: fee.remainingBalance || fee.amount };
+      categoryInfo = { category: fee.category, amount: fee.amount, paid: fee.paid, totalPaid: fee.totalPaid || 0, remainingBalance: computeRemainingBalance(fee) };
     }
 
     const limitValidation = await validatePaymentAmount(feeAmount, { schoolId });
@@ -210,7 +256,7 @@ async function submitTransaction(req, res, next) {
     // When paymentIntentId is not provided, fall back to matching by memo (backward compatibility).
     let paymentRecord;
     if (paymentIntentId) {
-      const intent = await PaymentIntent.findById(paymentIntentId);
+      const intent = await PaymentIntent.findOne({ _id: paymentIntentId, schoolId: req.schoolId });
       if (!intent) {
         return res.status(404).json({ error: 'Payment intent not found', code: 'INTENT_NOT_FOUND' });
       }
@@ -321,8 +367,12 @@ async function verifyPayment(req, res, next) {
     const normalizedHash = hashValidation.normalized;
     const audit = makePaymentAuditLogger(req, schoolId, normalizedHash);
 
-    // Idempotency — return cached result if already recorded
-    const existing = await Payment.findOne({ schoolId, txHash: normalizedHash });
+    // Idempotency — return cached result if already recorded.
+    // REJECTED markers (#1761) are verification-failure placeholders, not
+    // payments: they must never short-circuit a re-verification, otherwise a
+    // transaction rejected for config-dependent limits could never be credited
+    // after the configuration changes.
+    const existing = await Payment.findOne({ schoolId, txHash: normalizedHash, status: { $ne: 'REJECTED' } });
     if (existing) {
       await audit.success({ txHash: normalizedHash, cached: true, studentId: existing.studentId, amount: existing.amount });
 
@@ -379,7 +429,16 @@ async function verifyPayment(req, res, next) {
       } catch (stellarErr) {
         if (PERMANENT_FAIL_CODES.includes(stellarErr.code)) {
           await audit.failure(stellarErr.message, { txHash: normalizedHash, errorCode: stellarErr.code });
-          await Payment.create({ schoolId, studentId: 'unknown', txHash: normalizedHash, amount: 0, status: 'FAILED', feeValidationStatus: 'unknown' }).catch(err => logger.error('[PaymentController] failed to persist permanent failure record', { txHash: normalizedHash, error: err.message }));
+          // #1761: do NOT write a placeholder into `payments`. Several of these
+          // "permanent" outcomes are configuration-dependent (limits, accepted
+          // assets, wrong-school destination) and must remain re-verifiable.
+          // Record the attempt in the dedicated audit collection instead.
+          await recordVerificationAttempt({
+            schoolId,
+            txHash: normalizedHash,
+            code: stellarErr.code,
+            message: stellarErr.message,
+          });
           return next(stellarErr);
         }
 
@@ -408,7 +467,7 @@ async function verifyPayment(req, res, next) {
       // Mark it expired for bookkeeping but continue to record the payment.
       const intent = await PaymentIntent.findOne({ memo: result.memo, schoolId });
       if (intent?.expiresAt && intent.expiresAt < new Date()) {
-        await PaymentIntent.findByIdAndUpdate(intent._id, { status: 'expired' });
+        await PaymentIntent.findOneAndUpdate({ _id: intent._id, schoolId }, { status: 'expired' });
       }
 
       // Issue #1026 — the tx-hash lock above only prevents two calls for the SAME
@@ -435,6 +494,11 @@ async function verifyPayment(req, res, next) {
         // The cumulative total drives the status; per-payment underpaid rejection
         // is not applied here because a parent may be paying in installments.
         //
+        // Filters match the canonical formula (fix #1751): status:'SUCCESS',
+        // isSuspicious:false, deletedAt:null — identical to updateStudentBalance so
+        // the classification stored on the payment record is consistent with the
+        // student balance this tx will contribute to.
+        //
         // Summed via $toDecimal (#1123 money-representation fix) so the addition
         // happens in exact Decimal128 space inside MongoDB — a plain `$sum` over
         // the `amount` doubles would accumulate float error server-side, before
@@ -443,7 +507,7 @@ async function verifyPayment(req, res, next) {
         // space, so an installment plan that sums exactly to the fee is never
         // misclassified by a float epsilon.
         const prevAgg = await Payment.aggregate([
-          { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS' } },
+          { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS', isSuspicious: false } },
           { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
         ]);
         const prevTotal = prevAgg.length ? decimalFromMongo(prevAgg[0].total) : toMoney(0);
@@ -486,7 +550,7 @@ async function verifyPayment(req, res, next) {
           if (dupErr.code === 'DUPLICATE_TX') {
             // Concurrent path (poller or another verify call) already recorded this tx.
             // Fetch and return the existing record as a cache hit.
-            const cached = await Payment.findOne({ schoolId, txHash: normalizedHash });
+            const cached = await Payment.findOne({ schoolId, txHash: normalizedHash, status: { $ne: 'REJECTED' } });
             if (cached) {
               await audit.success({ txHash: normalizedHash, cached: true, studentId: studentStrId, amount: cached.amount });
               const targetCurrency = req.school.localCurrency || 'USD';
@@ -626,6 +690,8 @@ module.exports = {
   verifyTransactionHash,
   getExplorerUrl,
   wrapStellarError,
+  computeRemainingBalance,
+  recordVerificationAttempt,
   // Re-export from split controllers so tests importing paymentController still work
   ...require('./paymentQueryController'),
   ...require('./paymentAdminController'),

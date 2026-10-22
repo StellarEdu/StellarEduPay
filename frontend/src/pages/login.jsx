@@ -62,11 +62,11 @@ export default function LoginPage() {
         
         // Handle specific error codes
         if (code === 'ACCOUNT_LOCKED') {
-          setError(t('auth.accountLocked') || 'Too many failed login attempts. Account temporarily locked.');
+          setError(t('auth.accountLocked'));
         } else if (code === 'INVALID_MFA_CODE') {
-          setError(t('auth.invalidMfaCode') || 'Invalid MFA code. Please try again.');
+          setError(t('auth.invalidMfaCode'));
         } else if (code === 'AUTH_MISCONFIGURED') {
-          setError(t('auth.serverError') || 'Server configuration error. Please contact support.');
+          setError(t('auth.serverError'));
         } else {
           setError(getErrorMessage(code, error));
         }
@@ -86,13 +86,13 @@ export default function LoginPage() {
         <div className={styles.card}>
           <div className={styles.icon}>🔐</div>
           <h1>{t("auth.title")}</h1>
-          <p className={styles.sub}>{requiresMfa ? t("auth.mfaSubtitle") || "Enter your MFA code" : t("auth.subtitle")}</p>
+          <p className={styles.sub}>{requiresMfa ? t("auth.mfaSubtitle") : t("auth.subtitle")}</p>
 
           <form onSubmit={handleSubmit}>
             {!requiresMfa ? (
               <>
                 <div className={styles.field}>
-                  <label className={styles.label} htmlFor="identifier">{t("auth.emailOrUsername") || "Email or Username"}</label>
+                  <label className={styles.label} htmlFor="identifier">{t("auth.emailOrUsername")}</label>
                   <input
                     id="identifier"
                     className={styles.input}
@@ -102,7 +102,7 @@ export default function LoginPage() {
                     required
                     autoComplete="username"
                     autoFocus
-                    placeholder={t("auth.identifierPlaceholder") || "admin@school.com or admin"}
+                    placeholder={t("auth.identifierPlaceholder")}
                     disabled={loading}
                   />
                 </div>
@@ -125,10 +125,10 @@ export default function LoginPage() {
             ) : (
               <>
                 <div className={styles.mfaInfo}>
-                  {t("auth.mfaRequired") || "Multi-factor authentication is enabled. Please enter your 6-digit code or backup code."}
+                  {t("auth.mfaRequired")}
                 </div>
                 <div className={styles.field}>
-                  <label className={styles.label} htmlFor="mfaCode">{t("auth.mfaCode") || "MFA Code"}</label>
+                  <label className={styles.label} htmlFor="mfaCode">{t("auth.mfaCode")}</label>
                   <input
                     id="mfaCode"
                     className={styles.input}
@@ -138,7 +138,7 @@ export default function LoginPage() {
                     required
                     autoComplete="one-time-code"
                     autoFocus
-                    placeholder={t("auth.mfaPlaceholder") || "000000"}
+                    placeholder={t("auth.mfaPlaceholder")}
                     disabled={loading}
                     maxLength={12}
                   />
@@ -171,7 +171,7 @@ export default function LoginPage() {
                 }}
                 disabled={loading}
               >
-                {t("auth.back") || "Back"}
+                {t("auth.back")}
               </button>
             )}
           </form>

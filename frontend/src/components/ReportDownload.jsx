@@ -47,7 +47,9 @@ export default function ReportDownload() {
       timestamp: new Date().toISOString(),
       params,
       summary: {
-        totalAmount: reportData.summary.totalAmount,
+        totals: reportData.summary.totals || {},
+        totalFiat: reportData.summary.totalFiat,
+        fiatCoverage: reportData.summary.fiatCoverage,
         paymentCount: reportData.summary.paymentCount,
       },
     };
@@ -125,9 +127,27 @@ export default function ReportDownload() {
     }
   }
 
+  // Issue #1767: amounts of different assets must never be added together.
+  // Render one entry per asset (e.g. "1,000 XLM · 100 USDC") instead of a
+  // single meaningless combined total.
+  function formatTotals(totals) {
+    if (!totals || typeof totals !== "object") return "—";
+    const entries = Object.entries(totals).filter(([, v]) => v !== undefined && v !== null);
+    if (entries.length === 0) return "—";
+    return entries.map(([asset, amount]) => `${amount} ${asset}`).join(" · ");
+  }
+
+  function formatFiat(summary) {
+    if (summary.totalFiat === undefined || summary.totalFiat === null) return "—";
+    const coverage = summary.fiatCoverage;
+    return coverage === undefined || coverage === null
+      ? String(summary.totalFiat)
+      : `${summary.totalFiat} (${coverage}%)`;
+  }
+
   const TABLE_COLS = [
     { key: "date",               label: "reports.colDate" },
-    { key: "totalAmount",        label: "reports.colAmountXlm" },
+    { key: "totals",             label: "reports.colTotals" },
     { key: "paymentCount",       label: "reports.colPayments" },
     { key: "validCount",         label: "status.validation.valid", color: "var(--success-text)" },
     { key: "overpaidCount",      label: "status.validation.overpaid", color: "var(--warning-text)" },
@@ -310,7 +330,7 @@ export default function ReportDownload() {
                         <td style={{ whiteSpace: "nowrap" }}>
                           {new Date(entry.timestamp).toLocaleString()}
                         </td>
-                        <td>{entry.summary.totalAmount} XLM</td>
+                        <td>{formatTotals(entry.summary.totals)}</td>
                         <td>{entry.summary.paymentCount}</td>
                         <td style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
                           {Object.keys(entry.params).length > 0
@@ -344,7 +364,8 @@ export default function ReportDownload() {
 
           {/* Summary stats */}
           <div className="stat-grid" style={{ marginBottom: "1.5rem" }}>
-            <StatCard label={t("reports.statTotalCollected")} value={report.summary.totalAmount} sub="XLM" Icon={IconTrendingUp} color="violet" />
+            <StatCard label={t("reports.statTotalCollected")} value={formatTotals(report.summary.totals)} Icon={IconTrendingUp} color="violet" />
+            <StatCard label={t("reports.statTotalFiat")} value={formatFiat(report.summary)} sub={t("reports.fiatCoverageHint")} Icon={IconTrendingUp} color="violet" />
             <StatCard label={t("reports.statTotalPayments")}  value={report.summary.paymentCount}                            Icon={IconBarChart}  color="cyan" />
             <StatCard label={t("status.validation.valid")}           value={report.summary.validCount}                              Icon={IconCheck}     color="green" />
             <StatCard label={t("status.validation.overpaid")}        value={report.summary.overpaidCount}                           Icon={IconAlertTriangle} color="amber" />
@@ -363,7 +384,7 @@ export default function ReportDownload() {
                   <thead>
                     <tr>
                       <th>{t("reports.colClass")}</th>
-                      <th>{t("reports.colTotalXlm")}</th>
+                      <th>{t("reports.colTotals")}</th>
                       <th>{t("reports.colPayments")}</th>
                       <th>{t("status.validation.valid")}</th>
                       <th>{t("status.validation.overpaid")}</th>
@@ -375,7 +396,7 @@ export default function ReportDownload() {
                     {report.byClass.map(row => (
                       <tr key={row.className}>
                         <td style={{ fontWeight: 500 }}>{row.className}</td>
-                        <td style={{ fontVariantNumeric: "tabular-nums" }}>{row.totalAmount}</td>
+                        <td style={{ fontVariantNumeric: "tabular-nums" }}>{formatTotals(row.totals)}</td>
                         <td>{row.paymentCount}</td>
                         <td style={{ color: "var(--success-text)", fontWeight: 600 }}>{row.validCount}</td>
                         <td style={{ color: "var(--warning-text)", fontWeight: 600 }}>{row.overpaidCount}</td>
@@ -411,7 +432,7 @@ export default function ReportDownload() {
                     {report.byDate.map(row => (
                       <tr key={row.date}>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 500 }}>{row.date}</td>
-                        <td style={{ fontVariantNumeric: "tabular-nums" }}>{row.totalAmount}</td>
+                        <td style={{ fontVariantNumeric: "tabular-nums" }}>{formatTotals(row.totals)}</td>
                         <td>{row.paymentCount}</td>
                         <td style={{ color: "var(--success-text)", fontWeight: 600 }}>{row.validCount}</td>
                         <td style={{ color: "var(--warning-text)", fontWeight: 600 }}>{row.overpaidCount}</td>

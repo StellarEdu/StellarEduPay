@@ -13,6 +13,7 @@ Thank you for your interest in contributing to StellarEduPay! This guide will he
 - [Coding Standards](#-coding-standards)
 - [Testing Requirements](#-testing-requirements)
 - [Pull Request Process](#-pull-request-process)
+- [Issue Triage](#-issue-triage)
 - [Architecture Guidelines](#-architecture-guidelines)
 - [Security Best Practices](#-security-best-practices)
 
@@ -40,16 +41,16 @@ Before you begin, ensure you have the following installed:
 
 2. **Install Dependencies**
    ```bash
-   # Root dependencies (for testing)
-   npm install
+   # Root dependencies (for testing); install scripts are not needed for CI-style setup.
+   npm install --ignore-scripts
    
    # Backend dependencies
    cd backend
-   npm install
+   npm install --ignore-scripts
    
    # Frontend dependencies
    cd ../frontend
-   npm install
+   npm install --ignore-scripts
    cd ..
    ```
 
@@ -543,8 +544,24 @@ Your PR must meet these criteria before merging:
 - [ ] **Follows conventions** - Branch naming, commit messages, code style
 - [ ] **No sensitive data** - No secrets, API keys, or PII in code
 
-### Review Process
+### Documentation Rules
 
+- **PR descriptions belong in the PR, not in `docs/`.** Do not commit
+  `PR_DESCRIPTION.md`, `IMPLEMENTATION_SUMMARY.md` or other notes about what a
+  change did. Those go stale as soon as they are merged.
+- **Update the living doc instead.** If your change alters behaviour, edit the
+  document that describes that area (see [docs/README.md](docs/README.md)) in
+  the same PR.
+- **New documents must be indexed.** Add a row to `docs/README.md` with an
+  owner and a "last reviewed" date.
+- **Design decisions** go in `docs/adr/NNNN-short-title.md` as dated, immutable
+  decision records (context, decision, consequences).
+- **API changes** must update `backend/openapi.json`: run
+  `node scripts/openapi/generate.js` and commit the result (add summaries,
+  request bodies and responses by hand in that file). CI fails if a route is
+  missing from it, or if the frontend or docs call a path that doesn't exist.
+
+### Review Process
 1. Maintainers will review your PR within 2-3 business days
 2. Address any requested changes by pushing new commits
 3. Once approved, a maintainer will merge your PR
@@ -552,6 +569,11 @@ Your PR must meet these criteria before merging:
 
 ---
 
+## 🔍 Issue Triage
+
+Use the [issue triage guide](docs/issue-triage.md) before opening, duplicating, or closing an issue. Reports should include reproduction steps, expected and actual behavior, environment, impact, and sanitized evidence. Suspected regressions remain open until the fix is merged and verification evidence is recorded.
+
+---
 ## 🏗 Architecture Guidelines
 
 ### Service-Oriented Architecture
@@ -878,12 +900,6 @@ Before your PR can be merged:
 - All Horizon API calls go here
 - Transaction parsing and validation
 - Memo extraction and decryption
-- Use `stellarRateLimitedClient.js` for rate-limited calls
-
-**Payment Service (`paymentService.js`)**
-- Payment creation and verification
-- Student balance updates
-- Payment status management
 
 **Transaction Service (`transactionService.js`)**
 - Transaction polling and syncing
@@ -902,7 +918,7 @@ Before your PR can be merged:
 
 - Follow RESTful conventions
 - Use proper HTTP status codes
-- Return consistent response format (see `utils/responseHelper.js`)
+- Return consistent response format
 - Version APIs when making breaking changes
 - Document all endpoints in `docs/api-spec.md`
 

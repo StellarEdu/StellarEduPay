@@ -102,12 +102,6 @@ jest.mock('../backend/src/middleware/concurrentRequestHandler', () => ({
   })),
 }));
 
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  concurrentPaymentProcessor: {
-    getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 1000 }),
-  },
-}));
-
 // Route stubs
 const makeRouter = () => {
   const fn = jest.fn((req, res, next) => next && next());

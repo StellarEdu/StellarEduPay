@@ -23,16 +23,44 @@ async function getPaymentVolumeTrend(req, res, next) {
       { $match: { schoolId, deletedAt: null, status: 'SUCCESS' } },
       {
         $group: {
-          _id: { $dateToString: { format: dateFormat, date: '$confirmedAt' } },
+          _id: {
+            date: { $dateToString: { format: dateFormat, date: '$confirmedAt' } },
+            assetCode: '$assetCode',
+          },
           totalAmount: { $sum: '$amount' },
           paymentCount: { $sum: 1 },
+        },
+      },
+      { $sort: { '_id.date': 1, '_id.assetCode': 1 } },
+      {
+        $group: {
+          _id: '$_id.date',
+          assets: {
+            $push: {
+              assetCode: '$_id.assetCode',
+              totalAmount: '$totalAmount',
+              paymentCount: '$paymentCount',
+            },
+          },
+          paymentCount: { $sum: '$paymentCount' },
         },
       },
       { $sort: { _id: 1 } },
       {
         $project: {
           date: '$_id',
-          totalAmount: 1,
+          totals: {
+            $arrayToObject: {
+              $map: {
+                input: '$assets',
+                as: 'a',
+                in: {
+                  k: { $ifNull: ['$$a.assetCode', 'UNKNOWN'] },
+                  v: { $toString: '$$a.totalAmount' },
+                },
+              },
+            },
+          },
           paymentCount: 1,
           _id: 0,
         },
@@ -123,7 +151,7 @@ async function getPaymentAnalyticsSummary(req, res, next) {
         { $match: { schoolId, deletedAt: null, status: 'SUCCESS' } },
         {
           $group: {
-            _id: null,
+            _id: '$assetCode',
             totalProcessed: { $sum: '$amount' },
             transactionCount: { $sum: 1 },
             averagePayment: { $avg: '$amount' },
@@ -143,8 +171,17 @@ async function getPaymentAnalyticsSummary(req, res, next) {
       ]),
     ]);
 
-    const payment = paymentStats[0] || { totalProcessed: 0, transactionCount: 0, averagePayment: 0 };
     const student = studentStats[0] || { totalStudents: 0, paidStudents: 0, totalOutstanding: 0 };
+
+    const totals = {};
+    const averagePayments = {};
+    let transactionCount = 0;
+    for (const row of paymentStats) {
+      const asset = row._id || 'UNKNOWN';
+      totals[asset] = String(row.totalProcessed);
+      averagePayments[asset] = String(row.averagePayment);
+      transactionCount += row.transactionCount;
+    }
 
     res.json({
       summary: {
@@ -152,9 +189,9 @@ async function getPaymentAnalyticsSummary(req, res, next) {
         paidStudents: student.paidStudents,
         unpaidStudents: student.totalStudents - student.paidStudents,
         completionRate: student.totalStudents > 0 ? (student.paidStudents / student.totalStudents) * 100 : 0,
-        totalProcessed: payment.totalProcessed,
-        transactionCount: payment.transactionCount,
-        averagePayment: payment.averagePayment,
+        totals,
+        averagePayments,
+        transactionCount,
         totalOutstanding: student.totalOutstanding,
       },
     });

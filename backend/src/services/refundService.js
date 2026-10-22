@@ -263,16 +263,17 @@ async function initiateRefund(schoolId, originalTxHash, studentId, amount, reaso
  *
  * @param {string} refundId
  * @param {object} principal  — { userId, displayName } from buildPrincipal()
+ * @param {string} schoolId  — tenant scope for the refund lookup
  * @returns {Promise<Refund>}
  */
-async function approveRefund(refundId, principal) {
+async function approveRefund(refundId, principal, schoolId) {
   if (!principal || !principal.userId || principal.userId === 'unknown') {
     const err = new Error('Cannot approve refund: caller identity unknown');
     err.code = 'UNKNOWN_PRINCIPAL';
     throw err;
   }
 
-  const refund = await Refund.findById(refundId);
+  const refund = await Refund.findOne({ _id: refundId, schoolId });
   if (!refund) {
     const err = new Error('Refund not found');
     err.code = 'NOT_FOUND';
@@ -350,9 +351,10 @@ async function approveRefund(refundId, principal) {
  * @param {string} refundId
  * @param {object} principal    — { userId, displayName }
  * @param {string} rejectReason — required
+ * @param {string} schoolId    — tenant scope for the refund lookup
  * @returns {Promise<Refund>}
  */
-async function rejectRefund(refundId, principal, rejectReason) {
+async function rejectRefund(refundId, principal, rejectReason, schoolId) {
   if (!principal || !principal.userId || principal.userId === 'unknown') {
     const err = new Error('Cannot reject refund: caller identity unknown');
     err.code = 'UNKNOWN_PRINCIPAL';
@@ -365,7 +367,7 @@ async function rejectRefund(refundId, principal, rejectReason) {
     throw err;
   }
 
-  const refund = await Refund.findById(refundId);
+  const refund = await Refund.findOne({ _id: refundId, schoolId });
   if (!refund) {
     const err = new Error('Refund not found');
     err.code = 'NOT_FOUND';
@@ -482,9 +484,10 @@ async function rejectRefund(refundId, principal, rejectReason) {
  * @param {string} refundId
  * @param {string} refundTxHash — on-chain Stellar tx hash for the refund
  * @param {object} principal    — { userId, displayName } of the operator
+ * @param {string} schoolId    — tenant scope for the refund lookup
  * @returns {Promise<Refund>}
  */
-async function completeRefund(refundId, refundTxHash, principal) {
+async function completeRefund(refundId, refundTxHash, principal, schoolId) {
   if (!principal || !principal.userId || principal.userId === 'unknown') {
     const err = new Error('Cannot complete refund: caller identity unknown');
     err.code = 'UNKNOWN_PRINCIPAL';
@@ -497,7 +500,7 @@ async function completeRefund(refundId, refundTxHash, principal) {
     throw err;
   }
 
-  const refund = await Refund.findById(refundId);
+  const refund = await Refund.findOne({ _id: refundId, schoolId });
   if (!refund) {
     const err = new Error('Refund not found');
     err.code = 'NOT_FOUND';
@@ -622,7 +625,7 @@ async function completeRefund(refundId, refundTxHash, principal) {
  * #1566: save() and Outbox.create() are wrapped in a MongoDB transaction.
  * #1564: emits refund.status_changed in-process after the transaction commits.
  */
-async function updateRefundStatus(refundId, newStatus, txHash = null, failureReason = null) {
+async function updateRefundStatus(refundId, newStatus, txHash = null, failureReason = null, schoolId = null) {
   // ── 1. Validate newStatus before touching the DB ───────────────────────────
   if (!VALID_REFUND_STATUSES.includes(newStatus)) {
     const err = new Error(
@@ -633,7 +636,12 @@ async function updateRefundStatus(refundId, newStatus, txHash = null, failureRea
   }
 
   // ── 2. Load the refund to read its schoolId / originalTxHash for the lock ──
-  const refund = await Refund.findById(refundId);
+  // When schoolId is not supplied (legacy callers), fall back to a bypass
+  // so the lookup still works — new callers should always pass schoolId.
+  const initialQuery = schoolId
+    ? Refund.findOne({ _id: refundId, schoolId })
+    : Refund.findOne({ _id: refundId }).bypassTenantScope();
+  const refund = await initialQuery;
   if (!refund) {
     const err = new Error('Refund not found');
     err.code = 'NOT_FOUND';
@@ -653,7 +661,10 @@ async function updateRefundStatus(refundId, newStatus, txHash = null, failureRea
   let session;
   try {
     // ── 4. Re-fetch inside the lock for the authoritative current status ───
-    const lockedRefund = await Refund.findById(refundId);
+    const lockedRefundQuery = schoolId
+      ? Refund.findOne({ _id: refundId, schoolId })
+      : Refund.findOne({ _id: refundId }).bypassTenantScope();
+    const lockedRefund = await lockedRefundQuery;
     if (!lockedRefund) {
       const err = new Error('Refund not found');
       err.code = 'NOT_FOUND';

@@ -13,6 +13,7 @@ const {
   getDeletedStudentPayments,
   getPaymentSummary,
   bulkImportStudents,
+  getBulkImportTemplate,
   getOverdueStudents,
   resetPayment,
   reconcileStudent,
@@ -40,6 +41,7 @@ router.use(resolveSchool);
 router.post('/', requireSchoolAuth(['owner', 'staff']), validateRegisterStudent, auditContext, registerStudent);
 router.post('/bulk', requireSchoolAuth(['owner', 'staff']), bulkImportLimiter, express.json({ limit: '1mb' }), streamingCsvUpload(), auditContext, bulkImportStudents);
 router.get('/', requireSchoolAuth(['owner', 'staff', 'read_only']), validateGetAllStudentsQuery, getAllStudents);
+router.get('/bulk/template.csv', requireSchoolAuth(['owner', 'staff', 'read_only']), getBulkImportTemplate);
 router.get('/export', requireSchoolAuth(['owner', 'staff', 'read_only']), validateExportStudentsQuery, exportStudents);
 
 // All authenticated users can view summaries

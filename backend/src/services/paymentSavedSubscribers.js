@@ -7,7 +7,7 @@
  * Call registerPaymentSavedSubscribers() once during app startup.
  *
  * Subscribers (each runs independently; one failing does not block others):
- *   1. Webhook  — fires payment.confirmed to the school's registered webhook URL.
+ *   1. Webhook  — fires payment.confirmed to the school's webhook endpoints.
  *   2. Receipt  — creates an idempotent receipt document in MongoDB.
  *   3. Reminder — clears reminder tracking fields when the fee is fully paid.
  */
@@ -15,6 +15,7 @@
 const paymentEvents = require('../events/paymentEvents');
 const { createReceipt } = require('./receiptService');
 const { incrementPaymentMetrics } = require('./metricsRollupService');
+const { invalidateReportCache } = require('./reportCacheInvalidator');
 const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const logger = require('../utils/logger').child('PaymentSavedSubscribers');
@@ -23,10 +24,7 @@ const logger = require('../utils/logger').child('PaymentSavedSubscribers');
 
 async function onPaymentSavedWebhook(payment) {
   try {
-    const school = await School.findOne({ schoolId: payment.schoolId });
-    const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
-    const { buildWebhookPayload } = require('../utils/buildWebhookPayload');
-    const { fireWebhookToEndpoints } = require('./webhookService');
+    const { dispatchToSchool } = require('./webhookService');
 
     const rawPayload = {
       transactionHash: payment.transactionHash || payment.txHash,
@@ -46,18 +44,9 @@ async function onPaymentSavedWebhook(payment) {
       ts: new Date().toISOString(),
     };
 
-    // #865: fire to all active WebhookEndpoint subscriptions
-    const results = await fireWebhookToEndpoints(payment.schoolId, 'payment.confirmed', rawPayload, allowedFields);
-
-    // Fallback: legacy single-URL on the School document (backward compat)
-    if (results.length === 0) {
-      const webhookUrl = (school && school.webhookUrl) || process.env.PAYMENT_WEBHOOK_URL;
-      if (!webhookUrl) return;
-      const secret = school ? school.webhookSecret : null;
-      const filteredPayload = buildWebhookPayload(rawPayload, allowedFields);
-      const { notifyPaymentConfirmed } = require('./webhookService');
-      await notifyPaymentConfirmed(webhookUrl, { ...payment, ...filteredPayload }, null, secret);
-    }
+    // #865 / #1640: fire to all active WebhookEndpoint subscriptions — the
+    // only outbound webhook path.
+    await dispatchToSchool(payment.schoolId, 'payment.confirmed', rawPayload);
   } catch (err) {
     logger.error('Webhook subscriber failed', { txHash: payment.txHash, correlationId: payment.correlationId, error: err.message });
   }
@@ -109,10 +98,7 @@ async function onRefundStatusChanged(refundEvent) {
   try {
     // Fire webhooks on significant terminal state transitions.
     if (refundEvent.newStatus === 'confirmed' || refundEvent.newStatus === 'rejected') {
-      const school = await School.findOne({ schoolId: refundEvent.schoolId });
-      const allowedFields = school?.webhookPayloadConfig?.allowedFields || null;
-      const { buildWebhookPayload } = require('../utils/buildWebhookPayload');
-      const { fireWebhookToEndpoints } = require('./webhookService');
+      const { dispatchToSchool } = require('./webhookService');
 
       const eventType = refundEvent.newStatus === 'confirmed' ? 'payment.refunded' : 'payment.refund_rejected';
 
@@ -127,19 +113,7 @@ async function onRefundStatusChanged(refundEvent) {
         ts: new Date().toISOString(),
       };
 
-      const results = await fireWebhookToEndpoints(refundEvent.schoolId, eventType, rawPayload, allowedFields);
-
-      // Fallback to legacy single-URL
-      if (results.length === 0) {
-        const webhookUrl = (school && school.webhookUrl) || process.env.PAYMENT_WEBHOOK_URL;
-        if (!webhookUrl) return;
-        const secret = school ? school.webhookSecret : null;
-        const filteredPayload = buildWebhookPayload(rawPayload, allowedFields);
-        if (refundEvent.newStatus === 'confirmed') {
-          const { notifyPaymentRefunded } = require('./webhookService');
-          await notifyPaymentRefunded(webhookUrl, { ...refundEvent, ...filteredPayload }, null, secret);
-        }
-      }
+      await dispatchToSchool(refundEvent.schoolId, eventType, rawPayload);
     }
   } catch (err) {
     logger.error('Refund webhook subscriber failed', {
@@ -174,6 +148,8 @@ function registerPaymentSavedSubscribers() {
   paymentEvents.on('payment.saved', onPaymentSavedReceipt);
   paymentEvents.on('payment.saved', onPaymentSavedCancelReminder);
   paymentEvents.on('payment.saved', onPaymentSavedRecordDuration);
+  // #1747 — invalidate school-scoped report cache entries on each new payment
+  paymentEvents.on('payment.saved', (payment) => { invalidateReportCache(payment); });
   // #881 — increment pre-aggregated rollups on every confirmed payment
   paymentEvents.on('payment.saved', async (payment) => {
     try { await incrementPaymentMetrics(payment); }
@@ -190,4 +166,5 @@ module.exports = {
   onPaymentSavedCancelReminder,
   onPaymentSavedRecordDuration,
   onRefundStatusChanged,
+  invalidateReportCache,
 };

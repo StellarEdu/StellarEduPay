@@ -32,9 +32,13 @@ resources:
   - ../../
 
 images:
-  - name: stellaredupay/backend
+  - name: ghcr.io/mystery-cli/stellaredupay-backend
+    newName: ghcr.io/mystery-cli/stellaredupay-backend
     newTag: sha-PLACEHOLDER
-  - name: stellaredupay/frontend
+  - name: ghcr.io/mystery-cli/stellaredupay-frontend
+    newName: ghcr.io/mystery-cli/stellaredupay-frontend
+    newTag: sha-PLACEHOLDER
+  - name: stellaredupay/backup-tools
     newTag: sha-PLACEHOLDER
 
 # Uncomment for private registries:

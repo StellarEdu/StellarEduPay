@@ -7,9 +7,11 @@
 #     ADMIN_USERNAME=<value> ADMIN_PASSWORD_HASH=<value> \
 #     METRICS_BEARER_TOKEN=<value> \
 #     WEBHOOK_SECRET_ENCRYPTION_KEY=<value> \
+#     STUDENT_PII_ENCRYPTION_KEY=<value> \
 #     RECEIPT_SIGNATURE_SECRET=<value> \
 #     AUDIT_HMAC_KEY=<value> \
 #     [SIGNER_MASTER_KEY=<value>] \
+#     [STUDENT_PII_ENCRYPTION_KEY_PREVIOUS=<value>] \
 #     [SCHOOL_WALLET_ADDRESS=<value>] \
 #     [NAMESPACE=default] \
 #     [SECRET_NAME=stellaredupay] \
@@ -30,6 +32,10 @@
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   WEBHOOK_SECRET_ENCRYPTION_KEY — AES-256 key that encrypts webhook endpoint secrets at rest.
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#   STUDENT_PII_ENCRYPTION_KEY    — AES-256 key that encrypts student/parent PII (parentEmail,
+#                                   parentPhone) at rest. Required in production; the backend
+#                                   refuses to start without it.
+#                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   RECEIPT_SIGNATURE_SECRET      — HMAC-SHA256 key for receipt signatures.
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   AUDIT_HMAC_KEY                — HMAC key for audit log integrity signatures.
@@ -37,6 +43,10 @@
 #
 # Optional env vars:
 #   SIGNER_MASTER_KEY             — AES-256 key encrypting stored Stellar signing keys.
+#                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#   STUDENT_PII_ENCRYPTION_KEY_PREVIOUS — Previous AES-256 PII key, kept during key rotation so
+#                                   existing rows can still be decrypted. Remove once all rows
+#                                   have been re-encrypted with the current key.
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   SCHOOL_WALLET_ADDRESS         — School's Stellar public key (G...).
 #   REDIS_PASSWORD                — Redis auth password (if Redis requires auth).
@@ -64,6 +74,7 @@ missing=()
 
 for required_var in JWT_SECRET MONGO_URI ADMIN_USERNAME ADMIN_PASSWORD_HASH \
                     METRICS_BEARER_TOKEN WEBHOOK_SECRET_ENCRYPTION_KEY \
+                    STUDENT_PII_ENCRYPTION_KEY \
                     RECEIPT_SIGNATURE_SECRET AUDIT_HMAC_KEY; do
   if [[ -z "${!required_var:-}" ]]; then
     missing+=("$required_var")
@@ -106,12 +117,17 @@ KUBECTL_ARGS=(
   "--from-literal=ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}"
   "--from-literal=METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}"
   "--from-literal=WEBHOOK_SECRET_ENCRYPTION_KEY=${WEBHOOK_SECRET_ENCRYPTION_KEY}"
+  "--from-literal=STUDENT_PII_ENCRYPTION_KEY=${STUDENT_PII_ENCRYPTION_KEY}"
   "--from-literal=RECEIPT_SIGNATURE_SECRET=${RECEIPT_SIGNATURE_SECRET}"
   "--from-literal=AUDIT_HMAC_KEY=${AUDIT_HMAC_KEY}"
 )
 
 if [[ -n "${SIGNER_MASTER_KEY:-}" ]]; then
   KUBECTL_ARGS+=("--from-literal=SIGNER_MASTER_KEY=${SIGNER_MASTER_KEY}")
+fi
+
+if [[ -n "${STUDENT_PII_ENCRYPTION_KEY_PREVIOUS:-}" ]]; then
+  KUBECTL_ARGS+=("--from-literal=STUDENT_PII_ENCRYPTION_KEY_PREVIOUS=${STUDENT_PII_ENCRYPTION_KEY_PREVIOUS}")
 fi
 
 if [[ -n "${SCHOOL_WALLET_ADDRESS:-}" ]]; then

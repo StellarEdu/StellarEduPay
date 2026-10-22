@@ -1,0 +1,11 @@
+{
+  "backend": {
+    "total": { "lines": 51, "statements": 51, "functions": 37, "branches": 46 },
+    "files": {}
+  },
+  "frontend": {
+    "total": { "lines": 39, "statements": 38, "functions": 22, "branches": 47 },
+    "files": {}
+  },
+  "updatedAt": "2026-10-17"
+}

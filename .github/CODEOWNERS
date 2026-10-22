@@ -1,0 +1,25 @@
+# CODEOWNERS for handshake-org/hsd
+#
+# Owners are requested for review on PRs touching the paths below.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default review owner for all repository changes.
+* @Mystery-CLI @handshake-org/maintainers
+
+# Require maintainers familiar with the affected security boundary.
+/.github/ @Mystery-CLI @handshake-org/maintainers
+/.github/workflows/ @handshake-org/maintainers
+/deploy/ @Mystery-CLI @handshake-org/maintainers
+/backend/src/middleware/ @Mystery-CLI
+/backend/src/services/ @Mystery-CLI @handshake-org/maintainers
+
+# Backend / payments
+/backend/                           @handshake-org/maintainers
+/backend/src/routes/paymentRoutes.js @handshake-org/maintainers
+
+# Frontend
+/frontend/                          @handshake-org/maintainers
+
+# Deploy / infrastructure
+/Dockerfile                         @handshake-org/maintainers
+/docker-compose.yml                 @handshake-org/maintainers

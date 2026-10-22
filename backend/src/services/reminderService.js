@@ -15,10 +15,10 @@
 
 const Student = require('../models/studentModel');
 const School  = require('../models/schoolModel');
-const Payment = require('../models/paymentModel');
 const ReminderLog = require('../models/reminderLogModel');
 const { sendFeeReminder, sendSmsReminder, sendWhatsAppReminder, verifySmtp } = require('./notificationService');
 const { isTwilioConfigured } = require('./smsService');
+const emailProvider = require('./email/emailProvider');
 const config = require('../config');
 const logger = require('../utils/logger').child('ReminderService');
 
@@ -32,6 +32,7 @@ let _timer  = null;
 let _running = false;
 let _lastRunAt = null;
 let _lastRunSummary = null;
+let _channelStatus = null;
 
 // Circuit breaker state
 const CIRCUIT_FAILURE_THRESHOLD = 5;
@@ -41,10 +42,22 @@ let _consecutiveFailures = 0;
 let _circuitOpenedAt = null;
 
 /**
- * Check if SMTP is properly configured
+ * Which reminder channels have a configured provider (#1788).
+ *
+ * Email is enabled for any real provider (smtp, ses, sendgrid). The console
+ * provider only logs, so it does not count as a channel that reaches parents.
+ * SMS and WhatsApp are enabled when Twilio is configured.
  */
-function isSmtpConfigured() {
-  return !!(config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASS);
+function getReminderChannelStatus() {
+  const email = emailProvider.resolveProviderName() !== 'console';
+  const sms = isTwilioConfigured();
+  if (email || sms) return { enabled: true, email, sms, reason: null };
+  return {
+    enabled: false,
+    email,
+    sms,
+    reason: 'No email provider (SMTP, SES or SendGrid) or SMS provider (Twilio) is configured',
+  };
 }
 
 /**
@@ -192,6 +205,12 @@ function determineReminderChannels(student, school) {
       channels.email = hasEmail;
   }
 
+  // Phone-only parents (#1788): when the preferred channel cannot reach them, fall
+  // back to SMS so they are not silently skipped.
+  if (!channels.email && !channels.sms && !channels.whatsapp && hasPhone) {
+    channels.sms = true;
+  }
+
   return channels;
 }
 
@@ -200,17 +219,22 @@ function determineReminderChannels(student, school) {
  * Returns a summary object for logging / API response.
  */
 async function processReminders() {
-  // Skip if SMTP is not configured
-  if (!isSmtpConfigured()) {
-    logger.warn('SMTP not configured — skipping reminder run');
-    return { schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0, smtpNotConfigured: true };
+  // Skip when no channel can reach a parent. Surfaced on /health via getReminderStatus().
+  const channelStatus = getReminderChannelStatus();
+  _channelStatus = channelStatus;
+  if (!channelStatus.enabled) {
+    logger.warn('No reminder channel configured — skipping reminder run', { reason: channelStatus.reason });
+    return { schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0, channelsNotConfigured: true, reason: channelStatus.reason };
   }
 
-  // Verify SMTP connectivity before processing any students
-  const smtpCheck = await verifySmtp();
-  if (!smtpCheck.ok) {
-    logger.error('SMTP verification failed — aborting reminder run to prevent quota consumption', { error: smtpCheck.error });
-    return { schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0, smtpVerifyFailed: true, smtpError: smtpCheck.error };
+  // Verify the email provider's connectivity before processing any students.
+  // Only needed when email is a channel; SMS-only schools skip it.
+  if (channelStatus.email) {
+    const emailCheck = await verifySmtp();
+    if (!emailCheck.ok) {
+      logger.error('Email provider verification failed — aborting reminder run to prevent quota consumption', { error: emailCheck.error });
+      return { schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0, smtpVerifyFailed: true, smtpError: emailCheck.error };
+    }
   }
 
   const summary = { schools: 0, eligible: 0, sent: 0, failed: 0, skipped: 0 };
@@ -236,11 +260,15 @@ async function processReminders() {
       continue;
     }
 
-    // Fetch all unpaid students in this school that have a parent email
+    // Fetch unpaid students with at least one contact the enabled channels can reach.
+    // determineReminderChannels decides which channel is used per student.
+    const contactClauses = [];
+    if (channelStatus.email) contactClauses.push({ parentEmail: { $ne: null, $exists: true } });
+    if (channelStatus.sms) contactClauses.push({ parentPhone: { $ne: null, $exists: true } });
     const unpaidStudents = await Student.find({
       schoolId:    school.schoolId,
       feePaid:     false,
-      parentEmail: { $ne: null, $exists: true },
+      $or:         contactClauses,
       reminderOptOut: { $ne: true },
     });
 
@@ -264,13 +292,18 @@ async function processReminders() {
       summary.eligible++;
 
       try {
-        // Fresh balance check — skip if student has actually paid in full
-        const paymentAgg = await Payment.aggregate([
-          { $match: { schoolId: school.schoolId, studentId: student.studentId, deletedAt: null } },
-          { $group: { _id: null, totalPaid: { $sum: '$amount' } } },
-        ]);
-        const totalPaid = paymentAgg.length ? paymentAgg[0].totalPaid : 0;
-        const remainingBalance = Math.max(0, (student.feeAmount || 0) - totalPaid);
+        // Fix #1751: Read the stored remainingBalance written by updateStudentBalance
+        // (the canonical writer) instead of re-aggregating all payments with an
+        // incorrect deletedAt-only filter that counted FAILED, PENDING, REFUNDED and
+        // suspicious payments and ignored creditAdjustments.
+        //
+        // updateStudentBalance is called by every payment pipeline (poller, sync,
+        // finalizer, verify) so student.remainingBalance is always up-to-date by the
+        // time any reminder tick runs.  Re-aggregating here would re-introduce the
+        // divergence this fix is eliminating.
+        const remainingBalance = student.remainingBalance != null
+          ? student.remainingBalance
+          : Math.max(0, (student.feeAmount || 0));
 
         if (remainingBalance <= 0) {
           summary.skipped++;
@@ -358,7 +391,7 @@ async function processReminders() {
             $inc: { reminderCount: 1 },
           };
           await Promise.all([
-            Student.findByIdAndUpdate(student._id, updateFields),
+            Student.findOneAndUpdate({ _id: student._id, schoolId: school.schoolId }, updateFields),
             ReminderLog.updateOne(
               { schoolId: school.schoolId, studentId: student.studentId, windowStart },
               { $set: { status: 'sent', sentAt: new Date(), escalationLevel, channels: sentChannels } }
@@ -440,8 +473,10 @@ async function runReminders() {
 function startReminderScheduler() {
   if (_timer) return;
   
-  if (!isSmtpConfigured()) {
-    logger.warn('SMTP not configured — reminder scheduler will not start. Set SMTP_HOST, SMTP_USER, SMTP_PASS to enable.');
+  const channelStatus = getReminderChannelStatus();
+  _channelStatus = channelStatus;
+  if (!channelStatus.enabled) {
+    logger.warn(`Reminder scheduler will not start — ${channelStatus.reason}.`);
     return;
   }
   
@@ -473,7 +508,10 @@ function stopReminderScheduler() {
 }
 
 function getReminderStatus() {
+  const channels = _channelStatus || getReminderChannelStatus();
   return {
+    enabled: channels.enabled,
+    reason: channels.reason,
     schedulerRunning: _timer !== null,
     lastRunAt: _lastRunAt,
     lastRunSummary: _lastRunSummary,
@@ -482,4 +520,4 @@ function getReminderStatus() {
   };
 }
 
-module.exports = { startReminderScheduler, stopReminderScheduler, processReminders, getReminderStatus };
+module.exports = { startReminderScheduler, stopReminderScheduler, processReminders, getReminderStatus, getReminderChannelStatus };

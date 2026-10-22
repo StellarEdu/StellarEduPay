@@ -64,6 +64,18 @@ const securityHeaders = [
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  // Issue #1796 — the payment page shows wallet addresses and QR codes, so the
+  // browser must not be downgraded to HTTP and the page must not be framed or
+  // opened by policy-less embeds. HSTS is production-only so local HTTP dev
+  // servers are not pinned to HTTPS.
+  {
+    key: 'Permissions-Policy',
+    value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
+  },
+  { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+  ...(isDev
+    ? []
+    : [{ key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' }]),
 ];
 
 // Server-side origin of the backend, used by the same-origin proxy (rewrites)

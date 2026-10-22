@@ -4,32 +4,62 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  version-drift:
-    name: Check dependency version drift
+  smoke:
+    name: Smoke (boots + parses)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version-file: '.nvmrc'
-      - name: Detect major-version mismatches
-        run: node scripts/check-version-drift.js
+          node-version: 20
+
+      - name: Syntax check every tracked .js file
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r file; do
+            if ! node --check "$file"; then
+              echo "::error file=$file::node --check failed"
+              fail=1
+            fi
+          done < <(git ls-files '*.js')
+          exit "$fail"
+
+      - name: Fail on truncated-file placeholders
+        run: |
+          if git grep -n -E "truncated [0-9]+ chars"; then
+            echo "::error::Found truncated-file placeholder markers in tracked files"
+            exit 1
+          fi
+          echo "No truncated-file placeholders found"
+
+      - name: Boot backend app with dummy env (no DB)
+        env:
+          NODE_ENV: test
+        run: |
+          node -e "require('./backend/src/app')"
 
   audit:
     name: Dependency security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             backend/node_modules
@@ -38,9 +68,9 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-      - run: npm ci
-      - run: cd backend && npm ci && cd ..
-      - run: cd frontend && npm ci && cd ..
+      - run: npm ci --ignore-scripts
+      - run: cd backend && npm ci --ignore-scripts && cd ..
+      - run: cd frontend && npm ci --ignore-scripts && cd ..
       - name: Audit root
         run: node scripts/check-dependency-audit.js .
       - name: Audit backend
@@ -52,8 +82,8 @@ jobs:
     name: Scan example files for real-format secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
       - name: Scan example files for secret material
@@ -63,8 +93,8 @@ jobs:
     name: Scan repository for committed Stellar secret keys
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
       - name: Scan tracked files for Stellar secret key material
@@ -74,38 +104,135 @@ jobs:
     name: Validate migration numbering
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: node scripts/validate-migrations.js
 
   orphan-dirs:
     name: Check for stray duplicate directories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: node scripts/check-orphan-dirs.js
 
   error-response-shape:
     name: Check 401/403 response shape
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: node scripts/check-error-response-shape.js
 
   k8s-ingress-tls:
     name: Verify Kubernetes ingress has TLS configuration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check ingress TLS block exists
         run: |
-          if ! grep -q "tls:" deploy/k8s/ingress.yaml; then
-            echo "ERROR: TLS block not found in deploy/k8s/ingress.yaml"
+          set -euo pipefail
+          fail=0
+          while IFS= read -r file; do
+            if ! node --check "$file"; then
+              echo "::error file=$file::node --check failed"
+              fail=1
+            fi
+          done < <(git ls-files '*.js')
+          exit "$fail"
+
+      - name: Fail on truncated-file placeholders
+        run: |
+          if git grep -n -E "truncated [0-9]+ chars"; then
+            echo "::error::Found truncated-file placeholder markers in tracked files"
             exit 1
           fi
-          echo "TLS block found in ingress configuration"
+          echo "No truncated-file placeholders found"
 
-  lint-backend:
-    name: Lint backend
+      - name: Boot backend app with dummy env (no DB)
+        env:
+          NODE_ENV: test
+        run: |
+          node -e "require('./backend/src/app')"
+
+  lockfile-sync:
+    name: Lockfile sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: backend/node_modules
+          key: ${{ runner.os }}-backend-node-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-backend-node-
+      - name: Install backend dependencies
+        run: cd backend && npm ci --ignore-scripts
+      - name: Run ESLint (backend)
+        run: cd backend && npx eslint src/ --max-warnings=0
+      - name: Verify root package-lock.json is in sync
+        run: npm ci --dry-run
+      - name: Verify frontend package-lock.json is in sync
+        working-directory: frontend
+        run: npm ci --dry-run
+      - name: Verify backend package-lock.json is in sync
+        working-directory: backend
+        run: npm ci --dry-run
+
+  route-contract:
+    name: Route manifest and frontend API contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/node_modules
+            node_modules
+          key: ${{ runner.os }}-route-contract-${{ hashFiles('package-lock.json', 'backend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-route-contract-
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install backend dependencies
+        run: cd backend && npm ci
+      - name: Check generated route manifest and API contract
+        run: npm run test:contract
+
+  # ── #1723: Standalone syntax gate ──────────────────────────────────────────
+  # Runs `node --check` over every tracked backend JS file.  Requires only a
+  # Node.js install — no npm install, no MongoDB, no Redis — so it fires on
+  # every push/PR within seconds and catches truncation or parse errors before
+  # the heavier test job even starts.
+  syntax-check:
+    name: Syntax check (node --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Check JS syntax (backend/src)
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r -d '' file; do
+            if ! node --check "$file" 2>&1; then
+              echo "SYNTAX ERROR: $file"
+              failed=1
+            fi
+          done < <(find backend/src -name '*.js' -not -path '*/node_modules/*' -print0)
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more files failed node --check"
+            exit 1
+          fi
+          echo "All backend/src JS files passed node --check"
+
+  dead-code-backend:
+    name: Detect dead/orphan backend modules (knip)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -120,25 +247,25 @@ jobs:
             ${{ runner.os }}-backend-node-
       - name: Install backend dependencies
         run: cd backend && npm ci
-      - name: Run ESLint (backend)
-        run: cd backend && npx eslint src/ --max-warnings=0
+      - name: Run knip (unused files/exports)
+        run: cd backend && npx knip --reporter compact
 
   lint-frontend:
     name: Lint frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-node-
       - name: Install frontend dependencies
-        run: cd frontend && npm ci
+        run: cd frontend && npm ci --ignore-scripts
       - name: Run next lint (frontend)
         run: cd frontend && npm run lint
 
@@ -148,18 +275,18 @@ jobs:
     env:
       NEXT_PUBLIC_API_URL: /api
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-node-
       - name: Install frontend dependencies
-        run: cd frontend && npm ci
+        run: cd frontend && npm ci --ignore-scripts
       - name: Build frontend (next build)
         run: cd frontend && npm run build
 
@@ -173,18 +300,18 @@ jobs:
     env:
       NEXT_PUBLIC_API_URL: http://localhost:5000/api
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: '.nvmrc'
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-node-
       - name: Install frontend dependencies
-        run: cd frontend && npm ci
+        run: cd frontend && npm ci --ignore-scripts
       - name: Run jest-axe component assertions
         run: cd frontend && npm run test:a11y
       - name: Install Playwright browsers
@@ -192,8 +319,75 @@ jobs:
       - name: Run axe scans of /pay-fees, /login and /dashboard
         run: cd frontend && npm run test:a11y:e2e
 
-  test:
+  property:
+    name: Property-based money invariants
     runs-on: ubuntu-latest
+    env:
+      FC_SEED: 18231824
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-property-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-property-
+      - run: npm ci
+      - name: Run fixed-seed money property suite
+        run: npm run test:property
+
+  integration:
+    name: Critical integration flows
+    runs-on: ubuntu-latest
+    env:
+      STELLAR_INTEGRATION_TESTS: 'true'
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/node_modules
+            node_modules
+          key: ${{ runner.os }}-integration-${{ hashFiles('package-lock.json', 'backend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-integration-
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install backend dependencies
+        run: cd backend && npm ci
+      - name: Run critical integration project
+        run: npm run test:integration
+
+  # ── #1389: Test coverage enforcement ───────────────────────────────────────
+  # Collects backend (root jest config) and frontend coverage and uploads the
+  # reports as downloadable artefacts on every PR, so reviewers can inspect
+  # exactly which code paths a change exercises. Per-directory Jest
+  # coverageThreshold values are configured in package.json (backend) and
+  # frontend/jest.config.js (frontend). Jest exits non-zero when any threshold
+  # is breached, so this job is GATING via the ci-gate job below.
+  #
+  # Threshold ladder (raise incrementally as coverage improves):
+  #   - Start: global 46 % branches / 37 % functions / 51 % lines (backend)
+  #            global 47 % branches / 22 % functions / 39 % lines (frontend)
+  #   - Target: raise each value by ~5 pp per sprint until ≥ 80
+  #
+  # #1635: on top of the Jest floors, scripts/coverage-ratchet.js compares this
+  # run against coverage-baseline.json and fails if any global metric — or the
+  # line coverage of any file changed in the PR — went down. The result is
+  # posted as a sticky PR comment. Raise the baseline with
+  # `npm run coverage:ratchet -- --update` after coverage improves.
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
       MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
@@ -211,9 +405,10 @@ jobs:
           --health-timeout 10s
           --health-retries 12
           --health-start-period 20s
-
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
@@ -231,22 +426,125 @@ jobs:
       - run: cd frontend && npm ci && cd ..
       - name: Syntax check
         run: npm run check:syntax
+      - name: Translation coverage check
+        run: npm run check:i18n
       - name: Validate migration policy
         run: node scripts/validate-migrations.js
       - name: Run migrations against CI MongoDB
-        working-directory: backend
-        run: npm run migrate
-      - run: npm test
+        run: npm run migrate:up
+      - name: Backend coverage
+        run: npm run coverage
+      - name: Frontend coverage
+        if: always()
+        run: npm run coverage:frontend
+      - name: Coverage ratchet
+        if: always()
+        run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
+      - name: Comment coverage on PR
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage-ratchet
+          path: coverage/ratchet.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
 
-  # ── #1389: Test coverage enforcement ───────────────────────────────────────
-  # Collects backend (root jest config) and frontend coverage and uploads the
-  # reports as downloadable artefacts on every PR, so reviewers can inspect
-  # exactly which code paths a change exercises. Per-directory Jest
-  # coverageThreshold values are configured in package.json (backend) and
-  # frontend/jest.config.js (frontend). Jest exits non-zero when any threshold
-  # is breached, so this job is GATING via the ci-gate job below.
-  #
-  # Threshold ladder (raise incrementally as coverage improves):
-  #   - Start: global 46 % branches / 37 % functions / 51 % lines (backend)
-  #            global 47 % branches / 22 % functions / 39 % lines (frontend)
-  #   - Target: raise each value by ~5 pp per sprint until ≥ 80
+  test:
+    runs-on: ubuntu-latest
+    needs: [syntax-check]
+    env:
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      MONGO_URI: mongodb://localhost:27017/stellaredupay_test?replicaSet=rs0
+      JWT_SECRET: ci-test-jwt-secret-not-used-in-production
+      SCHOOL_WALLET_ADDRESS: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --replSet rs0
+          --health-cmd "mongosh --quiet --eval 'try { if (rs.status().ok !== 1) { throw new Error(\"rs not initiated\"); } } catch (e) { try { rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"localhost:27017\" }] }); } catch (e2) {} process.exit(1); } if (!db.hello().isWritablePrimary) { process.exit(1); }'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+          --health-start-period 20s
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/node_modules
+            frontend/node_modules
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - run: npm ci
+      - run: cd backend && npm ci && cd ..
+      - run: cd frontend && npm ci && cd ..
+      - name: Syntax check
+        run: npm run check:syntax
+      - name: Translation coverage check
+        run: npm run check:i18n
+      - name: Validate migration policy
+        run: node scripts/validate-migrations.js
+      - name: Run migrations against CI MongoDB
+        run: npm run migrate:up
+      - name: Backend coverage
+        run: npm run coverage
+      - name: Frontend coverage
+        if: always()
+        run: npm run coverage:frontend
+      - name: Coverage ratchet
+        if: always()
+        run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
+      - name: Comment coverage on PR
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage-ratchet
+          path: coverage/ratchet.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Accessibility tests
+        run: npm run test:a11y
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high

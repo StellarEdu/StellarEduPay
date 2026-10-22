@@ -2,7 +2,10 @@
 
 const logger = require('./logger');
 
+let iv = null;
+
 function startHeapMonitoring() {
+  if (iv) return;
   const { heap_size_limit: max } = require('v8').getHeapStatistics();
   const threshold = max * 0.8;
 
@@ -13,7 +16,7 @@ function startHeapMonitoring() {
     // Metrics module might not be loaded yet
   }
 
-  const iv = setInterval(() => {
+  iv = setInterval(() => {
     const used = process.memoryUsage().heapUsed;
     const ratio = used / max;
 
@@ -33,4 +36,11 @@ function startHeapMonitoring() {
   iv.unref();
 }
 
-module.exports = { startHeapMonitoring };
+function stopHeapMonitoring() {
+  if (iv) {
+    clearInterval(iv);
+    iv = null;
+  }
+}
+
+module.exports = { startHeapMonitoring, stopHeapMonitoring };

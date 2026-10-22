@@ -4,6 +4,7 @@ const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const Payment = require('../models/paymentModel');
 const { logAudit } = require('../services/auditService');
+const schoolCache = require('../services/schoolCacheInvalidator');
 
 // GET /api/superadmin/schools — every school, active or not, for platform operators.
 async function listSchools(req, res, next) {
@@ -58,6 +59,9 @@ async function updateQuota(req, res, next) {
     if (!school) {
       return res.status(404).json({ error: 'School not found', code: 'NOT_FOUND' });
     }
+
+    // Drop the cached school on every replica so the new limit applies at once (#1801).
+    schoolCache.invalidate(school);
 
     if (req.auditContext) {
       await logAudit({

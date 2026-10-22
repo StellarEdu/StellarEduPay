@@ -43,4 +43,4 @@ Maintainers should tag incoming issues by area, severity, status, and contributo
 - The audit file (`PROJECT_ISSUES.md`) was removed in commit `99a414e` (2026-07-22) along with two other overlapping AI-generated backlogs (`issues.md`, `GITHUB_ISSUES.md`) on the grounds that the live GitHub Issues tracker is the single source of truth for this repository.
 - GitHub Issues are enabled and functional on this repository. Issues have been filed, triaged, and closed here throughout the project's history (e.g. #1110 tracked the removal of the redundant backlog files themselves).
 
-The contradiction is resolved. This document accurately describes the working intake process. See `SECURITY_STATUS_RECONCILIATION.md` for the broader reconciliation of documentation contradictions in this repository's history.
+The contradiction is resolved. This document accurately describes the working intake process.

@@ -127,12 +127,6 @@ jest.mock('../src/services/stellarService', () => ({
   }),
 }));
 
-jest.mock('../src/services/concurrentPaymentProcessor', () => ({
-  concurrentPaymentProcessor: {
-    getStats: () => ({ queueDepth: 0, maxQueueDepth: 100 }),
-  },
-}));
-
 jest.mock('../src/utils/paymentLimits', () => ({
   validatePaymentAmount: () => ({ valid: true }),
 }));

@@ -41,3 +41,6 @@ backups/
 test_results.txt
 test_results*.txt
 test_output*.txt
+
+# Backup key material (#1630) — never commit decryption identities
+backup-keys/

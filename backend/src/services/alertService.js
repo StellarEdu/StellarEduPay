@@ -1,9 +1,8 @@
 'use strict';
 const logger = require('../utils/logger').child('AlertService');
-const client = require('prom-client');
-const adminAlertCounter = new client.Counter({name:'admin_alerts_total', help:'Total number of admin alerts triggered'});
+const { sendAdminAlertTotal } = require('../metrics');
 async function sendAdminAlert(message, details = {}) {
-  adminAlertCounter.inc();
+  sendAdminAlertTotal.inc();
   logger.error(`[ALERT] ${message}`, details);
 }
 module.exports = { sendAdminAlert };

@@ -2,9 +2,9 @@
 
 A production-grade, multi-tenant school fee payment system built on the Stellar blockchain. StellarEduPay delivers transparent, immutable, and verifiable fee payments — eliminating manual reconciliation, reducing fraud, and providing instant proof of payment for schools and parents alike.
 
-[![CI](https://github.com/manuelusman73-png/StellarEduPay/actions/workflows/ci.yml/badge.svg)](https://github.com/manuelusman73-png/StellarEduPay/actions/workflows/ci.yml)
+[![CI](https://github.com/StellarEdu/StellarEduPay/actions/workflows/ci.yml/badge.svg)](https://github.com/StellarEdu/StellarEduPay/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D24.11.0-brightgreen)](https://nodejs.org/)
 
 ---
 
@@ -128,6 +128,8 @@ Assets are configured per school and can be extended in [`backend/src/config/ste
 
 ## Key Features
 
+> **Status:** the features below are not yet verified end-to-end on `main`: automatic intent-memo payment detection, path payments, SMS reminders, Horizon rate limiting, audit trail completeness, and the SEP-24 anchor flow. They are tracked in [#1802](https://github.com/StellarEdu/StellarEduPay/issues/1802) and should be read as beta until that work lands.
+
 **Blockchain & Payments**
 - Blockchain-based payments with automatic on-chain reconciliation
 - Multi-asset support (XLM, USDC) configurable per school
@@ -148,7 +150,6 @@ Assets are configured per school and can be extended in [`backend/src/config/ste
 - Durable transaction queue (BullMQ/Redis or MongoDB fallback)
 - Automatic retry for failed verifications with exponential backoff
 - Circuit breaker on the Stellar Horizon client
-- Rate-limited Stellar client (Bottleneck) to respect Horizon quotas
 - Concurrent request handling with configurable queue and circuit breaker
 - Graceful shutdown (SIGTERM/SIGINT) with in-flight request drain
 - Stuck-payment reconciliation on startup
@@ -196,7 +197,7 @@ StellarEduPay is a three-tier application:
                             │ REST API / SSE
                             ▼
 ┌────────────────────────────────────────────────────────────────┐
-│             Express.js Backend (Node.js 20+)                   │
+│             Express.js Backend (Node.js 24+)                   │
 │  Auth · Payments · Students · Schools · Reports · Webhooks     │
 │  Fee Adjustments · Disputes · Receipts · Audit Logs            │
 └──────────┬─────────────────────────────────┬───────────────────┘
@@ -229,7 +230,6 @@ StellarEduPay is a three-tier application:
 | Webhook Service | `backend/src/services/webhookService.js` | HMAC-signed outbound webhooks |
 | Audit Service | `backend/src/services/auditService.js` | Immutable audit log writes |
 | Report Service | `backend/src/services/reportService.js` | CSV/JSON report generation |
-| Rate-Limited Client | `backend/src/services/stellarRateLimitedClient.js` | Horizon API with Bottleneck + circuit breaker |
 
 ---
 
@@ -238,7 +238,7 @@ StellarEduPay is a three-tier application:
 | Layer | Technology |
 |-------|-----------|
 | Blockchain | Stellar Network + Stellar SDK v12 |
-| Backend | Node.js 20+ · Express 4 |
+| Backend | Node.js 24+ · Express 4 |
 | Database | MongoDB 7 (Replica Set) · Mongoose 8 |
 | Queue | BullMQ 5 · Redis 7 |
 | Frontend | Next.js (React) |
@@ -253,7 +253,7 @@ StellarEduPay is a three-tier application:
 
 ### Prerequisites
 
-- **Node.js** ≥ 20 ([download](https://nodejs.org/))
+- **Node.js** ≥ 24 ([download](https://nodejs.org/))
 - **MongoDB 7** running as a **replica set** (required for multi-document transactions)
 - **Redis 7** (required for BullMQ; the service degrades gracefully without it but Redis is recommended for production)
 - **Git**
@@ -393,15 +393,19 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 | Variable | Description |
 |----------|-------------|
 | `MONGO_URI` | MongoDB connection string (must include replica set) |
-| `SCHOOL_WALLET_ADDRESS` | School's Stellar public key (`G...`) |
 | `STELLAR_NETWORK` | `testnet` or `mainnet` |
 | `JWT_SECRET` | Secret for signing JWTs (min 32 chars, keep private) |
+| `RECEIPT_SIGNATURE_SECRET` | Secret used to sign payment receipts |
+
+> `SCHOOL_WALLET_ADDRESS` is optional. Each school's wallet is stored on its school record; the variable is only read by the legacy default-school backfill migration.
 
 ### Stellar
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STELLAR_HORIZON_URL` | Auto from network | Override Horizon API URL |
+| `STELLAR_HORIZON_URL` | Auto from network | Override Horizon API URL (alias: `HORIZON_URL`) |
+| `STELLAR_HORIZON_URLS` | — | Comma-separated, priority-ordered Horizon URLs for failover. Falls back to `STELLAR_HORIZON_URL`. |
+| `STELLAR_TIMEOUT_MS` | `10000` | Timeout for a single Horizon request |
 | `USDC_ISSUER` | Auto from network | USDC issuer address |
 
 ### Payments
@@ -410,6 +414,9 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 |----------|---------|-------------|
 | `MIN_PAYMENT_AMOUNT` | `0.01` | Minimum payment in XLM/USDC |
 | `MAX_PAYMENT_AMOUNT` | `100000` | Maximum payment in XLM/USDC |
+| `ACCEPTED_ASSET` | `XLM` | Asset accepted for fee payments: `XLM` or `USDC` |
+| `CONFIRMATION_THRESHOLD` | `2` | Confirmations required before a payment is treated as confirmed |
+| `FINALIZATION_THRESHOLD` | — | Confirmations required before a payment is finalized |
 
 ### Background Jobs
 
@@ -418,6 +425,14 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 | `POLL_INTERVAL_MS` | `30000` | Blockchain sync interval |
 | `RETRY_INTERVAL_MS` | `60000` | Failed-verification retry interval |
 | `RETRY_MAX_ATTEMPTS` | `10` | Max retry attempts before giving up |
+| `SYNC_INTERVAL_MS` | — | Override for the transaction sync interval |
+| `SYNC_LOCK_TTL_MS` | `60000` | Lifetime of a per-school sync lock |
+| `MAX_QUEUE_DEPTH` | `1000` | Queue depth limit; polling backs off as the queue approaches it |
+| `QUEUE_BACKPRESSURE_HIGH_WATER` | — | Queue depth at which polling pauses |
+| `QUEUE_BACKPRESSURE_LOW_WATER` | — | Queue depth at which polling resumes |
+| `REMINDER_INTERVAL_MS` | `3600000` | How often the fee-reminder scheduler runs |
+| `REMINDER_COOLDOWN_HOURS` | `48` | Minimum hours between reminders to the same parent |
+| `REMINDER_MAX_COUNT` | `5` | Maximum reminders sent per student |
 
 ### Redis / BullMQ
 
@@ -439,6 +454,11 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 | `VERIFY_RATE_LIMIT` | `10` | Max verify requests per minute |
 | `ALLOWED_ORIGINS` | — | Comma-separated CORS origins |
 | `APP_URL` | — | Base URL of the application (required in production) |
+| `JWT_ACCESS_TOKEN_TTL` | `8h` | Access-token lifetime: a number with an optional `s`, `m`, `h` or `d` suffix (e.g. `15m`). Invalid values fall back to the default. |
+| `JWT_REFRESH_TOKEN_TTL` | `30d` | Refresh-token lifetime, same format as `JWT_ACCESS_TOKEN_TTL` |
+| `STUDENT_PII_ENCRYPTION_KEY` | — | Hex key from which the student PII encryption key is derived |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY` | — | Key from which stored webhook secrets are encrypted. Rotate with `WEBHOOK_SECRET_ENCRYPTION_KEY_OLD` / `_PREVIOUS`. |
+| `AUDIT_HMAC_KEY` | `JWT_SECRET` | HMAC key for audit-log integrity. Set it to keep the audit secret separate from the JWT secret. |
 
 ### Server
 
@@ -449,6 +469,24 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 | `SHUTDOWN_TIMEOUT_MS` | `30000` | Graceful shutdown deadline |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` |
 | `MAX_BODY_SIZE` | `1mb` | Request body size limit |
+| `REQUEST_TIMEOUT_MS` | `30000` | Per-request timeout |
+
+### Data & Compliance
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STUDENT_PII_RETENTION_DAYS` | `90` | Days after a student is soft-deleted before their PII is cleared |
+
+### SMTP (email)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SMTP_HOST` | — | SMTP server hostname |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_SECURE` | `false` | Use TLS from the first byte (`true` for port 465) |
+| `SMTP_USER` | — | SMTP username |
+| `SMTP_PASS` | — | SMTP password |
+| `SMTP_FROM` | — | Sender address on outgoing email |
 
 ### Docker Compose Tuning
 
@@ -467,12 +505,11 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 
 ## API Reference
 
-Full OpenAPI specification is available at `GET /api/docs.json` (or `/api/docs` in development). In production (unless `SWAGGER_ENABLED=true`) `/api/docs.json` requires admin authentication. A static reference is in [`docs/api-spec.md`](docs/api-spec.md).
+The HTTP contract lives in [`backend/openapi.json`](backend/openapi.json), generated from the routers by `node scripts/openapi/generate.js` and enforced in CI (`node scripts/openapi/check-contract.js`). It is served at `GET /api/docs.json` (or `/api/docs` in development). In production (unless `SWAGGER_ENABLED=true`) `/api/docs.json` requires admin authentication. [`docs/api-spec.md`](docs/api-spec.md) has the full endpoint index plus request/response examples; the list below is a summary.
 
 ### Authentication
 
 ```
-POST /api/auth/register    Register a new admin account
 POST /api/auth/login       Login (returns JWT in HttpOnly cookie + response body)
 POST /api/auth/refresh     Refresh access token
 POST /api/auth/logout      Invalidate session
@@ -486,8 +523,8 @@ POST /api/auth/mfa/verify  Verify TOTP code
 POST   /api/schools            Create a school
 GET    /api/schools            List schools
 GET    /api/schools/:id        Get school details
-PUT    /api/schools/:id        Update school
-DELETE /api/schools/:id        Deactivate school
+PATCH  /api/schools/:id        Update school
+DELETE /api/schools/:id        Delete school
 ```
 
 ### Students
@@ -496,7 +533,7 @@ DELETE /api/schools/:id        Deactivate school
 POST   /api/students           Register a student (auto-assigns fee from class)
 GET    /api/students           List students (paginated)
 GET    /api/students/:id       Get student
-PUT    /api/students/:id       Update student
+PATCH  /api/students/:id       Update student
 DELETE /api/students/:id       Soft-delete student
 POST   /api/students/bulk      Bulk import via CSV (respects school quota)
 ```
@@ -520,8 +557,8 @@ GET    /api/payments/pending                   List pending verifications (pagin
 POST   /api/fees               Create a fee structure
 GET    /api/fees               List fee structures
 GET    /api/fees/:className    Get fee for a class
-PUT    /api/fees/:id           Update fee structure
-DELETE /api/fees/:id           Soft-delete fee structure
+PUT    /api/fees/:className    Update fee structure
+DELETE /api/fees/:className    Soft-delete fee structure
 ```
 
 ### Fee Adjustments
@@ -536,9 +573,10 @@ DELETE /api/fee-adjustments/:id        Delete rule
 ### Payment Plans
 
 ```
-POST   /api/payment-plans              Create installment plan
-GET    /api/payment-plans/:studentId   Get plan for student
-PUT    /api/payment-plans/:id          Update plan
+POST   /api/payment-plans/:studentId                              Create installment plan
+GET    /api/payment-plans/:studentId                              Get plan for student
+PATCH  /api/payment-plans/:studentId/installment/:installmentIndex Update an installment
+DELETE /api/payment-plans/:studentId                              Cancel plan
 ```
 
 ### Disputes
@@ -546,7 +584,7 @@ PUT    /api/payment-plans/:id          Update plan
 ```
 POST   /api/disputes           Open a dispute
 GET    /api/disputes           List disputes
-PUT    /api/disputes/:id       Update dispute status
+PATCH  /api/disputes/:id/resolve  Resolve a dispute
 ```
 
 ### Reports
@@ -570,14 +608,14 @@ GET    /api/audit              Paginated audit log with date/actor filters
 ### Reminders
 
 ```
-POST   /api/reminders/send     Trigger payment reminder emails
-GET    /api/reminders          List reminder history
+POST   /api/reminders/trigger  Trigger payment reminder emails
+GET    /api/reminders/preview  Preview who would be reminded
 ```
 
 ### Admin
 
 ```
-GET    /api/admin/retry-queue       Retry queue depth and status
+GET    /api/admin/retry-queue/stats Retry queue depth and status
 POST   /api/admin/log-level         Change log level at runtime
 GET    /api/consistency             Run data consistency check
 ```
@@ -867,49 +905,4 @@ StellarEduPay/
 | [`docs/api-spec.md`](docs/api-spec.md) | Full API reference |
 | [`docs/stellar-integration.md`](docs/stellar-integration.md) | Stellar-specific details |
 | [`docs/payment-limits.md`](docs/payment-limits.md) | Payment limits configuration |
-| [`docs/security.md`](docs/security.md) | Security model and threat analysis |
-| [`docs/WEBHOOK_INTEGRATION.md`](docs/WEBHOOK_INTEGRATION.md) | Webhook setup and HMAC verification |
-| [`docs/idempotency-payment-verification.md`](docs/idempotency-payment-verification.md) | Idempotency key design |
-| [`docs/QUICK_START_DOCKER.md`](docs/QUICK_START_DOCKER.md) | Docker quick start |
-
----
-
-## Changelog
-
-See [`CHANGELOG.md`](CHANGELOG.md) for a complete history of changes, breaking changes, and migration guides.
-
----
-
-## Troubleshooting
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `tx_insufficient_balance` | Testnet account has 0 XLM | Fund via [Friendbot](https://laboratory.stellar.org/#account-creator?network=test) |
-| `op_no_trust` | Recipient has no trustline for the asset | Submit a `ChangeTrust` op from the recipient account |
-| `connection refused` (MongoDB) | DB container not ready or wrong URI | Check `docker ps`; ensure `MONGO_URI` includes `?replicaSet=rs0` |
-| `tx_bad_auth` | Secret key doesn't match public address | Verify the keypair in `.env` |
-| Rate-limit counters reset on restart | `REDIS_HOST` not set | Configure Redis for persistent counters |
-| Swagger UI missing in production | Expected — intentional | Set `NODE_ENV` to anything other than `production`, set `SWAGGER_ENABLED=true`, or fetch `/api/docs.json` with an admin token |
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Add tests for new behaviour
-4. Run the full test suite: `npm test`
-5. Add a `[Unreleased]` entry to `CHANGELOG.md`
-6. Open a pull request — CI must pass before merging
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution guide, coding standards, and PR process.
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
----
-
-**Built with Stellar blockchain technology**
+| [`docs/security.md

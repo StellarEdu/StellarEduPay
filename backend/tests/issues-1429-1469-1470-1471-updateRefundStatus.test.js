@@ -21,12 +21,19 @@ jest.mock('../src/utils/logger', () => ({
 
 // ── Model mocks ──────────────────────────────────────────────────────────────
 
-const mockRefundFindById = jest.fn();
+const mockRefundFindOne = jest.fn();
 const mockRefundSave    = jest.fn();
 
 jest.mock('../src/models/refundModel', () => ({
-  findById: (...args) => mockRefundFindById(...args),
-  findOne:  jest.fn(),
+  findById: jest.fn(),
+  // findOne must support .bypassTenantScope() chaining (used by updateRefundStatus
+  // when schoolId is not passed — the legacy fallback path)
+  findOne: (...args) => {
+    const result = mockRefundFindOne(...args);
+    const thenable = Promise.resolve(result);
+    thenable.bypassTenantScope = () => thenable;
+    return thenable;
+  },
   create:   jest.fn(),
   find:     jest.fn().mockReturnValue({
     sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
@@ -101,7 +108,7 @@ beforeEach(() => {
   mockLockAcquire.mockResolvedValue({ token: 'tok-1', fencingToken: 1 });
   // Default: refund exists in 'pending' state (set per-test as needed)
   const doc = mockRefund('pending');
-  mockRefundFindById.mockResolvedValue(doc);
+  mockRefundFindOne.mockResolvedValue(doc);
 });
 
 // ── VALID_REFUND_STATUSES ────────────────────────────────────────────────────
@@ -169,7 +176,7 @@ describe('updateRefundStatus — happy path', () => {
     it(`transitions ${from} → ${to} and persists the change`, async () => {
       const doc = mockRefund(from);
       // first call: initial fetch; second call: re-fetch inside lock
-      mockRefundFindById.mockResolvedValue(doc);
+      mockRefundFindOne.mockResolvedValue(doc);
 
       await updateRefundStatus(REFUND_ID, to);
 
@@ -180,7 +187,7 @@ describe('updateRefundStatus — happy path', () => {
 
   it('sets refundTxHash and confirmedAt when transitioning to confirmed', async () => {
     const doc = mockRefund('submitted');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'confirmed', REFUND_TX);
 
@@ -190,7 +197,7 @@ describe('updateRefundStatus — happy path', () => {
 
   it('sets failureReason and failedAt when transitioning to failed', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'failed', null, 'network error');
 
@@ -200,7 +207,7 @@ describe('updateRefundStatus — happy path', () => {
 
   it('emits a refund.status_changed outbox event on success', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'submitted');
 
@@ -227,7 +234,7 @@ describe('updateRefundStatus — invalid status enum (#1469 / #1471)', () => {
 
       expect(err.code).toBe('INVALID_STATUS');
       // The database must not have been touched at all
-      expect(mockRefundFindById).not.toHaveBeenCalled();
+      expect(mockRefundFindOne).not.toHaveBeenCalled();
       expect(mockLockAcquire).not.toHaveBeenCalled();
     });
   }
@@ -259,7 +266,7 @@ describe('updateRefundStatus — illegal state transitions (#1469 / #1471)', () 
   for (const { from, to } of illegalCases) {
     it(`rejects ${from} → ${to} with INVALID_STATUS_TRANSITION`, async () => {
       const doc = mockRefund(from);
-      mockRefundFindById.mockResolvedValue(doc);
+      mockRefundFindOne.mockResolvedValue(doc);
 
       const err = await updateRefundStatus(REFUND_ID, to).catch(e => e);
 
@@ -277,7 +284,7 @@ describe('updateRefundStatus — illegal state transitions (#1469 / #1471)', () 
 describe('updateRefundStatus — distributed lock (#1470 / #1429)', () => {
   it('acquires the lock with the correct per-payment key', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'submitted');
 
@@ -287,7 +294,7 @@ describe('updateRefundStatus — distributed lock (#1470 / #1429)', () => {
 
   it('releases the lock after a successful update', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'submitted');
 
@@ -299,7 +306,7 @@ describe('updateRefundStatus — distributed lock (#1470 / #1429)', () => {
 
   it('throws REFUND_LOCK_CONTENDED when the lock is already held by another caller', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
     mockLockAcquire.mockResolvedValueOnce(null); // lock contended
 
     const err = await updateRefundStatus(REFUND_ID, 'submitted').catch(e => e);
@@ -317,7 +324,7 @@ describe('updateRefundStatus — distributed lock (#1470 / #1429)', () => {
       .mockResolvedValueOnce({ token: 'tok-A', fencingToken: 1 }) // call A
       .mockResolvedValueOnce(null);                               // call B
 
-    mockRefundFindById
+    mockRefundFindOne
       .mockResolvedValueOnce(docA) // call A — initial fetch
       .mockResolvedValueOnce(docA) // call A — re-fetch inside lock
       .mockResolvedValueOnce(docB) // call B — initial fetch
@@ -345,7 +352,7 @@ describe('updateRefundStatus — distributed lock (#1470 / #1429)', () => {
 describe('updateRefundStatus — lock always released on error', () => {
   it('releases the lock when the transition is illegal', async () => {
     const doc = mockRefund('confirmed'); // terminal
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'pending').catch(() => {});
 
@@ -358,7 +365,7 @@ describe('updateRefundStatus — lock always released on error', () => {
   it('releases the lock when refund.save() throws', async () => {
     const doc = mockRefund('pending');
     doc.save.mockRejectedValueOnce(new Error('DB write error'));
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus(REFUND_ID, 'submitted').catch(() => {});
 
@@ -371,7 +378,7 @@ describe('updateRefundStatus — lock always released on error', () => {
   it('releases the lock when the re-fetched refund is missing', async () => {
     const doc = mockRefund('pending');
     // First fetch succeeds (needed for lock key); second fetch returns null
-    mockRefundFindById
+    mockRefundFindOne
       .mockResolvedValueOnce(doc)
       .mockResolvedValueOnce(null);
 
@@ -388,7 +395,7 @@ describe('updateRefundStatus — lock always released on error', () => {
 
 describe('updateRefundStatus — refund not found', () => {
   it('throws NOT_FOUND when the initial findById returns null', async () => {
-    mockRefundFindById.mockResolvedValueOnce(null);
+    mockRefundFindOne.mockResolvedValueOnce(null);
 
     const err = await updateRefundStatus(REFUND_ID, 'submitted').catch(e => e);
 
@@ -398,7 +405,7 @@ describe('updateRefundStatus — refund not found', () => {
 
   it('throws NOT_FOUND when the re-fetch inside the lock returns null', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById
+    mockRefundFindOne
       .mockResolvedValueOnce(doc)   // initial fetch
       .mockResolvedValueOnce(null); // re-fetch inside lock
 

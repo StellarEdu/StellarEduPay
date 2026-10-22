@@ -98,6 +98,45 @@ function classifyFeePayment(cumulativeTotal, feeAmount) {
   };
 }
 
+/**
+ * The single canonical entry point every writer of
+ * `Payment.feeValidationStatus` must use (#1766).
+ *
+ * Vocabulary (see docs/payment-plans-underpaid-reconciliation.md):
+ *   - 'partial'   — cumulative total is below the fee; the payment is accepted
+ *                   as an instalment toward the fee.
+ *   - 'underpaid' — an active payment plan exists and the cumulative total has
+ *                   not yet met the expected installment amount (#1379).
+ *   - 'valid' / 'overpaid' — cumulative total equals / exceeds the fee.
+ *
+ * When no installmentAmount is supplied (no active plan) this delegates
+ * straight to classifyFeePayment, so 'underpaid' is never produced without a
+ * plan. All other fields come from classifyFeePayment unchanged.
+ *
+ * @param {Decimal|number|string} cumulativeTotal - total successfully paid so far
+ * @param {Decimal|number|string} feeAmount - the fee owed
+ * @param {{ installmentAmount?: Decimal|number|string|null }} [options]
+ */
+function classifyFeePaymentStatus(cumulativeTotal, feeAmount, options = {}) {
+  const result = classifyFeePayment(cumulativeTotal, feeAmount);
+  const { installmentAmount } = options || {};
+
+  if (
+    result.status === 'partial' &&
+    installmentAmount !== null &&
+    installmentAmount !== undefined &&
+    installmentAmount !== ''
+  ) {
+    const cumulative = roundMoney(cumulativeTotal);
+    const expected = roundMoney(installmentAmount);
+    if (cumulative.cmp(expected) < 0) {
+      return { ...result, status: 'underpaid' };
+    }
+  }
+
+  return result;
+}
+
 module.exports = {
   Decimal,
   MONEY_DECIMALS,
@@ -108,4 +147,5 @@ module.exports = {
   compareMoney,
   moneyEquals,
   classifyFeePayment,
+  classifyFeePaymentStatus,
 };

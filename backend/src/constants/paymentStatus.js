@@ -65,6 +65,9 @@ const PAYMENT_STATUS_VALUES = Object.freeze(Object.values(PAYMENT_STATUS));
 /**
  * Allowed status transitions for normal (non-admin) paths.
  *
+ *   PENDING        → SUCCESS        : finalizer promotes a detected payment once
+ *                                     its confirmation state reaches confirmed
+ *                                     (Issue #1754)
  *   SUCCESS        → DISPUTED       : admin marks a confirmed payment as disputed
  *   SUCCESS        → REFUND_PENDING : admin initiates a refund request
  *   REFUND_PENDING → REFUNDED       : refund confirmed on-chain
@@ -79,7 +82,7 @@ const PAYMENT_STATUS_VALUES = Object.freeze(Object.values(PAYMENT_STATUS));
 const PAYMENT_STATUS_TRANSITIONS = Object.freeze({
   [PAYMENT_STATUS.SUCCESS]:        [PAYMENT_STATUS.DISPUTED, PAYMENT_STATUS.REFUND_PENDING],
   [PAYMENT_STATUS.REFUND_PENDING]: [PAYMENT_STATUS.REFUNDED, PAYMENT_STATUS.SUCCESS],
-  [PAYMENT_STATUS.PENDING]:        [PAYMENT_STATUS.FAILED],
+  [PAYMENT_STATUS.PENDING]:        [PAYMENT_STATUS.SUCCESS, PAYMENT_STATUS.FAILED],
   [PAYMENT_STATUS.SUBMITTED]:      [PAYMENT_STATUS.FAILED],
 });
 
@@ -104,7 +107,7 @@ const PAYMENT_STATUS_TRANSITIONS = Object.freeze({
 const ADMIN_PAYMENT_STATUS_TRANSITIONS = Object.freeze({
   [PAYMENT_STATUS.SUCCESS]:        [PAYMENT_STATUS.DISPUTED, PAYMENT_STATUS.REFUND_PENDING, PAYMENT_STATUS.REFUNDED],
   [PAYMENT_STATUS.REFUND_PENDING]: [PAYMENT_STATUS.REFUNDED, PAYMENT_STATUS.SUCCESS],
-  [PAYMENT_STATUS.PENDING]:        [PAYMENT_STATUS.FAILED],
+  [PAYMENT_STATUS.PENDING]:        [PAYMENT_STATUS.SUCCESS, PAYMENT_STATUS.FAILED],
   [PAYMENT_STATUS.SUBMITTED]:      [PAYMENT_STATUS.FAILED],
   [PAYMENT_STATUS.DISPUTED]:       [PAYMENT_STATUS.REFUNDED],
   [PAYMENT_STATUS.FAILED]:         [PAYMENT_STATUS.SUCCESS, PAYMENT_STATUS.DISPUTED],

@@ -22,7 +22,9 @@
  *   - MongoDB must be running.
  *
  * Env overrides (optional): SEED_SCHOOL_ID (default SCH001),
- *   SEED_SCHOOL_SLUG (default demo-school), SEED_SCHOOL_NAME (default Demo School).
+ *   SEED_SCHOOL_SLUG (default demo-school), SEED_SCHOOL_NAME (default Demo School),
+ *   SEED_STUDENT_COUNT (default 10 — set higher, e.g. 300, to produce a
+ *   realistic fixture for the backup-restore test).
  *
  * Safe to re-run: all writes use upsert so repeated runs produce identical records.
  */
@@ -141,13 +143,39 @@ async function seedFeeStructures(schoolId = SCHOOL.schoolId) {
 }
 
 /**
+ * Build the student fixture. The base STUDENTS list is always seeded; when
+ * SEED_STUDENT_COUNT exceeds it, deterministic filler students are appended so
+ * the backup-restore test can produce a realistic (non-metadata-only) dump.
+ */
+function buildStudents() {
+  const target = Math.max(
+    STUDENTS.length,
+    parseInt(process.env.SEED_STUDENT_COUNT || String(STUDENTS.length), 10) || STUDENTS.length
+  );
+  const classes = FEE_STRUCTURES.map((f) => f.className);
+  const students = STUDENTS.slice();
+
+  for (let i = STUDENTS.length; i < target; i++) {
+    const n = i + 1;
+    students.push({
+      studentId: `STU${String(n).padStart(3, '0')}`,
+      name: `Seed Student ${n}`,
+      class: classes[i % classes.length],
+    });
+  }
+
+  return students;
+}
+
+/**
  * Upsert students by (schoolId, studentId) — consistent with the fee structure
  * approach. Resolves feeAmount from the fee map so the seed is self-contained.
  */
 async function seedStudents(feeMap, schoolId = SCHOOL.schoolId) {
   console.log('\n🎓  Seeding students…');
+  const students = buildStudents();
 
-  for (const s of STUDENTS) {
+  for (const s of students) {
     const feeAmount = feeMap[s.class];
     if (!feeAmount) {
       console.warn(`   ⚠️   No fee structure found for class "${s.class}" — skipping ${s.studentId}`);
@@ -184,43 +212,40 @@ async function main() {
     retryWrites: true,
     retryReads: true,
     w: 'majority',
-    readPreference: 'primaryPreferred',
+    readPreference: 'primary',
   });
-  console.log('    Connected to MongoDB');
 
-  if (clean) {
-    // Scoped deletes — Student/FeeStructure are tenant-scoped, so a filter
-    // without schoolId is rejected by the tenantScope plugin.
-    await FeeStructure.deleteMany({ schoolId: SCHOOL.schoolId });
-    await Student.deleteMany({ schoolId: SCHOOL.schoolId });
-    console.log(`    Cleared existing fees/students for ${SCHOOL.schoolId}.`);
+  try {
+    const schoolId = await seedSchool();
+
+    if (clean) {
+      console.log('\n🧹  Dropping existing data for this school…');
+      await Student.deleteMany({ schoolId });
+      await FeeStructure.deleteMany({ schoolId });
+    }
+
+    const feeMap = await seedFeeStructures(schoolId);
+    await seedStudents(feeMap, schoolId);
+
+    // Assert the fixture actually landed — a silent no-op seed is what made the
+    // backup-restore test produce a metadata-only archive (issue #1734).
+    const studentCount = await Student.countDocuments({ schoolId });
+    const feeCount = await FeeStructure.countDocuments({ schoolId });
+    console.log('\n📊  Seed summary:');
+    console.log(`    students:       ${studentCount}`);
+    console.log(`    feeStructures:  ${feeCount}`);
+
+    if (studentCount === 0) {
+      throw new Error('Seed assertion failed: zero students were inserted.');
+    }
+
+    console.log('\n✅  Seed complete.');
+  } finally {
+    await mongoose.disconnect();
   }
-
-  const schoolId = await seedSchool();
-  const feeMap = await seedFeeStructures(schoolId);
-  await seedStudents(feeMap, schoolId);
-
-  console.log('\n✅  Done.');
-  console.log('\n    Quick test commands (note the required X-School-ID header):');
-  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/students`);
-  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/fees`);
-  console.log(`      curl -H 'X-School-ID: ${SCHOOL.schoolId}' http://localhost:5000/api/students/STU001\n`);
 }
 
-// Only validate env and run when executed directly (not when require()'d by tests)
-if (require.main === module) {
-  const MONGO_URI = process.env.MONGO_URI;
-  if (!MONGO_URI) {
-    console.error('❌  MONGO_URI is not set. Check backend/.env');
-    process.exit(1);
-  }
-
-  main()
-    .catch((err) => {
-      console.error('\n❌  Seed failed:', err.message);
-      process.exit(1);
-    })
-    .finally(() => mongoose.disconnect());
-}
-
-module.exports = { seedSchool, seedFeeStructures, seedStudents, SCHOOL, FEE_STRUCTURES, STUDENTS };
+main().catch((err) => {
+  console.error('\n❌  Seed failed:', err.message);
+  process.exit(1);
+});

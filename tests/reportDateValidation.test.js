@@ -24,11 +24,6 @@ jest.mock('../backend/src/queue/reportQueue', () => ({
   setJobFailed: jest.fn(),
 }));
 
-// Mock report cache invalidator
-jest.mock('../backend/src/services/reportCacheInvalidator', () => ({
-  invalidate: jest.fn(),
-}));
-
 // Mock School model so the controller doesn't need a real DB
 jest.mock('../backend/src/models/schoolModel', () => ({
   findOne: jest.fn().mockReturnValue({

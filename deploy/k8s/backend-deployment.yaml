@@ -29,7 +29,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: stellaredupay/backend:placeholder
+          image: ghcr.io/mystery-cli/stellaredupay-backend:placeholder
           imagePullPolicy: IfNotPresent
           command: ["node", "scripts/migrate.js"]
           securityContext:
@@ -37,6 +37,14 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # Give the migration CLI the same configuration surface as the app
+          # container so it never drifts. The migration step only needs
+          # MONGO_URI (and NODE_ENV); the remaining keys are harmless here.
+          envFrom:
+            - configMapRef:
+                name: stellaredupay
+            - secretRef:
+                name: stellaredupay
           env:
             - name: MONGO_URI
               valueFrom:
@@ -61,7 +69,7 @@ spec:
               memory: "256Mi"
       containers:
         - name: backend
-          image: stellaredupay/backend:placeholder
+          image: ghcr.io/mystery-cli/stellaredupay-backend:placeholder
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000

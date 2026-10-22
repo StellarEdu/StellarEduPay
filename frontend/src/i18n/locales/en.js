@@ -37,6 +37,8 @@ const en = {
   },
 
   actions: {
+    deleting: "Deleting…",
+    never: "Never",
     save: "Save",
     signOut: "Sign out",
     saving: "Saving...",
@@ -219,6 +221,9 @@ const en = {
   },
 
   payFees: {
+    pickSchoolPrompt: "Please select your school above to continue.",
+    schoolPlaceholder: "— choose a school —",
+    selectSchool: "Select your school",
     howItWorksTitle: "How it works",
     badge: "Secure & Instant",
     badgeSubtitle: "School fees settled on the Stellar network",
@@ -428,6 +433,7 @@ const en = {
   },
 
   webhooks: {
+    deleteTitle: "Delete Webhook Endpoint?",
     title: "Webhook Endpoints",
     subtitle: "Configure and manage webhook integrations",
     loading: "Loading webhooks...",
@@ -489,6 +495,7 @@ const en = {
   },
 
   components: {
+    networkMismatch: "Network mismatch: build-time network is {{buildNetwork}} but the backend reports {{backendNetwork}}. Payment instructions may be incorrect.",
     testnetBanner: "TESTNET — Do not send real funds",
   },
 
@@ -556,6 +563,16 @@ const en = {
   },
 
   auth: {
+    accountLocked: "Too many failed login attempts. Account temporarily locked.",
+    back: "Back",
+    emailOrUsername: "Email or Username",
+    identifierPlaceholder: "admin@school.com or admin",
+    invalidMfaCode: "Invalid MFA code. Please try again.",
+    mfaCode: "MFA Code",
+    mfaPlaceholder: "000000",
+    mfaRequired: "Multi-factor authentication is enabled. Please enter your 6-digit code or backup code.",
+    mfaSubtitle: "Enter your MFA code",
+    serverError: "Server configuration error. Please contact support.",
     title: "Admin Login",
     subtitle: "Sign in to manage students, fees, and payments.",
     username: "Username",
@@ -743,6 +760,7 @@ const en = {
     inactive: "Inactive",
   },
   degradedBanner: {
+    verifyManually: "Verify payments manually on the Stellar explorer.",
     failed: "Live updates unavailable — refresh the page to restore real-time data.",
     reconnecting: "Reconnecting to live updates…",
     degraded: "Real-time updates degraded — some live events may not appear until connectivity is restored.",
@@ -1029,6 +1047,53 @@ const en = {
     loadFailed: "Could not load the reminder preview.",
     optedOut: "{{name}} will no longer receive reminders.",
     optOutFailed: "Could not opt the student out.",
+  },
+  analytics: {
+    eyebrow: "Insights",
+    title: "Analytics",
+    subtitle: "Payment volume, collections and outstanding balances.",
+    loading: "Loading analytics…",
+    totalStudents: "Total students",
+    paidStudents: "Paid students",
+    totalOutstanding: "Total outstanding",
+    avgPayment: "Average payment",
+    volumeTrend: "Volume trend",
+    period: {
+      daily: "Daily",
+      weekly: "Weekly",
+      monthly: "Monthly",
+    },
+    date: "Date",
+    totalAmount: "Total amount",
+    transactionCount: "Transactions",
+    noData: "No data for this period.",
+    classCompletion: "Class completion",
+    class: "Class",
+    total: "Total",
+    paid: "Paid",
+    unpaid: "Unpaid",
+    completionRate: "Completion rate",
+    topUnpaidCohorts: "Top unpaid classes",
+    unpaidCount: "Unpaid students",
+    totalOutstandingAmount: "Outstanding amount",
+    noUnpaid: "No unpaid balances.",
+  },
+  pagination: {
+    page: "Page {{current}} of {{total}}",
+  },
+  unsubscribe: {
+    explain: "You will stop receiving fee payment reminder emails for this student. Payment receipts and other school notices are not affected, and you can turn reminders back on at any time.",
+    pageTitle: "Unsubscribe",
+    title: "Unsubscribe from fee reminders?",
+    confirm: "Unsubscribe",
+    working: "Unsubscribing…",
+    missingToken: "This unsubscribe link is incomplete. Please use the link from your reminder email.",
+    doneTitle: "You have been unsubscribed",
+    doneBody: "You will no longer receive fee payment reminder emails for",
+    undoPrompt: "Changed your mind?",
+    undo: "Resubscribe to reminders",
+    resubscribedTitle: "Reminders turned back on",
+    resubscribedBody: "You will keep receiving fee payment reminders for",
   },
 };
 

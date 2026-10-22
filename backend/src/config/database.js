@@ -7,13 +7,19 @@
  * All environment variables are read through the central `config` module so
  * that values are validated once at startup (see ./index.js) instead of being
  * parsed ad hoc here.
+ *
+ * NOTE: This module intentionally loads the database-scoped config (./db.js)
+ * rather than the global config (./index.js). The migration CLI
+ * (scripts/migrate.js) requires this module, and a schema migration must not
+ * depend on auth/receipt secrets (JWT_SECRET, RECEIPT_SIGNATURE_SECRET).
+ * The HTTP server validates those secrets at boot via ./index.js.
  */
 
 'use strict';
 
 const mongoose = require('mongoose');
 const { logger } = require('../utils/logger');
-const config = require('./index');
+const config = require('./db');
 
 // ── Connection Pool Configuration ──────────────────────────────────────────────
 const POOL_CONFIG = {
@@ -237,54 +243,6 @@ async function connect() {
 }
 
 // ── Disconnect Function ─────────────────────────────────────────────────────────
-async function disconnect() {
-  try {
-    await mongoose.connection.close();
-    connectionState.isConnected = false;
-    logger.info('[MongoDB] Disconnected gracefully');
-  } catch (error) {
-    logger.error('[MongoDB] Error during disconnect', { error: error.message });
-    throw error;
-  }
-}
 
-// ── Health Check ────────────────────────────────────────────────────────────────
-async function healthCheck() {
-  try {
-    if (!mongoose.connection.db) {
-      return { status: 'disconnected', healthy: false };
-    }
-    await mongoose.connection.db.admin().ping();
-    return {
-      status: 'connected',
-      healthy: true,
-      poolSize: POOL_CONFIG.maxPoolSize,
-      reconnectAttempts: connectionState.reconnectAttempts,
-    };
-  } catch (error) {
-    return {
-      status: 'error',
-      healthy: false,
-      error: error.message,
-    };
-  }
-}
 
-// ── Get Connection State ────────────────────────────────────────────────────────
-function getConnectionState() {
-  return { ...connectionState };
-}
-
-// ── Exports ─────────────────────────────────────────────────────────────────────
-module.exports = {
-  connect,
-  disconnect,
-  healthCheck,
-  getConnectionState,
-  POOL_CONFIG,
-  RETRY_CONFIG,
-  STARTUP_RETRY_CONFIG,
-  TRANSACTION_CONFIG,
-  connectWithRetry,
-  isTransientConnectionError,
-};
+/* … truncated 1303 chars — edit only what you need near the top … */

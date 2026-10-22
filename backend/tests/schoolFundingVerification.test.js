@@ -38,6 +38,15 @@ const { createSchool, updateSchool } = require('../src/controllers/schoolControl
 jest.mock('../src/models/schoolModel');
 jest.mock('../src/services/auditService');
 jest.mock('../src/services/stellarAccountVerificationService');
+// Address changes now read the new wallet's cursor from Horizon (#1799); this
+// suite is about funding warnings, so the cursor lookup is stubbed out.
+jest.mock('../src/services/walletRotationService', () => ({
+  buildWalletRotation: jest.fn(async (school) => ({
+    retired: { address: school.stellarAddress },
+    syncCursor: null,
+    walletActiveFrom: new Date(),
+  })),
+}));
 
 const School = require('../src/models/schoolModel');
 const { logAudit } = require('../src/services/auditService');

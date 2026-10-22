@@ -42,6 +42,10 @@ const webhookRetrySchema = new mongoose.Schema(
     // #865: denormalised schoolId for metrics and dead-letter queries
     schoolId: { type: String, default: null, index: true },
 
+    // #1815: per-endpoint sequence allocated when the delivery was first made.
+    // Retries send the same value so consumers can order deliveries.
+    sequence: { type: Number, default: null },
+
     // Retry tracking
     status: {
       type: String,

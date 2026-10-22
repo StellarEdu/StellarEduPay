@@ -36,6 +36,8 @@ const fr = {
   },
 
   actions: {
+    deleting: "Suppression…",
+    never: "Jamais",
     save: "Enregistrer",
     signOut: "Se déconnecter",
     saving: "Enregistrement...",
@@ -218,6 +220,9 @@ const fr = {
   },
 
   payFees: {
+    pickSchoolPrompt: "Veuillez sélectionner votre école ci-dessus pour continuer.",
+    schoolPlaceholder: "— choisissez une école —",
+    selectSchool: "Sélectionnez votre école",
     howItWorksTitle: "Comment ça marche",
     badge: "Sécurisé & Instantané",
     badgeSubtitle: "Frais scolaires réglés sur le réseau Stellar",
@@ -427,6 +432,7 @@ const fr = {
   },
 
   webhooks: {
+    deleteTitle: "Supprimer le point de terminaison Webhook ?",
     title: "Points de terminaison Webhook",
     subtitle: "Configurer et gérer les intégrations webhook",
     loading: "Chargement des webhooks...",
@@ -488,6 +494,7 @@ const fr = {
   },
 
   components: {
+    networkMismatch: "Incohérence réseau : le réseau de compilation est {{buildNetwork}} mais le serveur indique {{backendNetwork}}. Les instructions de paiement peuvent être incorrectes.",
     testnetBanner: "TESTNET — N'envoyez pas de fonds réels",
   },
 
@@ -555,6 +562,16 @@ const fr = {
   },
 
   auth: {
+    accountLocked: "Trop de tentatives de connexion échouées. Compte temporairement verrouillé.",
+    back: "Retour",
+    emailOrUsername: "E-mail ou nom d'utilisateur",
+    identifierPlaceholder: "admin@ecole.com ou admin",
+    invalidMfaCode: "Code MFA invalide. Veuillez réessayer.",
+    mfaCode: "Code MFA",
+    mfaPlaceholder: "000000",
+    mfaRequired: "L'authentification multifacteur est activée. Saisissez votre code à 6 chiffres ou votre code de secours.",
+    mfaSubtitle: "Saisissez votre code MFA",
+    serverError: "Erreur de configuration du serveur. Veuillez contacter le support.",
     title: "Connexion admin",
     subtitle: "Connectez-vous pour gérer les étudiants, les frais et les paiements.",
     username: "Nom d'utilisateur",
@@ -742,6 +759,7 @@ const fr = {
     inactive: "Inactive",
   },
   degradedBanner: {
+    verifyManually: "Vérifiez les paiements manuellement sur l'explorateur Stellar.",
     failed: "Mises à jour en direct indisponibles — actualisez la page pour restaurer les données en temps réel.",
     reconnecting: "Reconnexion aux mises à jour en direct…",
     degraded: "Mises à jour en temps réel dégradées — certains événements peuvent ne pas s'afficher tant que la connexion n'est pas rétablie.",
@@ -1028,6 +1046,53 @@ const fr = {
     loadFailed: "Impossible de charger l'aperçu des rappels.",
     optedOut: "{{name}} ne recevra plus de rappels.",
     optOutFailed: "Impossible de désinscrire l'élève.",
+  },
+  analytics: {
+    eyebrow: "Analyses",
+    title: "Analytique",
+    subtitle: "Volume de paiements, encaissements et soldes impayés.",
+    loading: "Chargement des analyses…",
+    totalStudents: "Total des élèves",
+    paidStudents: "Élèves ayant payé",
+    totalOutstanding: "Total impayé",
+    avgPayment: "Paiement moyen",
+    volumeTrend: "Tendance du volume",
+    period: {
+      daily: "Quotidien",
+      weekly: "Hebdomadaire",
+      monthly: "Mensuel",
+    },
+    date: "Date",
+    totalAmount: "Montant total",
+    transactionCount: "Transactions",
+    noData: "Aucune donnée pour cette période.",
+    classCompletion: "Taux de réalisation par classe",
+    class: "Classe",
+    total: "Total",
+    paid: "Payé",
+    unpaid: "Impayé",
+    completionRate: "Taux de réalisation",
+    topUnpaidCohorts: "Classes avec le plus d'impayés",
+    unpaidCount: "Élèves impayés",
+    totalOutstandingAmount: "Montant impayé",
+    noUnpaid: "Aucun solde impayé.",
+  },
+  pagination: {
+    page: "Page {{current}} sur {{total}}",
+  },
+  unsubscribe: {
+    explain: "Vous ne recevrez plus les e-mails de rappel de paiement des frais pour cet élève. Les reçus de paiement et les autres avis de l'école ne sont pas concernés, et vous pouvez réactiver les rappels à tout moment.",
+    pageTitle: "Désabonnement",
+    title: "Se désabonner des rappels de frais ?",
+    confirm: "Se désabonner",
+    working: "Désabonnement en cours…",
+    missingToken: "Ce lien de désabonnement est incomplet. Utilisez le lien de votre e-mail de rappel.",
+    doneTitle: "Vous êtes désabonné",
+    doneBody: "Vous ne recevrez plus d'e-mails de rappel de paiement des frais pour",
+    undoPrompt: "Vous avez changé d'avis ?",
+    undo: "Se réabonner aux rappels",
+    resubscribedTitle: "Rappels réactivés",
+    resubscribedBody: "Vous continuerez à recevoir les rappels de paiement des frais pour",
   },
 };
 

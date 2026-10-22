@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible defect in StellarEduPay.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. For security vulnerabilities or exposed payment data, do not include sensitive details here; follow the private security contact in the repository.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong?
+      placeholder: Payments remain pending after a successful Stellar transaction
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest set of steps that reproduces the problem.
+      placeholder: |
+        1. Log in as...
+        2. Create...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Production
+        - Testnet/staging
+        - Local development
+        - CI/CD
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Remove secrets, wallet keys, tokens, student data, and payment information before posting.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Triage checks
+      options:
+        - label: I searched for existing issues and did not find a duplicate.
+          required: true
+        - label: I removed secrets and personal or payment data from this report.
+          required: true

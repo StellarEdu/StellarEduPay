@@ -8,6 +8,45 @@ Jest exits non-zero when any configured threshold is breached, which causes the
 
 ---
 
+## Ratchet (#1635)
+
+The Jest thresholds below are hard floors. On top of them, the `coverage` CI
+job runs `scripts/coverage-ratchet.js`, which compares the run against the
+committed `coverage-baseline.json` and **fails if coverage decreases**:
+
+- any global metric (lines / statements / functions / branches) of the backend
+  or frontend suite drops more than 0.1 pp below the baseline, or
+- the line coverage of any file changed in the PR drops below its baseline.
+
+The result is posted as a sticky PR comment and uploaded as the `coverage`
+artifact.
+
+When coverage improves, raise the baseline (it never moves down) and sync the
+Jest global floors in one step:
+
+```bash
+npm run coverage && npm run coverage:frontend
+npm run coverage:ratchet -- --update   # rewrites coverage-baseline.json, package.json, frontend/jest.config.js
+```
+
+Commit the three changed files with the PR that added the tests.
+
+### Router inventory
+
+`tests/routerInventory.test.js` fails when a file in `backend/src/routes/` is
+not required by the app (unless listed in its `KNOWN_UNMOUNTED` ratchet, which
+may only shrink), throws at require time, or registers no routes. It caught
+`disputeRoutes.js` referencing `requireSchoolAuth` without importing it.
+
+### Still to do
+
+- Supertest smoke tests through the real app for each router.
+- React Testing Library tests for `PaymentForm`, `VerifyPayment`,
+  `ReportDownload` and each admin page's load / error states, with the API
+  mocked at the HTTP layer.
+
+---
+
 ## Current thresholds
 
 ### Backend (`package.json` → `jest.coverageThreshold`)

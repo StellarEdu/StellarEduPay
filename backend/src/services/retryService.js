@@ -118,7 +118,7 @@ async function listDeadLetters({ limit = 50, skip = 0, schoolId = null } = {}) {
 
 /** Inspect a single dead-lettered (or any) verification by its document id. */
 async function getPendingVerification(id) {
-  return PendingVerification.findById(id).bypassTenantScope().lean();
+  return PendingVerification.findOne({ _id: id }).bypassTenantScope().lean();
 }
 
 /**

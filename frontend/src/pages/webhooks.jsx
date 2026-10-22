@@ -361,9 +361,9 @@ function WebhooksPage() {
 
       {pendingDeleteId && (
         <ConfirmationModal
-          title={t('webhooks.deleteTitle') || "Delete Webhook Endpoint?"}
+          title={t('webhooks.deleteTitle')}
           description={t('webhooks.deleteConfirm')}
-          confirmLabel={deletingEndpoint ? (t('actions.deleting') || "Deleting…") : (t('actions.delete') || "Delete")}
+          confirmLabel={deletingEndpoint ? (t('actions.deleting')) : (t('actions.delete') || "Delete")}
           cancelLabel={t('actions.cancel') || "Cancel"}
           confirmVariant="danger"
           onConfirm={confirmDeleteEndpoint}

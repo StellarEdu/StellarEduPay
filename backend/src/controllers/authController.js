@@ -8,6 +8,12 @@ const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { maskEmail } = require('../utils/piiRedaction');
 const { logAudit } = require('../services/auditService');
+const {
+  getStore,
+  revokeAllUserSessions,
+  parseTTL,
+  _resetStore,
+} = require('../services/sessionStore');
 
 // ── Constant-time string comparison ───────────────────────────────────────────
 
@@ -21,159 +27,38 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-// ── Token & session store ─────────────────────────────────────────────────────
-// Redis keys:
-//   refresh:token:<token>    → JSON metadata ({ familyId, sessionId, userId, role, ... })
-//   refresh:consumed:<token> → familyId string (300s reuse-detection window)
-//   refresh:revoked:<fid>    → '1' (TTL: refresh token max TTL)
-//   session:<sid>            → JSON session record
-//   sessions:user:<uid>      → Redis set of active sessionIds
+// ── Session revocation helper (#1772) ─────────────────────────────────────────
+// Revokes all refresh tokens/families for a user and bumps their tokenVersion
+// so any access token already issued is rejected by the auth middleware.
+// Returns the new tokenVersion (or null when the user cannot be found).
+async function revokeUserSessions(userId) {
+  if (!userId) return null;
 
-function makeRedisStore(client) {
-  return {
-    async setToken(token, ttlSeconds, meta) {
-      await client.set(`refresh:token:${token}`, JSON.stringify(meta), 'EX', ttlSeconds);
-    },
-    async getToken(token) {
-      const raw = await client.get(`refresh:token:${token}`);
-      if (!raw) return null;
-      try { return JSON.parse(raw); } catch { return null; }
-    },
-    async delToken(token) {
-      await client.del(`refresh:token:${token}`);
-    },
-    async markConsumed(token, familyId, ttlSeconds = 300) {
-      await client.set(`refresh:consumed:${token}`, familyId, 'EX', ttlSeconds);
-    },
-    async getConsumedFamily(token) {
-      return client.get(`refresh:consumed:${token}`);
-    },
-    async revokeFamily(familyId, ttlSeconds) {
-      await client.set(`refresh:revoked:${familyId}`, '1', 'EX', ttlSeconds);
-    },
-    async isFamilyRevoked(familyId) {
-      return (await client.exists(`refresh:revoked:${familyId}`)) === 1;
-    },
-    async setSession(sessionId, data, ttlSeconds) {
-      await client.set(`session:${sessionId}`, JSON.stringify(data), 'EX', ttlSeconds);
-      if (data.userId) {
-        await client.sadd(`sessions:user:${data.userId}`, sessionId);
-        await client.expire(`sessions:user:${data.userId}`, ttlSeconds);
-      }
-    },
-    async getSession(sessionId) {
-      const raw = await client.get(`session:${sessionId}`);
-      if (!raw) return null;
-      try { return JSON.parse(raw); } catch { return null; }
-    },
-    async delSession(sessionId) {
-      const raw = await client.get(`session:${sessionId}`);
-      if (raw) {
-        try {
-          const data = JSON.parse(raw);
-          if (data.userId) await client.srem(`sessions:user:${data.userId}`, sessionId);
-        } catch {}
-      }
-      await client.del(`session:${sessionId}`);
-    },
-    async listUserSessions(userId) {
-      const ids = await client.smembers(`sessions:user:${userId}`);
-      const result = [];
-      for (const id of ids) {
-        const sess = await this.getSession(id);
-        if (sess) result.push({ sessionId: id, ...sess });
-        else await client.srem(`sessions:user:${userId}`, id);
-      }
-      return result;
-    },
-  };
-}
+  const store = getStore();
+  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-function makeMemoryStore() {
-  const tokens = new Map();
-  const consumed = new Map();
-  const revoked = new Map();
-  const sessions = new Map();
-  const userSessions = new Map();
-
-  function alive(entry) { return entry && Date.now() < entry.exp; }
-
-  return {
-    async setToken(token, ttlSeconds, meta) {
-      tokens.set(token, { meta, exp: Date.now() + ttlSeconds * 1000 });
-    },
-    async getToken(token) {
-      const e = tokens.get(token);
-      if (!alive(e)) { tokens.delete(token); return null; }
-      return e.meta;
-    },
-    async delToken(token) { tokens.delete(token); },
-    async markConsumed(token, familyId, ttlSeconds = 300) {
-      consumed.set(token, { familyId, exp: Date.now() + ttlSeconds * 1000 });
-    },
-    async getConsumedFamily(token) {
-      const e = consumed.get(token);
-      if (!alive(e)) { consumed.delete(token); return null; }
-      return e.familyId;
-    },
-    async revokeFamily(familyId, ttlSeconds) {
-      revoked.set(familyId, Date.now() + ttlSeconds * 1000);
-    },
-    async isFamilyRevoked(familyId) {
-      const exp = revoked.get(familyId);
-      if (!exp) return false;
-      if (Date.now() > exp) { revoked.delete(familyId); return false; }
-      return true;
-    },
-    async setSession(sessionId, data, ttlSeconds) {
-      sessions.set(sessionId, { data, exp: Date.now() + ttlSeconds * 1000 });
-      if (data.userId) {
-        if (!userSessions.has(data.userId)) userSessions.set(data.userId, new Set());
-        userSessions.get(data.userId).add(sessionId);
-      }
-    },
-    async getSession(sessionId) {
-      const e = sessions.get(sessionId);
-      if (!alive(e)) { sessions.delete(sessionId); return null; }
-      return e.data;
-    },
-    async delSession(sessionId) {
-      const e = sessions.get(sessionId);
-      if (e?.data?.userId) userSessions.get(e.data.userId)?.delete(sessionId);
-      sessions.delete(sessionId);
-    },
-    async listUserSessions(userId) {
-      const ids = userSessions.get(userId) || new Set();
-      const result = [];
-      for (const id of [...ids]) {
-        const sess = await this.getSession(id);
-        if (sess) result.push({ sessionId: id, ...sess });
-        else ids.delete(id);
-      }
-      return result;
-    },
-  };
-}
-
-let _store;
-
-function getStore() {
-  if (_store) return _store;
-
-  if (process.env.REDIS_HOST) {
-    const client = getRedisClient();
-    if (client && client.status === 'ready') {
-      _store = makeRedisStore(client);
-      return _store;
-    }
-    logger.warn('[AuthController] Redis unavailable — falling back to in-memory token store');
+  try {
+    await store.revokeAllUserTokens(userId, refreshTTL);
+  } catch (err) {
+    logger.warn('[AuthController] Failed to revoke user sessions', { userId, error: err.message });
   }
 
-  _store = makeMemoryStore();
-  return _store;
-}
+  // Bump tokenVersion so outstanding access tokens are invalidated immediately.
+  let newVersion = null;
+  try {
+    const User = require('../models/userModel');
+    const updated = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { tokenVersion: 1 } },
+      { new: true, projection: { tokenVersion: 1 } }
+    );
+    newVersion = updated?.tokenVersion ?? null;
+  } catch (err) {
+    logger.warn('[AuthController] Failed to bump tokenVersion', { userId, error: err.message });
+  }
 
-function _resetStore() { _store = null; }
+  return newVersion;
+}
 
 // ── Per-account login lockout ─────────────────────────────────────────────────
 
@@ -184,8 +69,20 @@ const LOGIN_LOCK_TTL = 900;
 function loginLockKey(id) { return `loginLock:${id}`; }
 function loginFailKey(id) { return `loginFail:${id}`; }
 
-function isLockedOut(loginId) {
-  return Boolean(get(loginLockKey(loginId)));
+// Issue #1795 — a lock written to Redis by another replica must be honoured,
+// so Redis is consulted in addition to the in-process cache.
+async function isLockedOut(loginId) {
+  if (get(loginLockKey(loginId))) return true;
+
+  const redis = getRedisClient();
+  if (redis && isRedisReady()) {
+    try {
+      return (await redis.exists(loginLockKey(loginId))) === 1;
+    } catch (e) {
+      logger.warn('[AuthController] Redis error checking login lockout', { error: e.message });
+    }
+  }
+  return false;
 }
 
 async function recordLoginFailure(loginId) {
@@ -255,17 +152,6 @@ function refreshCookieOptions(ttlSeconds) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function parseTTL(envVar, defaultSeconds) {
-  const val = process.env[envVar];
-  if (!val) return defaultSeconds;
-  const match = val.match(/^(\d+)([smhd]?)$/);
-  if (!match) return defaultSeconds;
-  const n = parseInt(match[1], 10);
-  const unit = match[2];
-  const multipliers = { s: 1, m: 60, h: 3600, d: 86400, '': 1 };
-  return n * (multipliers[unit] ?? 1);
-}
-
 function extractDeviceInfo(req) {
   return {
     userAgent: req.headers?.['user-agent'] || null,
@@ -304,7 +190,7 @@ async function handleLogin(req, res) {
   const { username, email, password, mfaCode } = req.body || {};
   const loginId = ((email || username) || '').trim().toLowerCase();
 
-  if (isLockedOut(loginId)) {
+  if (await isLockedOut(loginId)) {
     return res.status(429).json({
       error: 'Too many failed login attempts. Account temporarily locked.',
       code: 'ACCOUNT_LOCKED',
@@ -543,14 +429,69 @@ async function handleRefresh(req, res) {
   }
 
   // Reconstruct JWT payload from stored metadata so the refreshed token is
-  // correct for every user type, not just the super-admin (#819)
+  // correct for every user type, not just the super-admin (#819).
+  //
+  // #1739 — Re-derive mfaSetupPending from the live User record instead of
+  // copying it blindly from stored metadata. Without this, an admin who
+  // completed MFA enrolment still gets a restricted token on every silent
+  // refresh because the old metadata still contains mfaSetupPending:true,
+  // sending them back to /mfa-setup indefinitely.
+  //
+  // For DB users (meta.userId is set and is not the env super-admin) we do a
+  // lightweight lookup to check the current mfaEnabled + mfaSecret state and
+  // the school's requireMfa policy, then compute the flag fresh. This also
+  // picks up the role/schoolId changes addressed in #1528.
   const jwtPayload = {};
   if (meta.role)     jwtPayload.role     = meta.role;
   if (meta.userId)   jwtPayload.userId   = meta.userId;
   if (meta.roles)    jwtPayload.roles    = meta.roles;
   if (meta.schoolId) jwtPayload.schoolId = meta.schoolId;
   if (meta.username) jwtPayload.username = meta.username;
-  if (meta.mfaSetupPending) jwtPayload.mfaSetupPending = meta.mfaSetupPending;
+
+  // Re-derive mfaSetupPending for DB users only (super_admin has no User doc).
+  if (meta.userId && meta.userId !== 'super_admin') {
+    try {
+      const User = require('../models/userModel');
+      const liveUser = await User.findById(meta.userId).lean();
+
+      if (!liveUser || !liveUser.isActive) {
+        // Account was deleted or deactivated — refuse the refresh.
+        res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
+        return res.status(401).json({ error: 'Account is disabled.', code: 'ACCOUNT_DISABLED' });
+      }
+
+      // Reflect any role / school changes made since the token was originally issued.
+      if (liveUser.roles)    jwtPayload.roles    = liveUser.roles;
+      if (liveUser.schoolId) jwtPayload.schoolId = liveUser.schoolId;
+
+      // Re-evaluate MFA setup requirement against live state.
+      const userHasPersonalMfa = Boolean(liveUser.mfaEnabled && liveUser.mfaSecret);
+      let schoolRequiresMfa = false;
+      if (liveUser.schoolId) {
+        try {
+          const School = require('../models/schoolModel');
+          const liveSchool = await School.findOne({ schoolId: liveUser.schoolId, isActive: true }).lean();
+          schoolRequiresMfa = Boolean(liveSchool?.requireMfa);
+        } catch {
+          // Non-fatal: fall back to false (more permissive is safer here).
+        }
+      }
+      const mfaSetupPending =
+        !userHasPersonalMfa &&
+        (process.env.REQUIRE_MFA === 'true' || schoolRequiresMfa);
+
+      if (mfaSetupPending) {
+        jwtPayload.mfaSetupPending = true;
+      }
+      // If mfaSetupPending is false we deliberately omit it so the claim
+      // disappears from the new token even if the old meta still had it.
+    } catch (err) {
+      // DB unavailable — fall back to trusting stored metadata so a transient
+      // DB hiccup doesn't log everyone out. Log so it's visible in alerts.
+      logger.warn('[AuthController] DB lookup failed during refresh; falling back to stored metadata', { error: err.message });
+      if (meta.mfaSetupPending) jwtPayload.mfaSetupPending = meta.mfaSetupPending;
+    }
+  }
 
   const accessToken = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
 
@@ -585,21 +526,41 @@ async function handleLogout(req, res) {
 }
 
 // ── Me ────────────────────────────────────────────────────────────────────────
+// #1769 — /auth/me must work for every authenticated user (school owners,
+// staff, read_only), not just the env super-admin. The frontend derives
+// userId / schoolId / roles from this response, so gating it behind
+// requireAdminAuth made the whole admin UI unreachable for school users.
+
+function isSuperAdmin(principal) {
+  if (!principal) return false;
+  if (principal.userId === 'super_admin') return true;
+  if (principal.role === 'admin') return true;
+  return Array.isArray(principal.roles) && principal.roles.includes('super_admin');
+}
 
 function handleMe(req, res) {
-  const p = req.admin;
+  // req.user is populated by requireSchoolAuth; fall back to req.admin for
+  // any route still using the legacy guard.
+  const p = req.user || req.admin || {};
+  const roles = Array.isArray(p.roles) ? p.roles : (p.role ? [p.role] : []);
   return res.json({
-    userId:   p.userId   || p.sub || null,
-    schoolId: p.schoolId || null,
-    roles:    Array.isArray(p.roles) ? p.roles : (p.role ? [p.role] : []),
-    exp:      p.exp      || null,
+    userId:          p.userId || p.sub || null,
+    email:           p.email || p.username || null,
+    schoolId:        p.schoolId || null,
+    roles,
+    mfaEnabled:      Boolean(p.mfaEnabled),
+    mfaSetupPending: Boolean(p.mfaSetupPending),
+    exp:             p.exp || null,
   });
 }
 
-// ── Session management (admin) ────────────────────────────────────────────────
+// ── Session management ────────────────────────────────────────────────────────
+// #1769 — Sessions are scoped to the caller. Super-admins may list/revoke any
+// session; everyone else only sees and revokes their own.
 
 async function handleListSessions(req, res) {
-  const userId = req.admin?.userId || 'super_admin';
+  const principal = req.user || req.admin || {};
+  const userId = principal.userId || 'super_admin';
   try {
     const sessions = await getStore().listUserSessions(userId);
     return res.json({ sessions });
@@ -611,10 +572,19 @@ async function handleListSessions(req, res) {
 
 async function handleRevokeSession(req, res) {
   const { sessionId } = req.params;
+  const principal = req.user || req.admin || {};
   const store = getStore();
   const sess = await store.getSession(sessionId).catch(() => null);
   if (!sess) {
     return res.status(404).json({ error: 'Session not found.', code: 'SESSION_NOT_FOUND' });
+  }
+  // #1769 — Ownership check: a caller may only revoke their own sessions
+  // unless they are a super-admin.
+  if (!isSuperAdmin(principal) && sess.userId !== principal.userId) {
+    return res.status(403).json({
+      error: 'You may only revoke your own sessions.',
+      code: 'FORBIDDEN',
+    });
   }
   if (sess.familyId) {
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
@@ -622,7 +592,7 @@ async function handleRevokeSession(req, res) {
   }
   await store.delSession(sessionId).catch(() => logger.debug('[AuthController] delSession in handleRevokeSession missed'));
   await logAudit({
-    schoolId: req.admin?.schoolId || 'system',
+    schoolId: principal.schoolId || 'system',
     action: 'SESSION_REVOKED',
     performedBy: req.auditContext?.performedBy,
     ipAddress: req.auditContext?.ipAddress,
@@ -696,23 +666,9 @@ async function handleChangePassword(req, res) {
 
   // #1360 — Revoke ALL active sessions and their refresh token families so
   // any stolen refresh token is immediately invalidated after a password change.
-  const store = getStore();
-  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
   try {
-    const sessions = await store.listUserSessions(userId);
-    await Promise.all(
-      sessions.map(async ({ sessionId, familyId }) => {
-        if (familyId) {
-          await store.revokeFamily(familyId, refreshTTL).catch(() =>
-            logger.debug('[AuthController] revokeFamily on password change missed', { sessionId })
-          );
-        }
-        await store.delSession(sessionId).catch(() =>
-          logger.debug('[AuthController] delSession on password change missed', { sessionId })
-        );
-      })
-    );
-    logger.info('[AuthController] All sessions revoked after password change', { userId, count: sessions.length });
+    const count = await revokeAllUserSessions(userId);
+    logger.info('[AuthController] All sessions revoked after password change', { userId, count });
   } catch (err) {
     // Non-fatal: password is already updated; log and continue.
     logger.warn('[AuthController] Failed to revoke sessions after password change', { userId, error: err.message });
@@ -745,5 +701,15 @@ module.exports = {
   handleListSessions,
   handleRevokeSession,
   handleChangePassword,
+  revokeUserSessions,
+  // Re-exported from services/sessionStore so callers (e.g. userController)
+  // can revoke sessions without optional chaining that silently no-ops.
+  getStore,
+  revokeAllUserSessions,
+  parseTTL,
   _resetStore,
+  // Exported for use in mfaController and userController
+  issueRefreshToken,
+  isLockedOut,
+  isSuperAdmin,
 };

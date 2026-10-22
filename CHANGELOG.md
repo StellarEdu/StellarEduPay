@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release process (#1634)**: semantic-versioned releases via release-please (`.github/workflows/release.yml`, `release-please-config.json`, `.release-please-manifest.json`) driven by conventional commits; the previous `[Unreleased]` history is now `v1.0.0`. New `GET /api/version` (`{ service, version, commit, buildTime, node }`), `version`/`commit` on `GET /health/live`, and a `build_info{version,commit,node_version}` metric. Release images are pushed to GHCR tagged with the version and `sha-<commit>`. See [docs/releasing.md](docs/releasing.md).
+- **Coverage ratchet (#1635)**: `scripts/coverage-ratchet.js` + `coverage-baseline.json` fail CI when global coverage or the coverage of a changed file decreases, and post a coverage table as a PR comment. `npm run coverage:ratchet -- --update` raises the baseline and syncs the Jest floors. New `tests/routerInventory.test.js` fails on unmounted, unloadable or empty routers.
+- **Distributed tracing (#1636)**: optional OpenTelemetry tracing (`OTEL_TRACING_ENABLED`, off by default) with auto-instrumentation for HTTP/Express, MongoDB/Mongoose, ioredis and axios; trace context carried through BullMQ jobs and outbox events; spans for Horizon calls (endpoint, attempt, failover) and `withStellarRetry`; `trace_id`/`span_id` on every log line and `correlation.id` on spans. Jaeger added to `docker-compose.monitoring.yml`. See [docs/tracing.md](docs/tracing.md).
+- **Parent self-service portal (#1637)**: `/parent` page and `/api/parent/*` API behind signed, expiring, revocable per-family magic links (`ParentAccessToken` model). Parents see balances, payment plans and payment history, download receipts, raise disputes and toggle reminders for their own children only; staff issue (`POST /api/parent/links`), list and revoke links. Optional portal links in reminder emails (`PARENT_PORTAL_EMAIL_LINKS`). See [docs/parent-portal.md](docs/parent-portal.md).
+
+### Fixed
+
+- **Path-payment crediting wired in (#1747 / #1557)**: `extractValidPayment`, `verifyTransaction`, and the destination-check branch in `syncPaymentsForSchool` in `stellarService.js` now recognise `path_payment_strict_send` and `path_payment_strict_receive` in addition to plain `payment` operations. Previously only `op.type === "payment"` was accepted, so Stellar path payments that delivered XLM or USDC to the school wallet were silently dropped instead of being credited. For both path-payment types Horizon surfaces the destination wallet and received asset/amount on the same `to`, `asset_*`, and `amount` fields as a regular payment, so `detectAsset` and fee validation work without further changes. A `CREDITABLE_OP_TYPES` `Set` replaces the three separate hard-coded `op.type === "payment"` checks.
+
+- **Report cache invalidation wired in (#1747)**: `services/reportCacheInvalidator.js` created and subscribed to the `payment.saved` event via `paymentSavedSubscribers.js`. Calls `cache.delByPrefix('report:<schoolId>:')` so school-scoped report cache entries are dropped immediately when a new payment lands rather than waiting for the 5-minute TTL.
+
+- **Truncated source files**: `backend/src/middleware/rateLimiter.js` had lost `publicStudentLimiter` and its entire `module.exports`, and `backend/src/routes/paymentRoutes.js` had lost its lock/unlock, status, refund, receipt-verification and reconciliation routes plus `module.exports`; both are restored. `backend/src/routes/disputeRoutes.js` used `requireSchoolAuth` without importing it.
+
+### Removed
+
+- **Dead phantom service code noted (#1747)**: Audit confirmed the following modules were **never written to disk** (they were described in the issue but only existed as aspirational references in docs and a draft CHANGELOG entry). No files were deleted; no tests were broken:
+  - `services/stellarRateLimitedClient.js` — rate-limit token bucket; replaced entirely by `horizonPollBudget.js` (cross-school coordinated budget) and `horizonFailoverClient.js` (per-endpoint circuit breaker).
+  - `services/stellarTransactionManager.js` — outgoing transaction building; the backend is read-only and never submits transactions, so this was never appropriate.
+  - `services/underpaidReconciliationService.js` — partial payments are accepted as `SUCCESS` on-chain; the `underpaidReconciliation` sub-document is populated by the refund service only when a refund is processed. See `docs/payment-plans-underpaid-reconciliation.md`.
+  - `services/reminderScheduler.js` — `reminderService.js` already exports `startReminderScheduler`/`stopReminderScheduler`, which `app.js` calls directly.
+  - `utils/responseHelper.js` — controllers use `res.json()` directly; a wrapper was never needed.
+
+<!-- release-please appends new entries above this line on every release (#1634). -->
+
+## [1.0.0] - 2026-10-17
+
+First tagged release (#1634). Everything below was previously held under `[Unreleased]`; it is now the content of `v1.0.0`.
+
 ### Security
 
 - **Per-endpoint webhook secrets encrypted at rest (#1538)**: `WebhookEndpoint.secret` is now encrypted with `webhookSecretEncryption` (AES-256-GCM, `WEBHOOK_SECRET_ENCRYPTION_KEY`) via the same `pre('save')`/`post('init')` pattern as `School.webhookSecret`, and is `select: false` so list queries never load it. Caller-supplied secrets must be ≥ 32 characters with enough estimated entropy (`400 WEAK_WEBHOOK_SECRET` otherwise); omitted secrets are generated server-side. New `POST /api/webhook-endpoints/:id/rotate-secret` returns a new server-generated secret once and dual-signs deliveries (`X-StellarEduPay-Signature-V2-Previous`) for a configurable overlap (`WEBHOOK_SECRET_ROTATION_OVERLAP_S`, default 24h). `scripts/rotate-webhook-encryption-key.js` now re-encrypts endpoint secrets too. Webhook retries now resolve the signing secret at send time instead of relying on a field that is never persisted.
@@ -34,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **tenantScope plugin threw TenantScopeError on every findById / findByIdAndUpdate (#1743)**: The `tenantScope` Mongoose plugin enforces `schoolId` on all queries against tenant-scoped models. Mongoose implements `Model.findById(id)` as `findOne({ _id: id })` and `findByIdAndUpdate(id, ...)` as `findOneAndUpdate({ _id: id }, ...)`, neither of which carries `schoolId`, so every `findById*` call on a tenant-scoped model (Payment, Student, Refund, Dispute, PaymentIntent, Receipt, EmailDelivery, PendingVerification, PaymentPlan, FeeAdjustmentRule, AuditLog, ReminderLog, FeeStructure, ReconciliationReport, StudentFeeHistory) threw `TenantScopeError` at runtime — breaking refund approval, intent-based submit, manual sync with intents, payment finalisation, reminder tracking, email delivery updates, receipt verification, and underpaid reconciliation. All 17 affected call sites across 10 source files replaced with `findOne({ _id, schoolId })` / `findOneAndUpdate({ _id, schoolId }, ...)`, threading `schoolId` through the refund service APIs (`approveRefund`, `rejectRefund`, `completeRefund` now accept `schoolId`). An ESLint `no-restricted-syntax` rule forbids `findById*` on all 15 tenant-scoped model variable names. A new test loads each tenant-scoped model against `mongodb-memory-server` and asserts `findById` throws `TENANT_SCOPE_MISSING` while `findOne({ _id, schoolId })` succeeds, including cross-tenant isolation.
 - **TransactionManager retry semantics and replica-set baseline (#transactions)**: `withTransaction()` previously opened ONE session, called `session.startTransaction()` on it, and then ran its retry loop *inside* that session — every retry re-executed the operation against a transaction the server had already aborted, so retries could not succeed by construction and merely burned the backoff budget before surfacing `MAX_RETRIES_EXCEEDED`. `withTransaction()` now opens a fresh session per attempt and delegates per-attempt lifecycle semantics (start/commit/abort, `TransientTransactionError` callback retry, `UnknownTransactionCommitResult` commit retry) to the driver's `session.withTransaction()`, re-throwing the ORIGINAL error so driver labels survive for upstream callers. `isRetryableError()` was reduced to the driver error contract — `TransientTransactionError`/`UnknownTransactionCommitResult` labels plus numeric codes 112 (WriteConflict), 189 (PrimarySteppedDown), 261 (TooManyLogicalSessions) — deleting the message substring sweep that treated any error whose text contained 'Lock' or 'transaction' as transient and replayed it up to three times. Every bundled environment now runs MongoDB as an initiated single-node replica set ("rs0"), which multi-document transactions require: docker-compose.yml generates an intra-cluster keyfile at boot, runs mongod with `--replSet rs0`, and initiates via its healthcheck (verified live: transaction commits); both CI Mongo services do the same via their healthcheck; deploy/k8s/mongodb-statefulset.yaml was found to be STANDALONE (and localhost-bound) and now runs `--replSet rs0 --bind_ip_all` with a postStart `rs.initiate()` hook and a primary-only readiness probe. The requirement is documented in the module header and docs/architecture.md. Removed two orphaned test files (`tests/concurrentAllocation.test.js`, `tests/concurrent-payment-processor-queue.test.js`) that still imported `concurrentPaymentProcessor`, which was deleted in #1036 — they failed at require time and broke `npm test`.
 - **Investigated duplicate sync bug (#731)**: Audited `syncAllPayments` in `paymentController.js` for the reported double `syncPaymentsForSchool` call and `ERR_HTTP_HEADERS_SENT` crash. Confirmed the code already calls `syncPaymentsForSchool` exactly once, sends a single response, and correctly passes `summary` to the audit log. No code change required.
 - **Documented transaction-queue durability and fixed drainWorker orphan (#1053)**: Audited `backend/src/queue/` to verify that the primary transaction-submission queue (`transactionQueue.js`) is durable — every job is upserted to `PendingVerification` (MongoDB) before being handed to BullMQ, and `recoverPendingJobs()` re-enqueues any `pending`/`processing` documents on every restart. `docs/architecture.md` previously described the queue as "event-driven (BullMQ)" with no mention of the MongoDB outbox and startup recovery, which read as if Redis were the sole durability layer. It now distinguishes the three queues (transaction processing, transaction retry + DLQ, report generation) and documents the two-tier MongoDB + Redis durability model for each, the degraded MongoDB-only mode (when Redis is unreachable), the difference between the two queues' stalled-job recovery mechanisms, and the graceful-shutdown drain contract. The `transactionQueue.drainWorker()` was misusing `markDead()` for jobs interrupted by the drain timeout — those jobs were orphaned in `dead_letter` (which `recoverPendingJobs()` does NOT scan). Added `markInterrupted(txHash, reason)` which writes `status: 'pending'` with a `lastError` note so the next startup recovery sweep re-queues them. `tests/transactionQueueDurability.test.js` now contains a `restart-mid-queue — no transaction is silently dropped (#1053)` describe block (in-flight job whose Redis state was lost across a restart; doc stuck in `processing` from a dead worker; second-restart idempotency; end-to-end enqueue → crash → recover; drain-timeout markInterrupted sets `pending` not `dead_letter`) and a `graceful-shutdown interruption path (#1053)` describe block (markInterrupted writes `pending` and that doc is recoverable on the next boot).
@@ -60,8 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `README.md` to link to `CHANGELOG.md`.
 
 ---
-
-## [1.0.0] - 2026-05-29
 
 ### Initial Release
 
@@ -91,7 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Migration Guide
 
-### Upgrading to Unreleased
+### Upgrading to 1.0.0
 
 #### Breaking Changes
 
@@ -113,27 +142,24 @@ None in this release.
 
 ## Contributing
 
-When submitting a pull request that modifies API routes, models, or controllers, please:
+Entries are generated from commit messages by [release-please](https://github.com/googleapis/release-please) (#1634), so PR titles / squash-merge commits must follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-1. Add an entry to the `[Unreleased]` section of this `CHANGELOG.md`
-2. Use the format: `- **Feature Name (#issue-number)**: Description`
-3. Categorize under `Added`, `Changed`, `Fixed`, or `Deprecated`
-4. Include any breaking changes in a separate section
+- `feat: …` → **Added** (minor bump)
+- `fix: …` → **Fixed** (patch bump)
+- `feat!: …` or a `BREAKING CHANGE:` footer → **Breaking** (major bump)
+- `docs:`, `chore:`, `test:`, `ci:`, `refactor:` → no release on their own
 
-CI will verify that `CHANGELOG.md` has been updated for PRs modifying:
-- `backend/src/routes/**`
-- `backend/src/models/**`
-- `backend/src/controllers/**`
+Hand-written detail (migrations, operator actions) may still be added to the release PR that release-please opens before it is merged.
 
 ---
 
 ## Release Process
 
-1. Update version in `package.json` following Semantic Versioning
-2. Move `[Unreleased]` section to a new version section with date
-3. Create a git tag: `git tag v1.2.3`
-4. Push tag: `git push origin v1.2.3`
-5. Create GitHub release with changelog excerpt
+See [docs/releasing.md](docs/releasing.md).
+
+1. Merge PRs to `main` with conventional-commit titles.
+2. release-please keeps a **release PR** open that bumps the version in every `package.json` and moves the pending notes into a new section of this file.
+3. Merging the release PR tags `vX.Y.Z`, publishes a GitHub release with the generated notes, and the release workflow pushes Docker images tagged with the version as well as the commit SHA.
 
 ---
 

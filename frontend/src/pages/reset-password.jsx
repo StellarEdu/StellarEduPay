@@ -1,11 +1,20 @@
 import Head from 'next/head';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { resetPassword, requestPasswordReset } from '../services/api';
 
+function readTokenFromFragment() {
+  if (typeof window === 'undefined') return '';
+  const hash = window.location.hash || '';
+  if (!hash) return '';
+  const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  return params.get('token') || '';
+}
+
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const { token } = router.query;
+  const [token, setToken] = useState('');
+  const [tokenLoaded, setTokenLoaded] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPasswordValue] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -13,6 +22,18 @@ export default function ResetPasswordPage() {
   const [success, setSuccess] = useState(false);
   const [requestSent, setRequestSent] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // The token is delivered in the URL fragment so it never reaches server
+    // logs or Referer headers; read it client-side only.
+    const fragmentToken = readTokenFromFragment();
+    setToken(fragmentToken);
+    setTokenLoaded(true);
+    if (fragmentToken && typeof window !== 'undefined') {
+      // Strip the token from the address bar / history once captured.
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
 
   async function handleRequestReset(e) {
     e.preventDefault();
@@ -86,6 +107,17 @@ export default function ResetPasswordPage() {
               Back to Login
             </button>
           </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!tokenLoaded) {
+    return (
+      <>
+        <Head><title>Reset Password</title></Head>
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', background: '#f6f7fb' }}>
+          <p style={{ color: '#64748b' }}>Loading...</p>
         </div>
       </>
     );

@@ -1,3 +1,8 @@
+Looking at the file provided (`frontend/src/pages/pay-fees.jsx`), there is no `remainingBalance ||` pattern in this file. The file is a page component that renders `PaymentForm` and `VerifyPayment` components. The `remainingBalance ||` pattern would be in those child components or other files, not in this page file.
+
+Since the step asks to grep `frontend/src` for `remainingBalance ||` and replace falsy fallbacks, but this specific file contains no such pattern, there is nothing to change in this file. The file content remains unchanged.
+
+```jsx
 import Head from "next/head";
 import { useRef, useState, useEffect } from "react";
 import PaymentForm from "../components/PaymentForm";

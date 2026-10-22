@@ -45,6 +45,28 @@ function validateMigrations(opts = {}) {
     } else {
       migrations[number] = file;
     }
+
+    // Check the export contract: version must equal the basename without .js.
+    const expectedVersion = path.basename(file, '.js');
+    let migration;
+    try {
+      migration = require(path.join(migrationsDir, file));
+    } catch (err) {
+      issues.push(`❌ ${file}: failed to require() file — ${err.message}`);
+      continue;
+    }
+
+    if (!migration.version || typeof migration.version !== 'string' || migration.version.trim() === '') {
+      issues.push(
+        `❌ ${file}: missing or empty "version" export ` +
+        `(expected version: '${expectedVersion}')`
+      );
+    } else if (migration.version !== expectedVersion) {
+      issues.push(
+        `❌ ${file}: version mismatch — ` +
+        `exported '${migration.version}' but filename requires '${expectedVersion}'`
+      );
+    }
   }
 
   const numbers = Object.keys(migrations)
@@ -72,6 +94,7 @@ function validateMigrations(opts = {}) {
     console.error('  • All migration files must be named: NNN_description.js (NNN = 3 digits)');
     console.error('  • Migration numbers must be unique');
     console.error('  • Migration numbers should be sequential (001, 002, 003, ...)');
+    console.error('  • Every migration must export { version, up, down } where version === basename(file, ".js")');
     console.error('  • No file may require/import a migration path that does not resolve');
     console.error('  • Root scripts/migrate-* files are forbidden; only scripts/migrate.js is allowed');
     throw new Error(issues.join('\n'));

@@ -338,21 +338,22 @@ function createConcurrentRequestMiddleware(options = {}) {
           count = _inMemoryIncrement(memoryStore, key, now, windowStart);
         }
 
+        // Seconds until the current fixed window ends (IETF RateLimit-* draft).
+        const resetSeconds = Math.max(1, Math.ceil((Math.floor(now / windowMs) * windowMs + windowMs - now) / 1000));
+        res.set({
+          'RateLimit-Limit': maxRequests,
+          'RateLimit-Remaining': Math.max(0, maxRequests - count),
+          'RateLimit-Reset': resetSeconds,
+        });
+
         if (count > maxRequests) {
-          const retryAfter = Math.ceil(windowMs / 1000);
-          res.set('Retry-After', retryAfter);
+          res.set('Retry-After', resetSeconds);
           return res.status(429).json({
-            error: 'Too many requests',
+            error: 'Too many requests, please try again later.',
             code: 'RATE_LIMIT_EXCEEDED',
-            retryAfter,
+            retryAfter: resetSeconds,
           });
         }
-
-        res.set({
-          'X-RateLimit-Limit': maxRequests,
-          'X-RateLimit-Remaining': maxRequests - count,
-          'X-RateLimit-Reset': Math.ceil((Math.floor(now / windowMs) * windowMs + windowMs) / 1000),
-        });
 
         next();
       };

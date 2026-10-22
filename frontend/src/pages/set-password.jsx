@@ -1,20 +1,42 @@
 import Head from 'next/head';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { setPassword } from '../services/api';
 
+function readTokenFromHash(hash) {
+  if (!hash) return '';
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const params = new URLSearchParams(raw);
+  return params.get('token') || '';
+}
+
 export default function SetPasswordPage() {
   const router = useRouter();
-  const { token } = router.query;
+  const [token, setToken] = useState('');
   const [password, setPasswordValue] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const fromHash = readTokenFromHash(window.location.hash);
+    if (fromHash) {
+      setToken(fromHash);
+      // Strip the token from the address bar so it is not kept in history.
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, [router.asPath]);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+
+    if (!token) {
+      setError('This link is missing or has an invalid token. Please request a new invitation.');
+      return;
+    }
 
     if (password.length < 12) {
       setError('Password must be at least 12 characters.');
@@ -29,6 +51,7 @@ export default function SetPasswordPage() {
     setLoading(true);
     try {
       await setPassword({ token, password });
+      setToken('');
       setSuccess(true);
       setTimeout(() => router.push('/login'), 3000);
     } catch (err) {

@@ -179,7 +179,6 @@ jest.mock('../backend/src/services/reminderService', () => ({
 jest.mock('../backend/src/services/piiAnonymizationScheduler', () => ({ startPiiAnonymizationScheduler: jest.fn(), stopPiiAnonymizationScheduler: jest.fn() }));
 jest.mock('../backend/src/services/jobRecoveryScheduler', () => ({ startJobRecoveryScheduler: jest.fn(), stopJobRecoveryScheduler: jest.fn() }));
 jest.mock('../backend/src/services/reportQueueService', () => ({ startWorker: jest.fn(), stopWorker: jest.fn() }));
-jest.mock('../backend/src/services/reportCacheInvalidator', () => ({ close: jest.fn() }));
 jest.mock('../backend/src/services/bullMQRetryService', () => ({}), { virtual: true });
 jest.mock('../backend/src/services/stellarService', () => ({
   syncPayments: jest.fn().mockResolvedValue(undefined),

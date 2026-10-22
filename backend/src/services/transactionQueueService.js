@@ -22,6 +22,7 @@ const PaymentIntent = require('../models/paymentIntentModel');
 const PendingVerification = require('../models/pendingVerificationModel');
 const logger = require('../utils/logger');
 const { resolveCorrelationId } = require('../utils/correlationId');
+const { withSpan, withExtractedContext } = require('../tracing');
 const { captureFiatSnapshot } = require('./currencyConversionService');
 
 const PERMANENT_FAIL_CODES = [
@@ -63,7 +64,7 @@ async function processTransactionJob(job) {
   // Validate intent expiry
   const intent = await PaymentIntent.findOne({ memo: result.memo, schoolId });
   if (intent?.expiresAt && intent.expiresAt < new Date()) {
-    await PaymentIntent.findByIdAndUpdate(intent._id, { status: 'expired' });
+    await PaymentIntent.findOneAndUpdate({ _id: intent._id, schoolId }, { status: 'expired' });
     throw Object.assign(new Error('Payment intent has expired'), { code: 'INTENT_EXPIRED' });
   }
 
@@ -108,6 +109,20 @@ async function processTransactionJob(job) {
  * Processor wrapper: permanent errors are not retried; mark dead in MongoDB.
  */
 async function jobProcessor(job) {
+  // #1636: resume the trace started by whoever enqueued the job.
+  return withExtractedContext(job.data.traceContext, () => withSpan('queue.process verify-transaction', {
+    'messaging.system': 'bullmq',
+    'messaging.operation': 'process',
+    'messaging.destination.name': job.queueName,
+    'messaging.message.id': job.id,
+    'job.attempt': (job.attemptsMade || 0) + 1,
+    'stellar.tx_hash': job.data.txHash,
+    'school.id': job.data.schoolId,
+    'correlation.id': resolveCorrelationId(job.data.correlationId, job.data.txHash),
+  }, () => _jobProcessor(job)));
+}
+
+async function _jobProcessor(job) {
   const correlationId = resolveCorrelationId(job.data.correlationId, job.data.txHash);
   try {
     return await processTransactionJob(job);

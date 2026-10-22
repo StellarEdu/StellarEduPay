@@ -48,7 +48,15 @@ const mockRefundCreate = jest.fn();
 const mockRefundAggregate = jest.fn().mockResolvedValue([]);
 jest.mock('../src/models/refundModel', () => ({
   findById: (...args) => mockRefundFindById(...args),
-  findOne: (...args) => mockRefundFindOne(...args),
+  // findOne returns a thenable that also supports .bypassTenantScope() chaining
+  // (used by updateRefundStatus legacy path and by approve/reject/complete with schoolId)
+  findOne: (...args) => {
+    const result = mockRefundFindOne(...args);
+    // If the result is a Promise (typical), attach bypassTenantScope to a wrapper
+    const thenable = Promise.resolve(result);
+    thenable.bypassTenantScope = () => thenable;
+    return thenable;
+  },
   create: (...args) => mockRefundCreate(...args),
   find: jest.fn().mockReturnValue({
     sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
@@ -332,39 +340,39 @@ describe('initiateRefund — atomic writes (#1566)', () => {
 
 describe('approveRefund — two-person approval (#1565)', () => {
   beforeEach(() => {
-    mockRefundFindById.mockResolvedValue(mockRefund('approval_pending'));
+    mockRefundFindOne.mockResolvedValue(mockRefund('approval_pending'));
   });
 
   it('succeeds when approver is a different user than initiator', async () => {
-    await expect(approveRefund('refund-id-001', PRINCIPAL_B)).resolves.toBeDefined();
+    await expect(approveRefund('refund-id-001', PRINCIPAL_B, SCHOOL_ID)).resolves.toBeDefined();
   });
 
   it('rejects when approver has same userId as initiator (SELF_APPROVAL_NOT_ALLOWED)', async () => {
-    const err = await approveRefund('refund-id-001', PRINCIPAL_A).catch(e => e);
+    const err = await approveRefund('refund-id-001', PRINCIPAL_A, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('SELF_APPROVAL_NOT_ALLOWED');
   });
 
   it('rejects UNKNOWN_PRINCIPAL approver', async () => {
-    const err = await approveRefund('refund-id-001', { userId: 'unknown', displayName: 'unknown' }).catch(e => e);
+    const err = await approveRefund('refund-id-001', { userId: 'unknown', displayName: 'unknown' }, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('UNKNOWN_PRINCIPAL');
   });
 
   it('stores approvedBy as { userId, displayName }', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await approveRefund('refund-id-001', PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await approveRefund('refund-id-001', PRINCIPAL_B, SCHOOL_ID);
     expect(doc.approvedBy).toEqual(PRINCIPAL_B);
   });
 
   it('wraps save and outbox in a transaction (#1566)', async () => {
-    await approveRefund('refund-id-001', PRINCIPAL_B);
+    await approveRefund('refund-id-001', PRINCIPAL_B, SCHOOL_ID);
     expect(mockSessionWithTransaction).toHaveBeenCalledTimes(1);
     expect(mockSessionEndSession).toHaveBeenCalledTimes(1);
   });
 
   it('rejects when refund is not in approval_pending status', async () => {
-    mockRefundFindById.mockResolvedValue(mockRefund('pending'));
-    const err = await approveRefund('refund-id-001', PRINCIPAL_B).catch(e => e);
+    mockRefundFindOne.mockResolvedValue(mockRefund('pending'));
+    const err = await approveRefund('refund-id-001', PRINCIPAL_B, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('INVALID_STATE');
   });
 });
@@ -375,7 +383,7 @@ describe('approveRefund — two-person approval (#1565)', () => {
 
 describe('rejectRefund (#1567 / #1564)', () => {
   beforeEach(() => {
-    mockRefundFindById.mockResolvedValue(mockRefund('approval_pending'));
+    mockRefundFindOne.mockResolvedValue(mockRefund('approval_pending'));
     mockPaymentFindOne.mockResolvedValue({
       schoolId: SCHOOL_ID,
       txHash: TX_HASH,
@@ -389,15 +397,15 @@ describe('rejectRefund (#1567 / #1564)', () => {
 
   it('moves refund to rejected status', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'no longer needed');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'no longer needed', SCHOOL_ID);
     expect(doc.status).toBe('rejected');
   });
 
   it('records rejectedBy, rejectedAt, and rejectionReason', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'no longer needed');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'no longer needed', SCHOOL_ID);
     expect(doc.rejectedBy).toEqual(PRINCIPAL_B);
     expect(doc.rejectedAt).toBeInstanceOf(Date);
     expect(doc.rejectionReason).toBe('no longer needed');
@@ -410,39 +418,39 @@ describe('rejectRefund (#1567 / #1564)', () => {
     };
     mockPaymentFindOne.mockResolvedValueOnce(payment);
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID);
     expect(payment.status).toBe('SUCCESS');
   });
 
   it('prevents self-rejection (SELF_APPROVAL_NOT_ALLOWED)', async () => {
-    const err = await rejectRefund('refund-id-001', PRINCIPAL_A, 'denied').catch(e => e);
+    const err = await rejectRefund('refund-id-001', PRINCIPAL_A, 'denied', SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('SELF_APPROVAL_NOT_ALLOWED');
   });
 
   it('requires a rejection reason', async () => {
-    const err = await rejectRefund('refund-id-001', PRINCIPAL_B, '').catch(e => e);
+    const err = await rejectRefund('refund-id-001', PRINCIPAL_B, '', SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('VALIDATION_ERROR');
   });
 
   it('only works on approval_pending refunds', async () => {
-    mockRefundFindById.mockResolvedValue(mockRefund('pending'));
-    const err = await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied').catch(e => e);
+    mockRefundFindOne.mockResolvedValue(mockRefund('pending'));
+    const err = await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('INVALID_STATE');
   });
 
   it('wraps all writes in a MongoDB transaction (#1566)', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID);
     expect(mockSessionWithTransaction).toHaveBeenCalledTimes(1);
     expect(mockSessionEndSession).toHaveBeenCalledTimes(1);
   });
 
   it('writes a refund.rejected Outbox event', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID);
     expect(mockOutboxCreate).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ eventType: 'refund.rejected' })]),
       expect.anything(),
@@ -451,8 +459,8 @@ describe('rejectRefund (#1567 / #1564)', () => {
 
   it('emits refund.status_changed in-process event (#1564)', async () => {
     const doc = mockRefund('approval_pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied');
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID);
     expect(mockPaymentEventsEmit).toHaveBeenCalledWith(
       'refund.status_changed',
       expect.objectContaining({ newStatus: 'rejected' }),
@@ -462,8 +470,8 @@ describe('rejectRefund (#1567 / #1564)', () => {
   it('releases the lock even when save throws', async () => {
     const doc = mockRefund('approval_pending');
     doc.save.mockRejectedValueOnce(new Error('DB error'));
-    mockRefundFindById.mockResolvedValue(doc);
-    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied').catch(() => {});
+    mockRefundFindOne.mockResolvedValue(doc);
+    await rejectRefund('refund-id-001', PRINCIPAL_B, 'denied', SCHOOL_ID).catch(() => {});
     expect(mockLockRelease).toHaveBeenCalledTimes(1);
   });
 });
@@ -475,7 +483,7 @@ describe('rejectRefund (#1567 / #1564)', () => {
 describe('completeRefund (#1564)', () => {
   beforeEach(() => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
     mockPaymentFindOne.mockResolvedValue({
       schoolId: SCHOOL_ID, txHash: TX_HASH, status: 'REFUND_PENDING',
       $locals: {}, save: mockPaymentSave,
@@ -485,8 +493,8 @@ describe('completeRefund (#1564)', () => {
 
   it('moves refund to confirmed with refundTxHash', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(doc.status).toBe('confirmed');
     expect(doc.refundTxHash).toBe(REFUND_TX);
     expect(doc.confirmedAt).toBeInstanceOf(Date);
@@ -499,34 +507,34 @@ describe('completeRefund (#1564)', () => {
     };
     mockPaymentFindOne.mockResolvedValueOnce(payment);
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(payment.status).toBe('REFUNDED');
   });
 
   it('requires refundTxHash', async () => {
-    const err = await completeRefund('refund-id-001', '', PRINCIPAL_B).catch(e => e);
+    const err = await completeRefund('refund-id-001', '', PRINCIPAL_B, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('VALIDATION_ERROR');
   });
 
   it('only works on pending refunds', async () => {
-    mockRefundFindById.mockResolvedValue(mockRefund('approval_pending'));
-    const err = await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B).catch(e => e);
+    mockRefundFindOne.mockResolvedValue(mockRefund('approval_pending'));
+    const err = await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('INVALID_STATE');
   });
 
   it('wraps all writes in a MongoDB transaction (#1566)', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(mockSessionWithTransaction).toHaveBeenCalledTimes(1);
     expect(mockSessionEndSession).toHaveBeenCalledTimes(1);
   });
 
   it('writes a refund.status_changed Outbox event (#1564)', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(mockOutboxCreate).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({
         eventType: 'refund.status_changed',
@@ -538,8 +546,8 @@ describe('completeRefund (#1564)', () => {
 
   it('emits in-process refund.status_changed event after transaction commits (#1564)', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(mockPaymentEventsEmit).toHaveBeenCalledWith(
       'refund.status_changed',
       expect.objectContaining({ newStatus: 'confirmed', refundTxHash: REFUND_TX }),
@@ -548,13 +556,13 @@ describe('completeRefund (#1564)', () => {
 
   it('calls updateStudentBalance after completion (#1567)', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
-    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(doc);
+    await completeRefund('refund-id-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(mockUpdateStudentBalance).toHaveBeenCalledWith(SCHOOL_ID, STUDENT_ID, {});
   });
 
   it('rejects UNKNOWN_PRINCIPAL', async () => {
-    const err = await completeRefund('refund-id-001', REFUND_TX, { userId: 'unknown', displayName: '' }).catch(e => e);
+    const err = await completeRefund('refund-id-001', REFUND_TX, { userId: 'unknown', displayName: '' }, SCHOOL_ID).catch(e => e);
     expect(err.code).toBe('UNKNOWN_PRINCIPAL');
   });
 });
@@ -578,13 +586,13 @@ describe('end-to-end flow: initiate → approve → complete (#1564)', () => {
 
     // Approve (Bob)
     const pendingRefund = mockRefund('approval_pending', 100);
-    mockRefundFindById.mockResolvedValue(pendingRefund);
-    await approveRefund('ref-001', PRINCIPAL_B);
+    mockRefundFindOne.mockResolvedValue(pendingRefund);
+    await approveRefund('ref-001', PRINCIPAL_B, SCHOOL_ID);
     expect(pendingRefund.status).toBe('pending');
 
     // Complete (Bob or another operator)
     const approvedRefund = mockRefund('pending', 100);
-    mockRefundFindById.mockResolvedValue(approvedRefund);
+    mockRefundFindOne.mockResolvedValue(approvedRefund);
     const paymentInProgress = {
       schoolId: SCHOOL_ID, txHash: TX_HASH, status: 'REFUND_PENDING',
       $locals: {}, save: mockPaymentSave,
@@ -592,7 +600,7 @@ describe('end-to-end flow: initiate → approve → complete (#1564)', () => {
     mockPaymentFindOne.mockResolvedValueOnce(paymentInProgress);
     mockLockAcquire.mockResolvedValue({ token: 'tok-complete', fencingToken: 4 });
 
-    await completeRefund('ref-001', REFUND_TX, PRINCIPAL_B);
+    await completeRefund('ref-001', REFUND_TX, PRINCIPAL_B, SCHOOL_ID);
     expect(approvedRefund.status).toBe('confirmed');
     expect(paymentInProgress.status).toBe('REFUNDED');
   });
@@ -614,7 +622,7 @@ describe('end-to-end flow: initiate → reject (#1564 / #1567)', () => {
 
     // Reject (Bob)
     const pendingRefund = mockRefund('approval_pending', 50);
-    mockRefundFindById.mockResolvedValue(pendingRefund);
+    mockRefundFindOne.mockResolvedValue(pendingRefund);
     const paymentInProgress = {
       schoolId: SCHOOL_ID, txHash: TX_HASH, status: 'REFUND_PENDING',
       $locals: {}, save: mockPaymentSave,
@@ -622,7 +630,7 @@ describe('end-to-end flow: initiate → reject (#1564 / #1567)', () => {
     mockPaymentFindOne.mockResolvedValueOnce(paymentInProgress);
     mockLockAcquire.mockResolvedValue({ token: 'tok-reject', fencingToken: 5 });
 
-    await rejectRefund('ref-002', PRINCIPAL_B, 'request denied by finance');
+    await rejectRefund('ref-002', PRINCIPAL_B, 'request denied by finance', SCHOOL_ID);
     expect(pendingRefund.status).toBe('rejected');
     expect(paymentInProgress.status).toBe('SUCCESS');
 
@@ -641,7 +649,7 @@ describe('end-to-end flow: initiate → reject (#1564 / #1567)', () => {
 describe('updateRefundStatus — atomic writes (#1566)', () => {
   it('opens a session and uses withTransaction', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus('ref-001', 'submitted');
 
@@ -652,7 +660,7 @@ describe('updateRefundStatus — atomic writes (#1566)', () => {
 
   it('always calls endSession even when the transaction throws', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
     mockSessionWithTransaction.mockRejectedValueOnce(new Error('conflict'));
 
     await updateRefundStatus('ref-001', 'submitted').catch(() => {});
@@ -661,7 +669,7 @@ describe('updateRefundStatus — atomic writes (#1566)', () => {
 
   it('emits refund.status_changed in-process event after commit (#1564)', async () => {
     const doc = mockRefund('pending');
-    mockRefundFindById.mockResolvedValue(doc);
+    mockRefundFindOne.mockResolvedValue(doc);
 
     await updateRefundStatus('ref-001', 'submitted');
 

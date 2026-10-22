@@ -21,6 +21,7 @@
 const { logger } = require('../utils/logger');
 const { httpRequestDurationSeconds } = require('../metrics');
 const { generateCorrelationId } = require('../utils/correlationId');
+const { setActiveAttributes } = require('../tracing');
 const { REQUEST_LOG_REDACT_FIELDS } = require('../utils/redactConfig');
 const { hashIp, stripQueryString } = require('../utils/piiRedaction');
 
@@ -82,6 +83,9 @@ function requestLogger() {
 
     // Propagate correlation ID to the response so callers can trace end-to-end
     res.setHeader('X-Correlation-ID', correlationId);
+    // #1636: tag the HTTP server span so a trace can be found from the
+    // correlation ID a client or log line reports.
+    setActiveAttributes({ 'correlation.id': correlationId, 'request.id': requestId });
 
     const ip =
       (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||

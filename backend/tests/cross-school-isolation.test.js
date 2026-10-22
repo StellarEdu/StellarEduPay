@@ -252,3 +252,103 @@ describe('HTTP cross-school isolation (documented from root suite)', () => {
     expect(true).toBe(true);
   });
 });
+
+// ─── Dead-letter queue cross-tenant isolation (issue #1768) ──────────────────
+
+describe('dead-letter queue — cross-school isolation (unit)', () => {
+  const {
+    getDeadLetterJobs,
+    retryDeadLetterJob,
+  } = require('../src/controllers/paymentAdminController');
+  const { getDeadLetterQueue } = require('../src/services/deadLetterQueue');
+
+  const jobA = {
+    id: 'job-a1',
+    name: 'verify-payment',
+    data: { schoolId: 'SCH-AAA', txHash: 'aaaa', studentId: STUDENT_ID },
+    failedReason: 'boom-a',
+  };
+  const jobB = {
+    id: 'job-b1',
+    name: 'verify-payment',
+    data: { schoolId: 'SCH-BBB', txHash: 'bbbb', studentId: STUDENT_ID },
+    failedReason: 'boom-b',
+  };
+
+  function mockQueue(jobs) {
+    const byId = new Map(jobs.map((j) => [j.id, j]));
+    return {
+      getFailed: jest.fn().mockResolvedValue(jobs),
+      getJob: jest.fn(async (id) => byId.get(id) || null),
+    };
+  }
+
+  function dlqReq(school, { params = {}, query = {} } = {}) {
+    return {
+      school,
+      schoolId: school.schoolId,
+      params,
+      query,
+      headers: {},
+    };
+  }
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('School A listing never includes School B dead-letter jobs', async () => {
+    getDeadLetterQueue.mockReturnValue(mockQueue([jobA, jobB]));
+
+    const res = mockRes();
+    await getDeadLetterJobs(dlqReq(SCHOOL_A), res, jest.fn());
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.jobs).toHaveLength(1);
+    expect(body.jobs[0].id).toBe('job-a1');
+    expect(body.jobs[0].data.schoolId).toBe('SCH-AAA');
+    expect(body.jobs.map((j) => j.id)).not.toContain('job-b1');
+  });
+
+  it('School B listing never includes School A dead-letter jobs', async () => {
+    getDeadLetterQueue.mockReturnValue(mockQueue([jobA, jobB]));
+
+    const res = mockRes();
+    await getDeadLetterJobs(dlqReq(SCHOOL_B), res, jest.fn());
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.jobs).toHaveLength(1);
+    expect(body.jobs[0].id).toBe('job-b1');
+    expect(body.jobs[0].data.schoolId).toBe('SCH-BBB');
+  });
+
+  it('School A retry of a School B job returns 404 and does not retry it', async () => {
+    const queue = mockQueue([jobA, jobB]);
+    getDeadLetterQueue.mockReturnValue(queue);
+
+    const res = mockRes();
+    await retryDeadLetterJob(
+      dlqReq(SCHOOL_A, { params: { id: 'job-b1' } }),
+      res,
+      jest.fn()
+    );
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(queue.getJob).toHaveBeenCalledWith('job-b1');
+    expect(queue.retry).not.toHaveBeenCalled();
+  });
+
+  it('School A retry of its own job succeeds', async () => {
+    const queue = mockQueue([jobA, jobB]);
+    queue.retry = jest.fn().mockResolvedValue(undefined);
+    getDeadLetterQueue.mockReturnValue(queue);
+
+    const res = mockRes();
+    await retryDeadLetterJob(
+      dlqReq(SCHOOL_A, { params: { id: 'job-a1' } }),
+      res,
+      jest.fn()
+    );
+
+    expect(res.status).not.toHaveBeenCalledWith(404);
+    expect(queue.retry).toHaveBeenCalledWith('job-a1');
+  });
+});

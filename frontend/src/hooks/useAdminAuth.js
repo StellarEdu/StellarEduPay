@@ -12,9 +12,11 @@ const AUTH_ME_RETRY_BASE_MS = 1000;
  * Fetch /auth/me with automatic exponential-backoff retry.
  *
  * Resolves with the parsed JSON on success, or rejects after all attempts
- * have been exhausted.  A 401/403 response is treated as a permanent auth
+ * have been exhausted.  A 401 response is treated as a permanent auth
  * failure and is not retried (retrying would be pointless without fresh
- * credentials).
+ * credentials).  A 403 is *not* treated as unauthenticated: /auth/me is
+ * available to every authenticated role, so a 403 is a transient/backend
+ * condition and is retried like any other error.
  *
  * @param {number} [maxRetries]
  * @returns {Promise<object>}
@@ -31,11 +33,11 @@ async function fetchAuthMe(maxRetries = AUTH_ME_MAX_RETRIES) {
     try {
       const r = await fetch(apiUrl('/auth/me'), { credentials: 'include' });
       if (r.ok) return r.json();
-      // 401 / 403 → not authenticated; no point retrying.
-      if (r.status === 401 || r.status === 403) {
+      // 401 → not authenticated; no point retrying.
+      if (r.status === 401) {
         throw Object.assign(new Error('Not authenticated'), { permanent: true });
       }
-      // 5xx or other transient errors — record and retry.
+      // 403 / 5xx / other errors — record and retry.
       lastError = new Error(`/auth/me responded with ${r.status}`);
     } catch (err) {
       if (err.permanent) throw err;
@@ -76,8 +78,12 @@ export function useAdminAuth() {
     setRoles(Array.isArray(data.roles) ? data.roles : []);
     setAuthMeError(false);
     if (typeof window !== 'undefined') {
+      // Persist (or clear) the school context so the axios interceptor sends
+      // the correct X-School-ID header for school-scoped requests.
       if (data.schoolId) localStorage.setItem('schoolId', data.schoolId);
-      if (data.userId)   localStorage.setItem('userId',   data.userId);
+      else localStorage.removeItem('schoolId');
+      if (data.userId) localStorage.setItem('userId', data.userId);
+      else localStorage.removeItem('userId');
     }
   }, []);
 
@@ -94,6 +100,10 @@ export function useAdminAuth() {
         setSchoolId(null);
         setUserId(null);
         setRoles([]);
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('schoolId');
+          localStorage.removeItem('userId');
+        }
       })
       .finally(() => {
         if (mountedRef.current) setChecked(true);
@@ -116,6 +126,7 @@ export function useAdminAuth() {
         setIsAdmin(true);
         setSchoolId(null);
         setUserId(null);
+        setRoles([]);
         setAuthMeError(true);
       });
   }, [applyAuthData]);

@@ -15,4 +15,6 @@
 {{/if}}{{i18n_thanks}}
 {{schoolName}} {{i18n_administration}}
 
-{{#if unsubscribeUrl}}{{i18n_unsubscribeText}} {{unsubscribeUrl}}{{/if}}
+{{#if portalUrl}}View balances, payment history and receipts: {{portalUrl}}
+
+{{/if}}{{#if unsubscribeUrl}}{{i18n_unsubscribeText}} {{unsubscribeUrl}}{{/if}}

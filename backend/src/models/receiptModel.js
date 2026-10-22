@@ -5,7 +5,8 @@ const tenantScope = require('../plugins/tenantScope');
 
 const receiptSchema = new mongoose.Schema(
   {
-    txHash:              { type: String, required: true, unique: true, index: true },
+    txHash:              { type: String, required: true, index: true },
+    opIndex:             { type: Number, required: true, default: 0 },
     studentId:           { type: String, required: true, index: true },
     studentName:         { type: String, default: null },
     schoolId:            { type: String, required: true, index: true },
@@ -21,6 +22,8 @@ const receiptSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+receiptSchema.index({ schoolId: 1, txHash: 1, opIndex: 1 }, { unique: true });
 
 receiptSchema.plugin(tenantScope, { modelName: 'Receipt' });
 

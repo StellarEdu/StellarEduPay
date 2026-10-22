@@ -31,6 +31,7 @@
 const StellarSdk = require('@stellar/stellar-sdk');
 const config = require('../config');
 const logger = require('../utils/logger');
+const { withSpan } = require('../tracing');
 // metrics is required lazily inside _ensureMetrics() to avoid a circular
 // dependency: horizonFailoverClient → metrics → stellarConfig → horizonFailoverClient
 
@@ -334,7 +335,14 @@ class HorizonFailoverClient {
 
       const { server, cb, url } = this._servers[currentIdx];
       try {
-        const result = await fn(server);
+        // #1636: one span per endpoint attempt, so a trace shows which
+        // endpoint served the call and every failover hop taken on the way.
+        const result = await withSpan('horizon.call', {
+          'horizon.endpoint': url,
+          'horizon.endpoint_index': currentIdx,
+          'horizon.attempt': tried.size,
+          'horizon.failover': tried.size > 1,
+        }, () => fn(server));
         cb.recordSuccess();
         // If we succeeded on a non-primary endpoint, keep it as active.
         if (this._activeIndex !== currentIdx) {

@@ -11,8 +11,42 @@ const { checkLiveness, WORKER_NAMES } = require('../services/workerHeartbeat');
 const { getRecoveryStatus } = require('../queue/transactionQueue');
 const logger = require('../utils/logger');
 const { isReady: isShutdownReady } = require('../services/shutdownManager');
+const { isEncryptionEnabled: isPiiEncryptionEnabled } = require('../services/studentPiiEncryption');
+const { isEncryptionEnabled: isWebhookSecretEncryptionEnabled } = require('../services/webhookSecretEncryption');
+const { getBuildInfo } = require('../utils/buildInfo');
 
 const STELLAR_CHECK_TIMEOUT_MS = 3000; // 3 second timeout for Stellar health check
+
+/**
+ * Report whether at-rest encryption is active for PII and webhook secrets.
+ * Both services silently no-op without a key, so this is the only way an
+ * operator can tell whether data is actually being encrypted (#1778).
+ *
+ * @returns {{pii: boolean, webhookSecrets: boolean}}
+ */
+function getEncryptionStatus() {
+  return {
+    pii: Boolean(isPiiEncryptionEnabled()),
+    webhookSecrets: Boolean(isWebhookSecretEncryptionEnabled()),
+  };
+}
+
+let encryptionStatusLogged = false;
+
+/**
+ * Log the encryption status once at boot so operators can see whether PII and
+ * webhook secrets are being encrypted (#1778). Safe to call more than once.
+ */
+function logEncryptionStatusOnce() {
+  if (encryptionStatusLogged) return;
+  encryptionStatusLogged = true;
+  const status = getEncryptionStatus();
+  if (status.pii && status.webhookSecrets) {
+    logger.info('At-rest encryption enabled', status);
+  } else {
+    logger.warn('At-rest encryption is NOT fully enabled — data may be stored in plaintext', status);
+  }
+}
 
 /**
  * Map a raw dependency error to a stable, non-sensitive reason code (#1540).
@@ -137,8 +171,11 @@ async function buildHealthReport() {
     statusCode = 200; // Still return 200 since DB is up and cached data can be served
   }
 
-  // concurrentPaymentProcessor was removed (#1036) — mirror the same fallback
-  // transactionPollingService.js uses when stats are unavailable.
+  // concurrentPaymentProcessor was removed (#1036) and its removal completed in
+  // #1275: no module emits payment-processor queue stats any more, so there is
+  // nothing to read here. This explicit zero fallback mirrors the one in
+  // transactionPollingService.js#getQueueBackpressureState() so the health
+  // payload and the polling backpressure path always agree.
   const queueDepth = 0;
   const maxQueueDepth = config.MAX_QUEUE_DEPTH;
 
@@ -257,6 +294,7 @@ async function buildHealthReport() {
         rates: priceFeedStatus,
       },
       auditLog: getAuditHealth(),
+      encryption: getEncryptionStatus(),
       jobRecovery: (() => {
         const { lastError, ...rest } = jobRecovery;
         return { ...rest, ...(lastError && { reason: reasonFor('jobRecovery', lastError) }) };
@@ -313,7 +351,17 @@ async function healthDetails(req, res) {
  * No external dependency checks — if this fails, the container should restart.
  */
 async function healthLive(req, res) {
-  return res.status(200).json({ status: 'alive', timestamp: new Date().toISOString() });
+  const { version, commit } = getBuildInfo();
+  return res.status(200).json({ status: 'alive', version, commit, timestamp: new Date().toISOString() });
+}
+
+/**
+ * GET /api/version
+ * Reports which release this process is running (#1634) so operators can
+ * tell deployments apart and integrators can track API changes.
+ */
+async function version(req, res) {
+  return res.status(200).json(getBuildInfo());
 }
 
 /**
@@ -367,4 +415,14 @@ async function healthReady(req, res) {
   });
 }
 
-module.exports = { healthCheck, healthDetails, healthLive, healthReady, buildHealthReport, toReasonCode };
+module.exports = {
+  healthCheck,
+  healthDetails,
+  healthLive,
+  healthReady,
+  version,
+  buildHealthReport,
+  toReasonCode,
+  getEncryptionStatus,
+  logEncryptionStatusOnce,
+};

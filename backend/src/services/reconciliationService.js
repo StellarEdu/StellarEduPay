@@ -239,45 +239,69 @@ async function generateReconciliationReport(schoolId) {
     }
 
     const dbPayments = await Payment.find({ schoolId, status: 'SUCCESS', deletedAt: null }).lean();
-    const dbTotalCredited = dbPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    // Amounts of different assets (XLM, USDC) must never be summed together.
+    // Group credited totals by assetCode so drift is computed per asset.
+    const dbTotalsByAsset = {};
+    for (const p of dbPayments) {
+      const asset = p.assetCode || 'XLM';
+      dbTotalsByAsset[asset] = parseFloat(((dbTotalsByAsset[asset] || 0) + (p.amount || 0)).toFixed(7));
+    }
 
     // The chain total is expensive to compute (paginated Horizon fetch + a
     // per-tx operations() call) and doesn't change meaningfully between
     // repeated report requests, so cache it briefly per school.
     const cacheKey = chainTotalCacheKey(schoolId);
     let cached = cache.get(cacheKey);
-    let chainTotalReceived;
+    let chainTotalsByAsset;
     let chainTxCount;
     if (cached) {
-      ({ chainTotalReceived, chainTxCount } = cached);
+      ({ chainTotalsByAsset, chainTxCount } = cached);
     } else {
       const chainTxs = await fetchChainTransactions(school.stellarAddress);
-      chainTotalReceived = 0;
+      chainTotalsByAsset = {};
       for (const tx of chainTxs) {
         const ops = await tx.operations();
         const payOp = ops.records.find(
           (op) => op.type === 'payment' && op.to === school.stellarAddress
         );
         if (payOp) {
-          chainTotalReceived += parseFloat(parseFloat(payOp.amount).toFixed(7));
+          const asset = payOp.asset_code || 'XLM';
+          const amt = parseFloat(parseFloat(payOp.amount).toFixed(7));
+          chainTotalsByAsset[asset] = parseFloat(((chainTotalsByAsset[asset] || 0) + amt).toFixed(7));
         }
       }
       chainTxCount = chainTxs.length;
-      cache.set(cacheKey, { chainTotalReceived, chainTxCount }, CHAIN_TOTAL_TTL_SEC);
+      cache.set(cacheKey, { chainTotalsByAsset, chainTxCount }, CHAIN_TOTAL_TTL_SEC);
     }
 
-    const drift = Math.abs(chainTotalReceived - dbTotalCredited);
-    const driftPercentage = dbTotalCredited > 0 ? (drift / dbTotalCredited) * 100 : 0;
+    const assets = new Set([
+      ...Object.keys(dbTotalsByAsset),
+      ...Object.keys(chainTotalsByAsset),
+    ]);
     const threshold = parseFloat(process.env.RECONCILIATION_DRIFT_THRESHOLD || '0.5');
-    const alertRaised = driftPercentage > threshold;
+    const perAsset = {};
+    let alertRaised = false;
+    for (const asset of assets) {
+      const dbTotal = dbTotalsByAsset[asset] || 0;
+      const chainTotal = chainTotalsByAsset[asset] || 0;
+      const drift = parseFloat(Math.abs(chainTotal - dbTotal).toFixed(7));
+      const driftPercentage = dbTotal > 0 ? (drift / dbTotal) * 100 : 0;
+      const assetAlert = driftPercentage > threshold;
+      if (assetAlert) alertRaised = true;
+      perAsset[asset] = {
+        dbTotalCredited: dbTotal,
+        chainTotalReceived: chainTotal,
+        drift,
+        driftPercentage,
+        alertRaised: assetAlert,
+      };
+    }
 
     const report = await ReconciliationReport.create({
       schoolId,
       reportedAt: new Date(),
-      dbTotalCredited,
-      chainTotalReceived,
-      drift,
-      driftPercentage,
+      totalsByAsset: perAsset,
       threshold,
       alertRaised,
       paymentCount: dbPayments.length,
@@ -291,10 +315,8 @@ async function generateReconciliationReport(schoolId) {
     if (alertRaised) {
       logger.warn('Reconciliation drift alert', {
         schoolId,
-        drift,
-        driftPercentage,
-        dbTotal: dbTotalCredited,
-        chainTotal: chainTotalReceived,
+        threshold,
+        perAsset,
       });
     }
 

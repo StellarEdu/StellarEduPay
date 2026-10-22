@@ -60,13 +60,13 @@ The platform processes personal data about:
 ## 4. Data Subject Rights
 
 ### Right of Access (GDPR Art. 15)
-**Endpoint**: `GET /api/students/:id/data-export` (admin-only)
+**Endpoint**: not yet exposed over HTTP — handled by an operator on request
 - Returns a JSON export of all personal data held about a student and their parent
 - Includes: student record, payment history, reminder logs, email delivery records, audit entries
 - **Audit logged**: Every data export is recorded in the audit log
 
 ### Right to Erasure (GDPR Art. 17)
-**Endpoint**: `POST /api/students/:id/anonymise` (admin-only)
+**Endpoint**: not yet exposed over HTTP — soft-delete the student (`DELETE /api/students/:studentId`); `piiAnonymizationScheduler` clears PII once `STUDENT_PII_RETENTION_DAYS` has passed
 - Anonymises a student without breaking financial reports or audit chains
 - Replaces name with `Former student [studentId]`
 - Nulls parentEmail and parentPhone fields
@@ -80,7 +80,7 @@ The platform processes personal data about:
 - **Audit logged**: All updates are recorded with before/after values
 
 ### Right to Data Portability (GDPR Art. 20)
-- Same as Right of Access — use `GET /api/students/:id/data-export`
+- Same as Right of Access (operator-handled export; no HTTP endpoint yet)
 - Data is returned in machine-readable JSON format
 
 ### Right to Restrict Processing

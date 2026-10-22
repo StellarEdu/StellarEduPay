@@ -8,10 +8,11 @@ const { requireSchoolAuth } = require('../middleware/auth');
 const { validateTxHashParam } = require('../middleware/validate');
 
 // Payment receipts contain full financial details (amount, asset, student).
-// Restrict to finance-authorized roles (fix #887).
-const requireFinanceRole = requireSchoolAuth(['owner', 'finance']);
+// Viewing is allowed for owner, staff and read_only; re-issue actions are
+// restricted to owner.
+const requireReceiptViewRole = requireSchoolAuth(['owner', 'staff', 'read_only']);
 
 router.use(resolveSchool);
-router.get('/:txHash', requireFinanceRole, validateTxHashParam, getReceipt);
+router.get('/:txHash', requireReceiptViewRole, validateTxHashParam, getReceipt);
 
 module.exports = router;

@@ -23,8 +23,10 @@ let mockAcademicPeriodFind;
 let mockAcademicPeriodUpdateOne;
 let mockStudentPeriodFeeUpdateOne;
 let mockStudentPeriodFeeFindOne;
+let mockStudentPeriodFeeFind;
+let mockStudentPeriodFeeBulkWrite;
 let mockStudentFind;
-let mockStudentUpdateOne;
+let mockStudentBulkWrite;
 let mockFeeStructureFind;
 let mockLogAudit;
 
@@ -49,12 +51,14 @@ jest.mock('../src/models/academicPeriodModel', () => ({
 jest.mock('../src/models/studentPeriodFeeModel', () => ({
   updateOne: (...args) => mockStudentPeriodFeeUpdateOne(...args),
   findOne:   (...args) => mockStudentPeriodFeeFindOne(...args),
+  find:      (...args) => mockStudentPeriodFeeFind(...args),
+  bulkWrite: (...args) => mockStudentPeriodFeeBulkWrite(...args),
   create:    jest.fn(),
 }));
 
 jest.mock('../src/models/studentModel', () => ({
   find:      (...args) => mockStudentFind(...args),
-  updateOne: (...args) => mockStudentUpdateOne(...args),
+  bulkWrite: (...args) => mockStudentBulkWrite(...args),
 }));
 
 jest.mock('../src/models/feeStructureModel', () => ({
@@ -331,6 +335,12 @@ describe('upsertStudentPeriodFee', () => {
 // rolloverToNextPeriod
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Query stub for `.find(...).session(s).lean()`.
+function chain(value) {
+  const q = { session: () => q, lean: () => Promise.resolve(value) };
+  return q;
+}
+
 describe('rolloverToNextPeriod', () => {
   const PERFORMED_BY = 'admin-user-1';
   const currentPeriodDoc = makePeriodDoc({ _id: PERIOD_ID,  isCurrent: true, isClosed: false });
@@ -359,11 +369,11 @@ describe('rolloverToNextPeriod', () => {
     });
 
     mockAcademicPeriodUpdateOne   = jest.fn().mockResolvedValue({ modifiedCount: 1 });
-    mockStudentPeriodFeeFindOne   = jest.fn().mockReturnValue({ lean: () => Promise.resolve(null) });
-    mockStudentPeriodFeeUpdateOne = jest.fn().mockResolvedValue({ upsertedCount: 1 });
-    mockStudentFind               = jest.fn().mockReturnValue({ lean: () => Promise.resolve(students) });
-    mockStudentUpdateOne          = jest.fn().mockResolvedValue({ modifiedCount: 1 });
-    mockFeeStructureFind          = jest.fn().mockReturnValue({ lean: () => Promise.resolve(feeStructures) });
+    mockStudentPeriodFeeFind      = jest.fn().mockReturnValue(chain([]));
+    mockStudentPeriodFeeBulkWrite = jest.fn().mockResolvedValue({ upsertedCount: 1 });
+    mockStudentFind               = jest.fn().mockReturnValue(chain(students));
+    mockStudentBulkWrite          = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+    mockFeeStructureFind          = jest.fn().mockReturnValue(chain(feeStructures));
     mockLogAudit                  = jest.fn().mockResolvedValue(undefined);
   });
 
@@ -395,9 +405,9 @@ describe('rolloverToNextPeriod', () => {
 
   test('carries arrears when student has existing period fee with balance', async () => {
     // First student has a StudentPeriodFee with 200 outstanding.
-    mockStudentPeriodFeeFindOne = jest.fn().mockReturnValue({
-      lean: () => Promise.resolve({ feeAmount: 500, totalPaid: 300, carriedArrears: 0 }),
-    });
+    mockStudentPeriodFeeFind = jest.fn().mockReturnValue(chain([
+      { studentId: 'stu-1', feeAmount: 500, totalPaid: 300, carriedArrears: 0 },
+    ]));
 
     const result = await rolloverToNextPeriod({
       schoolId:     SCHOOL_ID,
@@ -408,15 +418,17 @@ describe('rolloverToNextPeriod', () => {
     expect(result.totalArrears).toBeGreaterThan(0);
 
     // Check that StudentPeriodFee.updateOne for stu-1 sets carriedArrears.
-    const newFeeCall = mockStudentPeriodFeeUpdateOne.mock.calls[0];
-    expect(newFeeCall[1].$set.carriedArrears).toBe(200);
+    const stu1Write = mockStudentPeriodFeeBulkWrite.mock.calls[0][0]
+      .find((op) => op.updateOne.filter.studentId === 'stu-1');
+    expect(stu1Write.updateOne.update.$set.carriedArrears).toBe(200);
   });
 
   test('sets zero arrears when student is fully paid', async () => {
     // Both students fully paid.
-    mockStudentPeriodFeeFindOne = jest.fn().mockReturnValue({
-      lean: () => Promise.resolve({ feeAmount: 500, totalPaid: 500, carriedArrears: 0 }),
-    });
+    mockStudentPeriodFeeFind = jest.fn().mockReturnValue(chain([
+      { studentId: 'stu-1', feeAmount: 500, totalPaid: 500, carriedArrears: 0 },
+      { studentId: 'stu-2', feeAmount: 600, totalPaid: 600, carriedArrears: 0 },
+    ]));
 
     const result = await rolloverToNextPeriod({
       schoolId:     SCHOOL_ID,

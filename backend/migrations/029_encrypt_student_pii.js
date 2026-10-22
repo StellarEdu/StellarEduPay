@@ -21,6 +21,12 @@
  *   If the key is not set, the migration only backfills parentEmailHash
  *   (which doesn't depend on the key) and skips encryption.
  *
+ * Automatic boot run (issue #1778):
+ *   runIfKeyPresent() is exported so the boot-time migration runner can
+ *   invoke this migration idempotently whenever STUDENT_PII_ENCRYPTION_KEY
+ *   is configured. It is a no-op (with a clear warning) when the key is
+ *   absent, so operators know plaintext rows may remain.
+ *
  * Rollback:
  *   down() strips the "enc:" prefix and re-decrypts all values back to
  *   plaintext. Only run it if you are reverting the feature entirely.
@@ -71,7 +77,10 @@ async function up() {
   const mongoose = require('mongoose');
   const key = _getKey();
   if (!key) {
-    console.log('[Migration 029] STUDENT_PII_ENCRYPTION_KEY is not set. Only backfilling parentEmailHash.');
+    console.warn(
+      '[Migration 029] STUDENT_PII_ENCRYPTION_KEY is not set. Only backfilling parentEmailHash; ' +
+        'existing plaintext parentEmail/parentPhone rows will REMAIN IN PLAINTEXT.'
+    );
   }
 
   const students = mongoose.connection.collection('students');
@@ -135,4 +144,26 @@ async function down() {
   console.log(`[Migration 029] Rolled back. Decrypted ${decrypted} student record(s).`);
 }
 
-module.exports = { version: VERSION, up, down };
+/**
+ * Boot-time entry point (issue #1778). Runs the idempotent `up()` only when
+ * STUDENT_PII_ENCRYPTION_KEY is present. Already-encrypted values are skipped
+ * by `up()`, so repeated invocations are safe.
+ *
+ * @returns {Promise<{ran: boolean, reason?: string}>}
+ */
+async function runIfKeyPresent() {
+  const key = _getKey();
+  if (!key) {
+    console.warn(
+      '[Migration 029] Skipping automatic PII encryption: STUDENT_PII_ENCRYPTION_KEY is not set. ' +
+        'Any plaintext parentEmail/parentPhone rows will remain unencrypted until a key is configured ' +
+        'and this migration is run.'
+    );
+    return { ran: false, reason: 'missing_key' };
+  }
+
+  await up();
+  return { ran: true };
+}
+
+module.exports = { version: VERSION, up, down, runIfKeyPresent };

@@ -92,6 +92,11 @@ jest.mock('../backend/src/config/stellarConfig', () => {
 });
 
 // ── Payment model mock ────────────────────────────────────────────────────────
+// Issue #1798 — unmatched inflows are persisted through this service; keep the unit isolated.
+jest.mock('../backend/src/services/unmatchedPaymentService', () => ({
+  recordUnmatchedPayment: jest.fn().mockResolvedValue({ recorded: true }),
+}));
+
 jest.mock('../backend/src/models/paymentModel', () => ({
   findOne:   jest.fn(),
   create:    jest.fn().mockResolvedValue({ toObject: () => ({}) }),

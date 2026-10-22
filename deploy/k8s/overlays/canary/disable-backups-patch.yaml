@@ -1,0 +1,13 @@
+# Backups and restore verification run once per environment from the primary
+# overlay; the canary must not schedule a second copy (#1630).
+$patch: delete
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup
+---
+$patch: delete
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-restore-verify

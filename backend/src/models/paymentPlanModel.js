@@ -5,7 +5,7 @@ const tenantScope = require('../plugins/tenantScope');
 
 const installmentSchema = new mongoose.Schema(
   {
-    amount: { type: Number, required: true, min: [0, 'Installment amount cannot be negative'] },
+    amount: { type: Number, required: true, min: [0.0000001, 'Installment amount must be positive'] },
     dueDate: { type: Date, required: true },
     paid: { type: Boolean, default: false },
     paidAt: { type: Date, default: null },
@@ -33,6 +33,17 @@ const paymentPlanSchema = new mongoose.Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
+  }
+);
+
+// At most one active plan per student. The partial index only covers documents
+// whose status is 'active', so completed/cancelled plans do not block new ones.
+paymentPlanSchema.index(
+  { schoolId: 1, studentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'active' },
+    name: 'uniq_active_plan_per_student',
   }
 );
 

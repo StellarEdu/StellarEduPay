@@ -5,6 +5,45 @@ const cache = require('../cache');
 const jwt = require('jsonwebtoken');
 const { logAudit } = require('../services/auditService');
 
+const SUPER_ADMIN_AUDIT_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Record a super-admin access to a school in that school's audit log (#1800).
+ *
+ * One entry per (token session, school, hour) — the cache key prevents a
+ * write on every request. The IP is req.ip, which honours the configured
+ * trust-proxy hops, so a client cannot choose it via X-Forwarded-For.
+ */
+async function auditSuperAdminAccess(req, decoded, school) {
+  const performedBy = decoded.username || decoded.userId || decoded.sub || decoded.id || 'super_admin';
+  const sessionId = decoded.jti || decoded.sessionId || `${performedBy}:${decoded.iat}`;
+  const hourBucket = Math.floor(Date.now() / SUPER_ADMIN_AUDIT_WINDOW_MS);
+  const dedupKey = `superadmin-audit:${sessionId}:${school.schoolId}:${hourBucket}`;
+
+  if (cache.get(dedupKey)) return;
+  cache.set(dedupKey, true, SUPER_ADMIN_AUDIT_WINDOW_MS / 1000);
+
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  await logAudit({
+    schoolId: school.schoolId,
+    action: 'super_admin_school_override',
+    performedBy,
+    targetId: school.schoolId,
+    targetType: 'school',
+    details: {
+      tokenSchoolId: decoded.schoolId || null,
+      requestedSchoolId: school.schoolId,
+      username: decoded.username || null,
+      userId: decoded.userId || null,
+      sessionId,
+      ip,
+    },
+    result: 'success',
+    ipAddress: ip,
+    userAgent: req.headers?.['user-agent'],
+  });
+}
+
 /**
  * resolveSchool — middleware that identifies the current school from the request.
  *
@@ -98,20 +137,10 @@ async function resolveSchool(req, res, next) {
 
         if (isSuperAdmin) {
           // Super-admin override is permitted — audit every cross-tenant use.
-          if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-            const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-              req.socket?.remoteAddress || 'unknown';
-            await logAudit({
-              schoolId: school.schoolId,
-              action: 'super_admin_school_override',
-              performedBy: decoded.sub || decoded.id || 'super_admin',
-              targetId: school.schoolId,
-              targetType: 'school',
-              details: { tokenSchoolId: decoded.schoolId, requestedSchoolId: school.schoolId, ip },
-              result: 'success',
-              ipAddress: ip,
-              userAgent: req.headers?.['user-agent'],
-            });
+          // The env super-admin token carries no schoolId, so it is always
+          // cross-tenant and must be audited too (#1800).
+          if (!decoded.schoolId || decoded.schoolId !== school.schoolId) {
+            await auditSuperAdminAccess(req, decoded, school);
           }
         } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
           // Non-super-admin token for a different tenant — reject immediately.
@@ -142,3 +171,4 @@ async function resolveSchool(req, res, next) {
 }
 
 module.exports = { resolveSchool };
+module.exports.resolveSchool = resolveSchool;

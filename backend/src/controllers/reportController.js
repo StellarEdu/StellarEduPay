@@ -110,6 +110,9 @@ async function getReport(req, res, next) {
       else filename = 'report-all-time.csv';
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      // Expose the (bumped) CSV schema version so integrators can detect the
+      // per-asset totals format change.
+      res.setHeader('X-Export-Schema-Version', String(report.schemaVersion || ACCOUNTING_SCHEMA_VERSION));
       return res.send(reportToCsv(report));
     }
 
@@ -196,6 +199,10 @@ async function downloadReportJob(req, res, next) {
       else if (e) filename = `report-all-time-to-${e}.csv`;
       else filename = 'report-all-time.csv';
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader(
+        'X-Export-Schema-Version',
+        String(job.result.report?.schemaVersion || ACCOUNTING_SCHEMA_VERSION)
+      );
       return res.send(reportToCsv(job.result.report));
     }
 

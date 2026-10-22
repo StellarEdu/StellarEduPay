@@ -14,12 +14,6 @@ const {
   isTransitionAllowed,
 } = require('../constants/paymentStatus');
 const logger = require('../utils/logger');
-// Student/emailService/reportCacheInvalidator are required lazily inside the
-// post('save') hook below, not hoisted here: emailService pulls in
-// services/email -> config, which throws at require time if MONGO_URI isn't
-// set. paymentModel.js is required by ~30 unrelated modules (and by tests
-// that never touch email), so eagerly loading that chain would make the
-// model unrequireable outside a fully-configured environment.
 
 // ---------------------------------------------------------------------------
 // #1560 — Single authoritative payment lifecycle.
@@ -51,6 +45,9 @@ const STATUS_TO_CONFIRMATION_STATE = Object.freeze({
   SUCCESS: CONFIRMATION_STATES.FINALIZED,
   FAILED: CONFIRMATION_STATES.FAILED,
   REFUNDED: CONFIRMATION_STATES.FINALIZED,
+  // #1761 — A REJECTED row is a durable verification-failure marker, not a
+  // credited payment. It maps to the terminal failed sub-state.
+  REJECTED: CONFIRMATION_STATES.FAILED,
 });
 
 const STATUS_TO_CONFIRMATION_STATUS = Object.freeze({
@@ -59,7 +56,19 @@ const STATUS_TO_CONFIRMATION_STATUS = Object.freeze({
   SUCCESS: 'confirmed',
   FAILED: 'failed',
   REFUNDED: 'confirmed',
+  // #1761 — REJECTED is a verification-failure marker, never a confirmed payment.
+  REJECTED: 'failed',
 });
+
+/**
+ * #1761 — Statuses that represent a durable verification-failure marker rather
+ * than a credited payment. Rows with these statuses must be excluded from every
+ * "existing payment" lookup used for idempotency / duplicate detection so that
+ * a transaction rejected for a configuration-dependent reason (limits, accepted
+ * assets, wrong school) can be re-verified and credited once the configuration
+ * changes.
+ */
+const REJECTION_STATUSES = Object.freeze(['REJECTED']);
 
 /**
  * Derive the fine-grained confirmation state from the authoritative `status`.
@@ -106,6 +115,32 @@ function isCountedAsPaid(paymentOrStatus) {
  */
 function countedAsPaidFilter() {
   return { status: { $in: ['SUCCESS', 'REFUNDED'] } };
+}
+
+/**
+ * #1761 — Mongo filter matching every payment that should be treated as an
+ * "existing" record for idempotency / duplicate detection. REJECTED rows are
+ * durable verification-failure markers and must NOT block a later
+ * re-verification, so they are excluded.
+ *
+ * @param {object} [base] additional filter fields to merge in
+ * @returns {object} a Mongo filter
+ */
+function existingPaymentFilter(base = {}) {
+  return { ...base, status: { $nin: REJECTION_STATUSES } };
+}
+
+/**
+ * #1761 — Predicate: is this payment a durable rejection marker?
+ * @param {object|string} paymentOrStatus
+ * @returns {boolean}
+ */
+function isRejected(paymentOrStatus) {
+  const status =
+    typeof paymentOrStatus === 'string'
+      ? paymentOrStatus
+      : paymentOrStatus && paymentOrStatus.status;
+  return REJECTION_STATUSES.includes(status);
 }
 
 const paymentSchema = new mongoose.Schema(
@@ -159,7 +194,22 @@ const paymentSchema = new mongoose.Schema(
       ],
     },
     feeCategory: { type: String, default: null, index: true },
-    feeValidationStatus: { type: String, enum: ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'], default: 'unknown' },
+    // #1766 — Canonical fee-validation vocabulary. Writers MUST assign this
+    // field only via utils/money.classifyFeePayment so every code path agrees
+    // on the meaning of each value:
+    //   'valid'     — cumulative total equals the expected amount
+    //   'partial'   — cumulative total is below the fee; the payment is
+    //                 accepted as an installment toward the balance
+    //   'underpaid' — payment is below the expected *installment* when a
+    //                 payment plan exists (see #1379 semantics)
+    //   'overpaid'  — cumulative total exceeds the expected amount
+    //   'unknown'   — no fee/expected amount is known yet
+    // See docs/payment-plans-underpaid-reconciliation.md.
+    feeValidationStatus: {
+      type: String,
+      enum: ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'],
+      default: 'unknown',
+    },
     excessAmount: {
       type: Number,
       default: 0,
@@ -212,10 +262,28 @@ const paymentSchema = new mongoose.Schema(
     // #1560 — AUTHORITATIVE lifecycle field. Canonical status values are
     // imported from constants/paymentStatus.js (Issue #72). All other
     // lifecycle fields below are derived from this one.
-    status: { type: String, enum: PAYMENT_STATUS_VALUES, default: 'PENDING' },
+    // #1761 — 'REJECTED' is a durable verification-failure marker (see
+    // rejectionCode below). It is never counted as paid and is excluded from
+    // every "existing payment" lookup used for idempotency/duplicate detection.
+    status: {
+      type: String,
+      enum: [...PAYMENT_STATUS_VALUES, 'REJECTED'],
+      default: 'PENDING',
+    },
+    // #1761 — Machine-readable reason a payment was rejected during
+    // verification (e.g. TX_FAILED, MISSING_MEMO, INVALID_DESTINATION,
+    // UNSUPPORTED_ASSET, AMOUNT_TOO_LOW, AMOUNT_TOO_HIGH, UNDERPAID). Only set
+    // on REJECTED rows. Several of these are configuration-dependent, so a
+    // REJECTED row must never block a later re-verification.
+    rejectionCode: { type: String, default: null, index: true },
+    rejectionMessage: { type: String, default: null },
+    rejectedAt: { type: Date, default: null },
     memo: { type: String },
     senderAddress: { type: String, default: null },
     isSuspicious: { type: Boolean, default: false },
+    // #1799 — true when the payment arrived at a wallet address this school
+    // has rotated away from but is still draining. The school is notified.
+    receivedOnRetiredAddress: { type: Boolean, default: false },
     suspicionReason: { type: String, default: null },
     // Review workflow for flagged payments (issue #852). A flag starts as
     // 'flagged'; an admin clears it (false positive → 'cleared', restoring the
@@ -298,6 +366,10 @@ paymentSchema.pre('save', function syncDerivedLifecycleFields(next) {
     this.confirmationState = deriveConfirmationState(this.status);
     this.confirmationStatus = deriveConfirmationStatus(this.status);
   }
+  // #1761 — Keep rejection metadata consistent with the authoritative status.
+  if (this.status === 'REJECTED' && !this.rejectedAt) {
+    this.rejectedAt = new Date();
+  }
   next();
 });
 
@@ -308,12 +380,19 @@ paymentSchema.statics.isCountedAsPaid = isCountedAsPaid;
 paymentSchema.statics.countedAsPaidFilter = countedAsPaidFilter;
 paymentSchema.statics.deriveConfirmationState = deriveConfirmationState;
 paymentSchema.statics.deriveConfirmationStatus = deriveConfirmationStatus;
+// #1761 — Expose the rejection helpers so every idempotency / duplicate
+// detection path can share one definition of "existing payment".
+paymentSchema.statics.existingPaymentFilter = existingPaymentFilter;
+paymentSchema.statics.isRejected = isRejected;
+paymentSchema.statics.REJECTION_STATUSES = REJECTION_STATUSES;
 
 // Indexes
 // Compound unique index enforces per-school, per-operation uniqueness: the same
 // transaction may legitimately contain several payment operations (one per
 // student), so identity is (schoolId, txHash, opIndex) rather than
-// txHash alone.
+// txHash alone. This is the ONLY unique index on txHash — a legacy
+// { schoolId, txHash } unique index would reject the second operation of a
+// multi-operation transaction and must not exist (see migration 035).
 paymentSchema.index({ schoolId: 1, txHash: 1, opIndex: 1 }, { unique: true });
 
 const Payment = mongoose.model('Payment', paymentSchema);
@@ -323,3 +402,6 @@ module.exports.isCountedAsPaid = isCountedAsPaid;
 module.exports.countedAsPaidFilter = countedAsPaidFilter;
 module.exports.deriveConfirmationState = deriveConfirmationState;
 module.exports.deriveConfirmationStatus = deriveConfirmationStatus;
+module.exports.existingPaymentFilter = existingPaymentFilter;
+module.exports.isRejected = isRejected;
+module.exports.REJECTION_STATUSES = REJECTION_STATUSES;

@@ -11,6 +11,7 @@ const {
   notifyV1Endpoints,
 } = require('../controllers/webhookAdminController');
 const { healthDetails } = require('../controllers/healthController');
+const { getOpsOverview } = require('../controllers/opsAdminController');
 const {
   getBacklog,
   listDeadLetterVerifications,
@@ -91,5 +92,8 @@ router.get('/outbox/dead-letter/:eventId', requireAdminAuth, getDeadLetterEventD
 router.post('/outbox/dead-letter/:eventId/replay', requireAdminAuth, auditContext, replayDeadLetterEvent);
 router.delete('/outbox/dead-letter/:eventId', requireAdminAuth, auditContext, discardDeadLetterEvent);
 router.get('/outbox/stats', requireAdminAuth, getOutboxStats);
+
+// Operations overview — per-school payment detection health (#1817)
+router.get('/ops/overview', requireAdminAuth, getOpsOverview);
 
 module.exports = router;

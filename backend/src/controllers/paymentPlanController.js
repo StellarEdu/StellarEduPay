@@ -1,32 +1,129 @@
 'use strict';
 
+const Joi = require('joi');
 const PaymentPlan = require('../models/paymentPlanModel');
 const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
+const money = require('../utils/money');
+
+const MAX_INSTALLMENTS = 24;
+
+const createPaymentPlanSchema = Joi.object({
+  installments: Joi.array()
+    .min(1)
+    .max(MAX_INSTALLMENTS)
+    .items(
+      Joi.object({
+        amount: Joi.number().positive().precision(7).required(),
+        dueDate: Joi.date().iso().greater('now').required(),
+      })
+    )
+    .required()
+    .custom((installments, helpers) => {
+      for (let i = 1; i < installments.length; i += 1) {
+        const prev = new Date(installments[i - 1].dueDate).getTime();
+        const curr = new Date(installments[i].dueDate).getTime();
+        if (curr <= prev) {
+          return helpers.error('array.dueDatesAscending', { index: i });
+        }
+      }
+      return installments;
+    })
+    .messages({
+      'array.base': 'installments must be an array',
+      'array.min': 'At least one installment is required',
+      'array.max': `At most ${MAX_INSTALLMENTS} installments are allowed`,
+      'array.dueDatesAscending': 'Installment due dates must be strictly ascending (index {{#index}})',
+      'number.positive': 'Installment amount must be greater than zero',
+      'number.precision': 'Installment amount must have at most 7 decimal places',
+      'date.greater': 'Installment due date must be in the future',
+      'date.format': 'Installment due date must be a valid ISO date',
+    }),
+  allowPartialPlan: Joi.boolean().default(false),
+});
+
+function formatValidationErrors(error) {
+  return error.details.map(detail => ({
+    field: detail.path.join('.'),
+    message: detail.message,
+  }));
+}
+
+// Determine the amount the plan must reconcile against: the student's remaining
+// balance when available, otherwise the fee amount.
+function getExpectedPlanTotal(student) {
+  const candidates = [student.remainingBalance, student.feeAmount];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    const value = money.toDecimal(candidate);
+    if (value.isFinite()) return value;
+  }
+  return null;
+}
 
 async function createPaymentPlan(req, res, next) {
   try {
     const { schoolId } = req;
     const { studentId } = req.params;
-    const { installments } = req.body;
 
-    if (!Array.isArray(installments) || installments.length === 0) {
-      return res.status(400).json({ error: 'At least one installment is required', code: 'VALIDATION_ERROR' });
+    const { error, value } = createPaymentPlanSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        error: 'Invalid payment plan',
+        code: 'VALIDATION_ERROR',
+        details: formatValidationErrors(error),
+      });
     }
+
+    const { installments, allowPartialPlan } = value;
 
     const student = await Student.findOne({ schoolId, studentId });
     if (!student) {
       return res.status(404).json({ error: 'Student not found', code: 'NOT_FOUND' });
     }
 
-    const totalAmount = installments.reduce((sum, inst) => sum + inst.amount, 0);
+    const existingPlan = await PaymentPlan.findOne({
+      schoolId,
+      studentId,
+      deletedAt: null,
+      status: 'active',
+    });
+    if (existingPlan) {
+      return res.status(409).json({
+        error: 'An active payment plan already exists for this student',
+        code: 'PLAN_ALREADY_EXISTS',
+        planId: existingPlan._id,
+      });
+    }
+
+    const totalAmount = installments.reduce(
+      (sum, inst) => sum.plus(money.toDecimal(inst.amount)),
+      money.toDecimal(0)
+    );
+
+    const expectedTotal = getExpectedPlanTotal(student);
+    if (!allowPartialPlan && expectedTotal && !totalAmount.equals(expectedTotal)) {
+      return res.status(400).json({
+        error: 'Payment plan total does not reconcile with the student fee',
+        code: 'VALIDATION_ERROR',
+        details: [
+          {
+            field: 'installments',
+            message: `Installments total ${totalAmount.toString()} does not match the expected amount ${expectedTotal.toString()}`,
+          },
+        ],
+      });
+    }
 
     const plan = await PaymentPlan.create({
       schoolId,
       studentId,
-      totalAmount,
+      totalAmount: totalAmount.toNumber(),
       installments: installments.map(inst => ({
-        amount: inst.amount,
+        amount: money.toDecimal(inst.amount).toNumber(),
         dueDate: new Date(inst.dueDate),
         paid: false,
         paidAmount: 0,
@@ -41,7 +138,7 @@ async function createPaymentPlan(req, res, next) {
         performedBy: req.auditContext.performedBy,
         targetId: studentId,
         targetType: 'payment_plan',
-        details: { totalAmount, installmentCount: installments.length },
+        details: { totalAmount: totalAmount.toNumber(), installmentCount: installments.length },
         result: 'success',
         ipAddress: req.auditContext.ipAddress,
         userAgent: req.auditContext.userAgent,

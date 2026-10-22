@@ -1,0 +1,16 @@
+{{#if logoUrl}}<div style="margin-bottom:16px;"><img src="{{logoUrl}}" alt="{{schoolName}}" style="max-height:60px;margin-bottom:16px;"></div>{{/if}}
+{{#if primaryColor}}<div style="background:{{primaryColor}};padding:12px 16px;border-radius:4px 4px 0 0;margin-bottom:8px;"></div>{{/if}}
+<p>{{greeting}}</p>
+<p>{{message}}</p>
+<table style="border-collapse:collapse;margin:16px 0;">
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Dispute Reference</td><td><strong>{{reference}}</strong></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Status</td><td><strong>{{statusLabel}}</strong></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Transaction Hash</td><td><code>{{txHash}}</code></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#555;">Student ID</td><td>{{studentId}}</td></tr>
+  {{#if raisedBy}}<tr><td style="padding:4px 12px 4px 0;color:#555;">Raised By</td><td>{{raisedBy}}</td></tr>{{/if}}
+  {{#if reason}}<tr><td style="padding:4px 12px 4px 0;color:#555;">Reason</td><td>{{reason}}</td></tr>{{/if}}
+  {{#if resolutionNote}}<tr><td style="padding:4px 12px 4px 0;color:#555;">Note</td><td>{{resolutionNote}}</td></tr>{{/if}}
+  {{#if slaDeadline}}<tr><td style="padding:4px 12px 4px 0;color:#555;">Target Resolution</td><td>{{slaDeadline}}</td></tr>{{/if}}
+</table>
+{{#if footer}}<p>{{footer}}</p>{{/if}}
+<p>Thank you,<br/><strong>{{schoolName}} Administration</strong></p>

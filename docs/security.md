@@ -10,6 +10,54 @@ The login response includes `mfaSetupRequired: true` when this restricted sessio
 
 `REQUIRE_MFA` does not apply to the environment-configured super-admin break-glass account, which is not backed by the `User`/`School` MFA fields.
 
+## MFA backup codes (#1774)
+
+Backup codes are a full MFA bypass factor: whoever holds a valid unused code can complete login without the TOTP device. They are therefore treated as credentials, not as convenience strings.
+
+### Entropy and format
+
+- Each code is **10 characters drawn from a 32-symbol Crockford base32 alphabet** (`0-9`, `A-Z` minus `I`, `L`, `O`, `U`), giving **50 bits** of entropy per code — roughly 1.1 quadrillion possibilities.
+- Codes are displayed and typed as `XXXXX-XXXXX`. The hyphen is cosmetic: input is upper-cased, stripped of hyphens/whitespace, and Crockford-normalized (`I`/`L` → `1`, `O` → `0`) before verification, so users can type codes case-insensitively and without the separator.
+- Codes are generated with `crypto.randomBytes` and rejection sampling (no modulo bias) in `backend/src/controllers/mfaController.js`.
+
+### Storage
+
+- Codes are **never stored in plaintext**. Each code is hashed with **bcrypt (cost 10)** under its own per-code salt, so a precomputed table cannot cover multiple users or codes.
+- A database dump therefore yields only bcrypt hashes. At 50 bits of entropy and bcrypt cost 10, exhaustive recovery of even a single code is infeasible; the previous scheme (32 bits, unsalted SHA-256) allowed every code of every user to be recovered in about a second per user.
+- Verification iterates only the caller's **unused** codes and compares with `bcrypt.compare` (constant-time within bcrypt), never with `===` on hashes.
+
+### Single-use under concurrency
+
+Consumption is atomic. After a bcrypt match, the code is marked used with a conditional update:
+
+```js
+User.findOneAndUpdate(
+  { _id: userId, 'mfaBackupCodes': { $elemMatch: { _id: codeId, used: false } } },
+  { $set: { 'mfaBackupCodes.$[el].used': true, 'mfaBackupCodes.$[el].usedAt': new Date() } },
+  { arrayFilters: [{ 'el._id': codeId, 'el.used': false }] }
+)
+```
+
+If the update matches no document, another request consumed the code first and the attempt is rejected — two concurrent logins can never both succeed with the same code (fixes #1533). Used codes are retained (with `usedAt`) for audit until the next regeneration.
+
+### Rate limiting
+
+Backup-code verification is rate-limited per user and per IP (same limiter family as TOTP verification). Repeated failures are logged with hashed IPs per the log-redaction policy below, and a successful backup-code login is recorded in the audit log.
+
+### Legacy codes and migration
+
+Codes issued before #1774 (32-bit, unsalted SHA-256) are flagged `legacy: true` by the migration in `backend/src/migrations/`:
+
+- Legacy codes **remain verifiable** so users are not locked out, but they are consumed on first use exactly like new codes.
+- On the next successful login (password + TOTP), the user is prompted to regenerate backup codes; regenerating replaces the entire set with bcrypt-hashed 50-bit codes and invalidates all legacy entries.
+- Operators should review `mfaBackupCodes.legacy` counts after deploying and follow up with users who have not regenerated. Once the count reaches zero, legacy verification can be removed in a follow-up release.
+
+### Operator guidance
+
+- Treat backup codes like passwords: never log them, never email them in plaintext after initial display, and show them exactly once at generation time.
+- Regenerating codes invalidates the previous set immediately; support staff must not "re-issue" old codes.
+- If a database dump is suspected, force regeneration for all users — the bcrypt hashes are not directly usable, but unused codes remain valid until rotated.
+
 ## Credential rotation
 
 JWT secrets, the Stellar signing-key encryption key (`SIGNER_MASTER_KEY`), and the webhook

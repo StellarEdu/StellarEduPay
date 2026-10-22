@@ -78,10 +78,6 @@ jest.mock('../backend/src/middleware/concurrentRequestHandler', () => ({
   })),
 }));
 
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  concurrentPaymentProcessor: { getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 50 }) },
-}));
-
 jest.mock('../backend/src/models/auditLogModel', () => ({
   create: jest.fn().mockResolvedValue({}),
 }));

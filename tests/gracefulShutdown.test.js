@@ -95,10 +95,6 @@ jest.mock('../backend/src/services/sseService', () => ({
   closeAll: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../backend/src/services/concurrentPaymentProcessor', () => ({
-  getStats: jest.fn().mockReturnValue({ queueDepth: 0, maxQueueDepth: 100 }),
-}));
-
 jest.mock('../backend/src/services/currencyConversionService', () => ({
   getCachedRates: jest.fn().mockReturnValue({}),
 }));

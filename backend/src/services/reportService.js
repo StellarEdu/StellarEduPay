@@ -156,14 +156,26 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         // Fall back to updatedAt so these payments are bucketed to a real date
         // rather than grouped under a null key and sorted before all real dates.
         _id: { $dateToString: { format: '%Y-%m-%d', date: { $ifNull: ['$confirmedAt', '$updatedAt'] }, timezone } },
-        totalAmount:   { $sum: '$amount' },
         paymentCount:  { $sum: 1 },
+        // #1766 — every feeValidationStatus value gets its own bucket so that
+        // valid + partial + underpaid + overpaid + unknown == paymentCount.
         validCount:    { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'valid'] }, 1, 0] } },
+        partialCount:  { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'partial'] }, 1, 0] } },
         overpaidCount: { $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'overpaid'] }, 1, 0] } },
         underpaidCount:{ $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
+        unknownCount:  { $sum: { $cond: [{ $in: ['$feeValidationStatus', ['valid', 'partial', 'underpaid', 'overpaid']] }, 0, 1] } },
         uniqueStudents:{ $addToSet: '$studentId' },
+        // #1767 — never sum amounts across assets. Collect per-asset sums keyed
+        // by assetCode so XLM and USDC stay in separate buckets.
+        assetTotals: {
+          $push: {
+            asset: { $ifNull: ['$assetCode', 'XLM'] },
+            amount: '$amount',
+          },
+        },
         // #883 — sum historical fiat amounts from locked snapshots
         totalFiatAmount:{ $sum: { $ifNull: ['$fiatSnapshot.fiatAmount', 0] } },
+        fiatSnapshotCount: { $sum: { $cond: [{ $ne: [{ $ifNull: ['$fiatSnapshot.fiatAmount', null] }, null] }, 1, 0] } },
         fiatCurrency:  { $first: '$fiatSnapshot.fiatCurrency' },
       },
     },
@@ -171,13 +183,47 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
       $project: {
         _id: 0,
         date: '$_id',
-        totalAmount: { $round: ['$totalAmount', 7] },
         paymentCount: 1,
         validCount: 1,
+        partialCount: 1,
         overpaidCount: 1,
         underpaidCount: 1,
+        unknownCount: 1,
         uniqueStudentCount: { $size: '$uniqueStudents' },
+        // #1767 — fold the pushed (asset, amount) pairs into per-asset sums.
+        assetTotals: {
+          $arrayToObject: {
+            $map: {
+              input: { $setUnion: ['$assetTotals.asset', []] },
+              as: 'asset',
+              in: {
+                k: '$$asset',
+                v: {
+                  $round: [
+                    {
+                      $sum: {
+                        $map: {
+                          input: {
+                            $filter: {
+                              input: '$assetTotals',
+                              as: 't',
+                              cond: { $eq: ['$$t.asset', '$$asset'] },
+                            },
+                          },
+                          as: 't',
+                          in: '$$t.amount',
+                        },
+                      },
+                    },
+                    7,
+                  ],
+                },
+              },
+            },
+          },
+        },
         totalFiatAmount: { $round: ['$totalFiatAmount', 2] },
+        fiatSnapshotCount: 1,
         fiatCurrency: 1,
       },
     },
@@ -187,7 +233,64 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
     maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS,
   });
 
-  return rows;
+  // #1767 — expose per-asset totals as exact decimal strings and compute the
+  // fiat coverage percentage (share of payments that carry a fiat snapshot).
+  return rows.map((row) => {
+    const totals = {};
+    for (const [asset, amount] of Object.entries(row.assetTotals || {})) {
+      totals[asset] = toExactAmountString(amount);
+    }
+    const fiatCoverage = row.paymentCount > 0
+      ? parseFloat(((row.fiatSnapshotCount / row.paymentCount) * 100).toFixed(2))
+      : 0;
+    return {
+      date: row.date,
+      totals,
+      paymentCount: row.paymentCount,
+      validCount: row.validCount,
+      partialCount: row.partialCount,
+      overpaidCount: row.overpaidCount,
+      underpaidCount: row.underpaidCount,
+      unknownCount: row.unknownCount,
+      uniqueStudentCount: row.uniqueStudentCount,
+      totalFiatAmount: row.totalFiatAmount,
+      fiatCurrency: row.fiatCurrency,
+      fiatCoverage,
+    };
+  });
+}
+
+/**
+ * #1767 — Render a numeric amount as an exact decimal string (no float
+ * rounding artefacts). Trailing zeros are trimmed but at least one decimal
+ * place is kept for whole numbers so consumers can tell it is a decimal.
+ *
+ * @param {number|string} value
+ * @returns {string}
+ */
+function toExactAmountString(value) {
+  if (value === null || value === undefined) return '0';
+  const num = typeof value === 'number' ? value : parseFloat(value);
+  if (!Number.isFinite(num)) return '0';
+  // toFixed(7) matches the precision used elsewhere in this service.
+  return num.toFixed(7).replace(/\.?0+$/, '') || '0';
+}
+
+/**
+ * #1767 — Merge per-asset totals objects without ever adding different assets
+ * together. Each asset key is summed independently.
+ *
+ * @param {Record<string, string>} acc
+ * @param {Record<string, string>} totals
+ * @returns {Record<string, string>}
+ */
+function mergeAssetTotals(acc, totals) {
+  for (const [asset, amount] of Object.entries(totals || {})) {
+    const prev = parseFloat(acc[asset] || '0');
+    const next = parseFloat(amount || '0');
+    acc[asset] = toExactAmountString(prev + next);
+  }
+  return acc;
 }
 
 /**
@@ -199,17 +302,39 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
 async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' } = {}) {
   const byDate = await aggregateByDate({ schoolId, startDate, endDate, timezone });
 
+  // #1767 — accumulate per-asset totals separately; never add XLM to USDC.
+  // #1766 — include partialCount and unknownCount so buckets sum to paymentCount.
   const totals = byDate.reduce(
     (acc, row) => {
-      acc.totalAmount    = parseFloat((acc.totalAmount + row.totalAmount).toFixed(7));
+      mergeAssetTotals(acc.totals, row.totals);
       acc.paymentCount  += row.paymentCount;
       acc.validCount    += row.validCount;
+      acc.partialCount  += row.partialCount;
       acc.overpaidCount += row.overpaidCount;
       acc.underpaidCount+= row.underpaidCount;
+      acc.unknownCount  += row.unknownCount;
+      acc.totalFiatAmount = parseFloat((acc.totalFiatAmount + (row.totalFiatAmount || 0)).toFixed(2));
+      acc.fiatSnapshotCount += Math.round(((row.fiatCoverage || 0) / 100) * row.paymentCount);
       return acc;
     },
-    { totalAmount: 0, paymentCount: 0, validCount: 0, overpaidCount: 0, underpaidCount: 0 }
+    {
+      totals: {},
+      paymentCount: 0,
+      validCount: 0,
+      partialCount: 0,
+      overpaidCount: 0,
+      underpaidCount: 0,
+      unknownCount: 0,
+      totalFiatAmount: 0,
+      fiatSnapshotCount: 0,
+    }
   );
+
+  const fiatCoverage = totals.paymentCount > 0
+    ? parseFloat(((totals.fiatSnapshotCount / totals.paymentCount) * 100).toFixed(2))
+    : 0;
+  delete totals.fiatSnapshotCount;
+  totals.fiatCoverage = fiatCoverage;
 
   // Count students who have fully paid within the period
   const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
@@ -256,7 +381,16 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
     {
       $group: {
         _id: '$class',
-        totalCollected: { $sum: { $sum: '$payments.amount' } },
+        // #1767 — keep per-asset collected amounts separate.
+        collectedByAsset: {
+          $push: {
+            $map: {
+              input: '$payments',
+              as: 'p',
+              in: { asset: { $ifNull: ['$$p.assetCode', 'XLM'] }, amount: '$$p.amount' },
+            },
+          },
+        },
         paymentCount: { $sum: { $size: '$payments' } },
         paidStudentIds: { $addToSet: { $cond: ['$feePaid', '$studentId', '$$REMOVE'] } },
         unpaidStudentIds: { $addToSet: { $cond: ['$feePaid', '$$REMOVE', '$studentId'] } },
@@ -266,7 +400,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       $project: {
         _id: 0,
         className: '$_id',
-        totalCollected: { $round: ['$totalCollected', 7] },
+        collectedByAsset: 1,
         paymentCount: 1,
         paidCount: { $size: '$paidStudentIds' },
         unpaidCount: { $size: '$unpaidStudentIds' },
@@ -274,6 +408,24 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
     },
     { $sort: { className: 1 } },
   ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS });
+
+  // #1767 — flatten the nested per-payment asset pairs into per-asset totals.
+  const byClassWithTotals = byClass.map((row) => {
+    const totals = {};
+    for (const paymentList of row.collectedByAsset || []) {
+      for (const p of paymentList || []) {
+        const prev = parseFloat(totals[p.asset] || '0');
+        totals[p.asset] = toExactAmountString(prev + (p.amount || 0));
+      }
+    }
+    return {
+      className: row.className,
+      totals,
+      paymentCount: row.paymentCount,
+      paidCount: row.paidCount,
+      unpaidCount: row.unpaidCount,
+    };
+  });
 
   // Calculate dateRangeDays to indicate actual range returned
   let dateRangeDays = null;
@@ -290,7 +442,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
     dateRangeDays,
     summary: { ...totals, fullyPaidStudentCount: fullyPaidCount },
     byDate,
-    byClass,
+    byClass: byClassWithTotals,
   };
 }
 
@@ -299,8 +451,13 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
  * All user-supplied string fields (school name, class name, etc.) are passed
  * through csvEscape so that commas, quotes, and newlines do not break parsers.
  */
+// #1767 — report CSV schema version. Bumped to 2 because amounts are now
+// emitted one row per asset instead of a single cross-asset "Total Amount".
+const REPORT_CSV_SCHEMA_VERSION = 2;
+
 function reportToCsv(report) {
   const lines = [];
+  lines.push(`Schema Version,${csvEscape(REPORT_CSV_SCHEMA_VERSION)}`);
   lines.push(`Generated At,${csvEscape(report.generatedAt)}`);
   lines.push(`School ID,${csvEscape(report.schoolId)}`);
   lines.push(`Period Start,${csvEscape(report.period.startDate || 'all time')}`);
@@ -310,38 +467,78 @@ function reportToCsv(report) {
   }
   lines.push('');
   lines.push('--- Summary ---');
-  lines.push(`Total Amount,${csvEscape(report.summary.totalAmount)}`);
+  // #1767 — one row per asset; never a single cross-asset total.
+  lines.push('Asset,Total Amount');
+  for (const [asset, amount] of Object.entries(report.summary.totals || {})) {
+    lines.push([csvEscape(asset), csvEscape(amount)].join(','));
+  }
+  lines.push(`Total Fiat,${csvEscape(report.summary.totalFiatAmount)}`);
+  lines.push(`Fiat Coverage %,${csvEscape(report.summary.fiatCoverage)}`);
   lines.push(`Total Payments,${csvEscape(report.summary.paymentCount)}`);
   lines.push(`Valid Payments,${csvEscape(report.summary.validCount)}`);
+  lines.push(`Partial Payments,${csvEscape(report.summary.partialCount)}`);
   lines.push(`Overpaid,${csvEscape(report.summary.overpaidCount)}`);
   lines.push(`Underpaid,${csvEscape(report.summary.underpaidCount)}`);
+  lines.push(`Unknown,${csvEscape(report.summary.unknownCount)}`);
   lines.push(`Fully Paid Students,${csvEscape(report.summary.fullyPaidStudentCount)}`);
   lines.push('');
   lines.push('--- Daily Breakdown ---');
-  lines.push('Date,Total Amount,Payment Count,Valid,Overpaid,Underpaid,Unique Students');
+  lines.push('Date,Asset,Total Amount,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students');
   for (const row of report.byDate) {
-    lines.push([
-      csvEscape(row.date),
-      csvEscape(row.totalAmount),
-      csvEscape(row.paymentCount),
-      csvEscape(row.validCount),
-      csvEscape(row.overpaidCount),
-      csvEscape(row.underpaidCount),
-      csvEscape(row.uniqueStudentCount),
-    ].join(','));
+    const assets = Object.entries(row.totals || {});
+    if (assets.length === 0) {
+      lines.push([
+        csvEscape(row.date), '', '',
+        csvEscape(row.paymentCount),
+        csvEscape(row.validCount),
+        csvEscape(row.partialCount),
+        csvEscape(row.overpaidCount),
+        csvEscape(row.underpaidCount),
+        csvEscape(row.unknownCount),
+        csvEscape(row.uniqueStudentCount),
+      ].join(','));
+      continue;
+    }
+    for (const [asset, amount] of assets) {
+      lines.push([
+        csvEscape(row.date),
+        csvEscape(asset),
+        csvEscape(amount),
+        csvEscape(row.paymentCount),
+        csvEscape(row.validCount),
+        csvEscape(row.partialCount),
+        csvEscape(row.overpaidCount),
+        csvEscape(row.underpaidCount),
+        csvEscape(row.unknownCount),
+        csvEscape(row.uniqueStudentCount),
+      ].join(','));
+    }
   }
   if (report.byClass && report.byClass.length > 0) {
     lines.push('');
     lines.push('--- Class Breakdown ---');
-    lines.push('Class,Total Collected,Payment Count,Paid Students,Unpaid Students');
+    lines.push('Class,Asset,Total Collected,Payment Count,Paid Students,Unpaid Students');
     for (const row of report.byClass) {
-      lines.push([
-        csvEscape(row.className),
-        csvEscape(row.totalCollected),
-        csvEscape(row.paymentCount),
-        csvEscape(row.paidCount),
-        csvEscape(row.unpaidCount),
-      ].join(','));
+      const assets = Object.entries(row.totals || {});
+      if (assets.length === 0) {
+        lines.push([
+          csvEscape(row.className), '', '',
+          csvEscape(row.paymentCount),
+          csvEscape(row.paidCount),
+          csvEscape(row.unpaidCount),
+        ].join(','));
+        continue;
+      }
+      for (const [asset, amount] of assets) {
+        lines.push([
+          csvEscape(row.className),
+          csvEscape(asset),
+          csvEscape(amount),
+          csvEscape(row.paymentCount),
+          csvEscape(row.paidCount),
+          csvEscape(row.unpaidCount),
+        ].join(','));
+      }
     }
   }
   return lines.join('\n');
@@ -589,10 +786,14 @@ module.exports = {
   generateAccountingCsv,
   generateAccountingCsvStream,
   ACCOUNTING_SCHEMA_VERSION,
+  REPORT_CSV_SCHEMA_VERSION,
   getDashboardMetrics,
   getDataVersion,
   // Exported for testing (Issue #1572)
   localDayStartUTC,
   localDayEndUTC,
   buildDateRangeFilter,
+  // Exported for testing (Issue #1767)
+  toExactAmountString,
+  mergeAssetTotals,
 };

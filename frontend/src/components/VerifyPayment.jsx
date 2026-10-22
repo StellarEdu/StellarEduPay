@@ -64,7 +64,10 @@ export default function VerifyPayment() {
     setLoading(true);
 
     try {
-      const res = await verifyPayment(validation.normalized || txHash.trim());
+      const normalizedHash = validation.normalized || txHash.trim();
+      const res = await verifyPayment(normalizedHash, {
+        headers: { "Idempotency-Key": `verify:${normalizedHash}` },
+      });
       setResult(res.data);
     } catch (err) {
       const stellar = parseStellarError(err);

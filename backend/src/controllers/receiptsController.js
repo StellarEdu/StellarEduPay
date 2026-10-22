@@ -6,7 +6,14 @@ const School = require('../models/schoolModel');
 // GET /api/receipts/:txHash?format=pdf
 async function getReceipt(req, res, next) {
   try {
-    const receipt = await getReceiptByTxHash(req.params.txHash, req.schoolId);
+    const opIndex = req.query.opIndex !== undefined ? Number(req.query.opIndex) : 0;
+    if (!Number.isInteger(opIndex) || opIndex < 0) {
+      const err = new Error('Invalid opIndex: must be a non-negative integer');
+      err.code = 'INVALID_OP_INDEX';
+      return next(err);
+    }
+
+    const receipt = await getReceiptByTxHash(req.params.txHash, req.schoolId, opIndex);
     if (!receipt) {
       const err = new Error('Receipt not found for this transaction');
       err.code = 'NOT_FOUND';

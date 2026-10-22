@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a focused improvement to StellarEduPay.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before opening a new request. Split unrelated ideas into separate issues so each change can be tested and tracked.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Who is affected and what problem do they face?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the smallest useful solution.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable outcomes that show the issue is resolved.
+      placeholder: |
+        - Given...
+        - When...
+        - Then...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Payments
+        - Stellar integration
+        - Backend/API
+        - Frontend
+        - Operations/infrastructure
+        - Security
+        - Documentation
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Triage checks
+      options:
+        - label: I searched for existing issues and did not find a duplicate.
+          required: true
+        - label: This request describes one focused change.
+          required: true

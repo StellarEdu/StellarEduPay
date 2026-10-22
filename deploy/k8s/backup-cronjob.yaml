@@ -1,0 +1,293 @@
+# MongoDB backups and scheduled restore verification (issue #1630).
+#
+# mongodb-backup          nightly: point-in-time (--oplog) dump → encrypt with a
+#                         public key → upload to object storage. No local copy is
+#                         kept in the cluster; retention/versioning/object-lock are
+#                         enforced by the bucket.
+# mongodb-restore-verify  weekly: download the newest off-site archive, decrypt it,
+#                         restore it into a throw-away mongod sidecar (emptyDir, never
+#                         production) and run backend/scripts/verify-restored-db.js
+#                         against the restore. A failed Job is the alert signal
+#                         (kube_job_status_failed).
+#
+# Image: stellaredupay/backup-tools is built from deploy/backup/Dockerfile; pin
+# its tag in each overlay alongside the backend/frontend images.
+#
+# Required Secrets (create out-of-band, e.g. with scripts/provision-k8s-secrets.sh):
+#
+#   stellaredupay-backup            (used by mongodb-backup)
+#     MONGO_URI                     backup user with the "backup" role, replicaSet=rs0
+#     BACKUP_AGE_RECIPIENT          age public key (age1...) — public half only
+#     BACKUP_S3_URI                 s3://bucket/prefix
+#     AWS_ACCESS_KEY_ID             credentials allowed to PutObject only
+#     AWS_SECRET_ACCESS_KEY
+#     AWS_DEFAULT_REGION
+#     BACKUP_S3_ENDPOINT_URL        optional, for S3-compatible storage
+#
+#   stellaredupay-backup-restore    (used by mongodb-restore-verify)
+#     BACKUP_S3_URI / AWS_*         credentials allowed to GetObject/ListBucket only
+#     age-identity                  age private identity file. Holding it in-cluster
+#                                   is a trade-off: prefer a separate recovery
+#                                   cluster/namespace with tighter RBAC if you can.
+#
+# The restore-verify Job uses a native sidecar (initContainers with
+# restartPolicy: Always), which requires Kubernetes 1.29+.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup
+  labels:
+    app: mongodb-backup
+spec:
+  schedule: "15 2 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app: mongodb-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: stellaredupay/backup-tools:placeholder
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "/scripts/backup.sh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              envFrom:
+                - secretRef:
+                    name: stellaredupay-backup
+              env:
+                # Archives are staged in the emptyDir only long enough to be
+                # verified, encrypted and uploaded.
+                - name: BACKUP_DIR
+                  value: /work/out
+                - name: BACKUP_WORK_DIR
+                  value: /work
+                - name: TMPDIR
+                  value: /work
+                - name: HOME
+                  value: /work
+                - name: RETAIN_DAYS
+                  value: "0"
+                - name: BACKUP_OPLOG
+                  value: "true"
+                - name: BACKUP_REQUIRE_ENCRYPTION
+                  value: "true"
+                - name: BACKUP_REQUIRE_OFFSITE
+                  value: "true"
+                - name: BACKEND_INTERNAL_URL
+                  value: http://backend:5000
+                - name: BACKUP_NOTIFY_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: stellaredupay
+                      key: BACKUP_NOTIFY_TOKEN
+                      optional: true
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "1Gi"
+          volumes:
+            - name: work
+              emptyDir:
+                sizeLimit: 20Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-restore-verify
+  labels:
+    app: mongodb-restore-verify
+spec:
+  schedule: "45 4 * * 0"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 7200
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app: mongodb-restore-verify
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # Scratch mongod: lives only for the duration of the Job and stores
+            # data in an emptyDir. Never reachable from outside the pod.
+            - name: scratch-mongod
+              image: mongo:7
+              restartPolicy: Always
+              command: ["mongod", "--bind_ip", "127.0.0.1", "--port", "27017", "--dbpath", "/data/db"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              startupProbe:
+                exec:
+                  command: ["mongosh", "--quiet", "--eval", "db.adminCommand({ping:1})"]
+                periodSeconds: 5
+                failureThreshold: 60
+              volumeMounts:
+                - name: scratch-db
+                  mountPath: /data/db
+                - name: work
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "2Gi"
+            # Download newest off-site archive → decrypt → restore (with oplog
+            # replay) into the scratch mongod.
+            - name: restore
+              image: stellaredupay/backup-tools:placeholder
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "/scripts/verify-latest-backup.sh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              envFrom:
+                - secretRef:
+                    name: stellaredupay-backup-restore
+              env:
+                - name: VERIFY_SOURCE
+                  value: offsite
+                - name: TEMP_MONGO_URI
+                  value: mongodb://127.0.0.1:27017/stellaredupay
+                - name: BACKUP_AGE_IDENTITY_FILE
+                  value: /keys/age-identity
+                - name: BACKUP_WORK_DIR
+                  value: /work
+                - name: TMPDIR
+                  value: /work
+                - name: HOME
+                  value: /work
+                - name: BACKEND_INTERNAL_URL
+                  value: http://backend:5000
+                - name: BACKUP_NOTIFY_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: stellaredupay
+                      key: BACKUP_NOTIFY_TOKEN
+                      optional: true
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+                - name: restore-keys
+                  mountPath: /keys
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "1Gi"
+          containers:
+            # Cross-collection invariants on the restored data (balances vs
+            # payments) — catches restores that are internally inconsistent.
+            - name: consistency-check
+              image: stellaredupay/backend:placeholder
+              imagePullPolicy: IfNotPresent
+              command: ["node", "scripts/verify-restored-db.js"]
+              securityContext:
+                runAsUser: 1001
+                runAsGroup: 1001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: MONGO_URI
+                  value: mongodb://127.0.0.1:27017/stellaredupay
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+          volumes:
+            - name: work
+              emptyDir:
+                sizeLimit: 20Gi
+            - name: scratch-db
+              emptyDir:
+                sizeLimit: 40Gi
+            - name: tmp
+              emptyDir: {}
+            - name: restore-keys
+              secret:
+                secretName: stellaredupay-backup-restore
+                defaultMode: 0400
+                items:
+                  - key: age-identity
+                    path: age-identity
+---
+# Let the backup pods reach MongoDB (mongodb-network-policy only admits the
+# backend and replica-set peers by default).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongodb-allow-backup
+  labels:
+    app: mongodb
+spec:
+  podSelector:
+    matchLabels:
+      app: mongodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mongodb-backup
+      ports:
+        - protocol: TCP
+          port: 27017

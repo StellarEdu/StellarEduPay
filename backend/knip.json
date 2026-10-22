@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/server.js",
+    "src/app.js"
+  ],
+  "project": [
+    "src/**/*.js"
+  ],
+  "ignore": [
+    "src/**/__tests__/**",
+    "src/**/*.test.js"
+  ],
+  "ignoreDependencies": [
+    "nodemon",
+    "depcheck"
+  ]
+}

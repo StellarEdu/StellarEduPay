@@ -35,9 +35,31 @@ const IV_LENGTH = 12;       // bytes
 const TAG_LENGTH = 16;      // bytes
 const ENC_PREFIX = 'enc:';  // sentinel that distinguishes encrypted values
 
+/**
+ * Throws when running in production without a webhook secret encryption key
+ * (and without the explicit ALLOW_PLAINTEXT_PII escape hatch). Without this
+ * guard, encryption silently becomes a no-op and secrets are stored in
+ * plaintext — see #1778.
+ */
+function _assertKeyConfiguredInProduction() {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (process.env.WEBHOOK_SECRET_ENCRYPTION_KEY) return;
+  if (process.env.ALLOW_PLAINTEXT_PII === 'true') return;
+  throw new Error(
+    '[webhookSecretEncryption] WEBHOOK_SECRET_ENCRYPTION_KEY is required when ' +
+    'NODE_ENV=production. Refusing to start with webhook secret encryption ' +
+    'disabled. Generate one with: ' +
+    'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))" ' +
+    '(or set ALLOW_PLAINTEXT_PII=true for development only).'
+  );
+}
+
 function _getKey() {
   const hex = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
-  if (!hex) return null;
+  if (!hex) {
+    _assertKeyConfiguredInProduction();
+    return null;
+  }
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error(
       '[webhookSecretEncryption] WEBHOOK_SECRET_ENCRYPTION_KEY must be a ' +
@@ -85,6 +107,19 @@ function _decryptWithKey(buf, key) {
  */
 function isEncryptionEnabled() {
   return !!process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+}
+
+/**
+ * Returns true when running in production without a webhook secret encryption
+ * key configured (and without ALLOW_PLAINTEXT_PII=true). Used for boot-time
+ * warnings and health reporting (#1778).
+ */
+function isPlaintextFallbackActive() {
+  return (
+    process.env.NODE_ENV === 'production' &&
+    !process.env.WEBHOOK_SECRET_ENCRYPTION_KEY &&
+    process.env.ALLOW_PLAINTEXT_PII === 'true'
+  );
 }
 
 /**
@@ -176,4 +211,5 @@ module.exports = {
   decryptWebhookSecret,
   isEncryptionEnabled,
   isEncrypted,
+  isPlaintextFallbackActive,
 };

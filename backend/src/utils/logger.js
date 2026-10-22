@@ -16,6 +16,7 @@
 const winston = require('winston');
 require('winston-daily-rotate-file');
 const { redactPii, stripQueryString } = require('./piiRedaction');
+const { currentTraceIds } = require('../tracing');
 
 const path = require('path');
 
@@ -100,12 +101,17 @@ function formatMessage(level, message, ...args) {
     ? formattedArgs.map(redactPii)
     : formattedArgs;
 
+  // #1636: link every log line (and the correlationId it carries) to the
+  // active trace so logs and traces can be joined in either direction.
+  const traceIds = currentTraceIds();
+
   return {
     timestamp,
     level,
     message,
     args: redactedArgs.length > 0 ? redactedArgs : undefined,
     pid: process.pid,
+    ...(traceIds || {}),
   };
 }
 

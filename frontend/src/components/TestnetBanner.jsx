@@ -43,8 +43,10 @@ export default function TestnetBanner() {
         }}
       >
         <span>⚠️</span>
-        {t("components.networkMismatch") ||
-          `Network mismatch: build-time env says "${process.env.NEXT_PUBLIC_STELLAR_NETWORK}" but backend reports "${stellarNetwork}". Payment instructions may be incorrect.`}
+        {t("components.networkMismatch", {
+          buildNetwork: process.env.NEXT_PUBLIC_STELLAR_NETWORK,
+          backendNetwork: stellarNetwork,
+        })}
       </div>
     );
   }
