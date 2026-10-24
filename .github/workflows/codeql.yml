@@ -56,7 +56,7 @@ jobs:
         uses: github/codeql-action/autobuild@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3
         with:
           category: '/language:javascript-typescript'
           # Upload results to the Security → Code scanning tab.
