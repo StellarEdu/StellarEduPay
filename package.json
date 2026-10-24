@@ -39,7 +39,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "speakeasy": "^2.0.0",
-    "supertest": "^7.3.0"
+    "supertest": "^7.3.1"
   },
   "jest": {
     "moduleDirectories": [
