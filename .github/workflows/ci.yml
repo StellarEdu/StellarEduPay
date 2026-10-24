@@ -442,7 +442,7 @@ jobs:
         run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
       - name: Comment coverage on PR
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: coverage-ratchet
           path: coverage/ratchet.md
@@ -509,7 +509,7 @@ jobs:
         run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
       - name: Comment coverage on PR
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: coverage-ratchet
           path: coverage/ratchet.md
