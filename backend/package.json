@@ -2,13 +2,13 @@
   "name": "stellaredupay-backend",
   "version": "1.0.0",
   "description": "StellarEduPay backend API",
-  "main": "src/server.js",
+  "main": "src/app.js",
   "engines": {
     "node": ">=24 <25"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
     "test": "jest",
     "lint": "eslint src",
     "knip": "knip",
