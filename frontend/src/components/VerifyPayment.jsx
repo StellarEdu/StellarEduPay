@@ -5,6 +5,7 @@ import { parseStellarError } from "../utils/stellarErrors";
 import { getErrorMessage } from "../utils/errorMessages";
 import { validateStellarTxHash } from "../utils/stellarTxHash";
 import { IconAlertTriangle, IconCheck, IconExternalLink, IconShield } from "./Icons";
+import GroupedValue from "./GroupedValue";
 
 const STATUS_BADGE = {
   valid:     { cls: "badge badge-success", key: "status.validation.valid" },
@@ -150,7 +151,7 @@ export default function VerifyPayment() {
         </form>
 
         {error && (
-          <div ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
+          <div ref={errorRef} role="alert" tabIndex={-1} className="alert alert-danger" style={{ marginTop: "1rem" }}>
             <IconAlertTriangle size={15} />
             <div>
               <span>{error}</span>
@@ -197,8 +198,8 @@ export default function VerifyPayment() {
             )}
             <div style={{ padding: "0.625rem 0" }}>
               <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("verifyPayment.txHash")}</div>
-              <div style={{ fontFamily: "monospace", fontSize: "0.78rem", wordBreak: "break-all", color: "var(--text)" }}>
-                {result.hash}
+              <div style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "var(--text)" }}>
+                <GroupedValue value={result.hash} />
               </div>
               {result.stellarExplorerUrl && (
                 <a

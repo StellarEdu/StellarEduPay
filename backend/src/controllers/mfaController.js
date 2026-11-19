@@ -582,7 +582,8 @@ async function verifyAndEnableUserMfa(req, res) {
     // after enrolment is complete, keeping the user in the /mfa-setup loop.
     if (req.user?.mfaSetupPending) {
       const jwt = require('jsonwebtoken');
-      const { parseTTL, getStore, issueRefreshToken } = require('./authController');
+      const { getStore, issueRefreshToken } = require('./authController');
+      const { parseTTL } = require('../utils/ttl');
       const { role, userId: uid, schoolId, roles } = req.user;
 
       const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL',  8 * 3600);

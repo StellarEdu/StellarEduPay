@@ -44,9 +44,8 @@ const {
 } = require("./paymentConfirmationStateMachine");
 const logger = require("../utils/logger").child("StellarService");
 const { getEngineForSchool } = require("./feeAdjustmentEngine");
-const { updateStudentBalance } = require("../utils/studentBalanceUpdater");
 const { recordUnmatchedPayment } = require("./unmatchedPaymentService");
-const { PAYMENT_TYPES } = require("./paymentService");
+const { updateStudentBalance } = require("../utils/studentBalanceUpdater");
 
 // TTL for the per-student balance lock (#1026), shared with paymentController's
 // verifyPayment. Guards the read-aggregate-then-write sequence that computes
@@ -875,3 +874,334 @@ async function syncPaymentsForSchool(school) {
         });
         studentDeleted = Boolean(student);
         if (studentDeleted) {
+          logger.warn('Transaction matched a soft-deleted student — recording for manual review', {
+            txHash: tx.hash, schoolId, studentId: targetStudentId,
+          });
+        }
+      }
+      if (!student) {
+        // Issue #1798 — persist every unattributed inflow for the unmatched queue.
+        for (const o of operations) {
+          await recordUnmatchedPayment({
+            schoolId, tx, payOp: o.payOp, memo, memoType: valid.memoType ?? null,
+            asset: o.asset, opIndex: o.opIndex, reason: 'student_not_found',
+          });
+        }
+        summary.unmatched++;
+        continue;
+      }
+
+      summary.matched++;
+
+      // #1760 — validate each operation's amount against its own asset's limits.
+      let limitFailure = null;
+      for (const o of operations) {
+        const limitValidation = await validatePaymentAmount(o.amount, {
+          schoolId,
+          asset: o.asset?.assetCode,  // #1555: detectAsset returns assetCode, not code
+        });
+        if (!limitValidation.valid) { limitFailure = limitValidation; break; }
+      }
+      if (limitFailure) {
+        summary.failed++;
+        summary.failedDetails.push({ txHash: tx.hash, reason: limitFailure.code });
+        continue;
+      }
+
+      // Total credited for this transaction: the sum of all creditable operations.
+      const paymentAmount = parseFloat(
+        operations.reduce((sum, o) => sum + o.amount, 0).toFixed(7),
+      );
+
+      const senderAddress = operations[0].payOp.from || null;
+      const txDate = new Date(tx.created_at);
+      const txLedger = tx.ledger_attr || tx.ledger || null;
+
+      const collision = await detectMemoCollision(
+        memo,
+        senderAddress,
+        paymentAmount,
+        student.feeAmount,
+        txDate,
+        schoolId,
+      );
+      const crossSchoolCollision = await detectCrossSchoolMemoCollision(
+        memo,
+        schoolId,
+        txDate,
+      );
+      const isSuspicious = collision.suspicious || crossSchoolCollision.suspicious;
+      const suspicionReason =
+        [collision.reason, crossSchoolCollision.reason].filter(Boolean).join('; ') || null;
+
+      const confirmation = await determineConfirmationState(
+        txLedger,
+        CONFIRMATION_STATES.DETECTED,
+        isSuspicious,
+      );
+      const isConfirmed = isConfirmedOrAbove(confirmation.state);
+      const confirmationStatus = confirmation.confirmationStatus;
+
+      const studentId = student.studentId;
+      // Fee amount and category come from the intent when one exists; otherwise
+      // fall back to the student's current fee record (intent-decoupled crediting).
+      const feeAmountForRecord = intent ? intent.amount : student.feeAmount;
+      const feeCategory = intent ? (intent.feeCategory || null) : null;
+
+      // Issue #1026 — the balance write below is a non-atomic read-aggregate-then-
+      // absolute-write. It races against another sync pass touching the same
+      // student, and against verifyPayment's equivalent section, unless both hold
+      // this shared per-student lock around it.
+      const studentLockKey = lock.studentBalanceLockKey(schoolId, studentId);
+      const studentLockInfo = await lock.acquire(studentLockKey, STUDENT_BALANCE_LOCK_TTL_MS);
+      if (!studentLockInfo) {
+        // A concurrent verify/sync is updating this student's balance right now.
+        // Skip this transaction for this pass — it will be picked up on the next
+        // sync run once the in-flight update releases the lock.
+        summary.failed++;
+        summary.failedDetails.push({ txHash: tx.hash, reason: 'STUDENT_BALANCE_LOCK_CONTENDED' });
+        continue;
+      }
+      const studentLockToken = studentLockInfo.token;
+
+      // Per-payment cumulative totals for the payment record's UI fields only.
+      // Student balance is written by updateStudentBalance inside the session
+      // below — NOT by this aggregation (fix #1751).
+      const previousPayments = await Payment.aggregate([
+        { $match: { schoolId, studentId, status: 'SUCCESS', isSuspicious: false, deletedAt: null } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]);
+      const previousTotal = previousPayments.length
+        ? previousPayments[0].total
+        : 0;
+      const cumulativeTotal = parseFloat(
+        (previousTotal + paymentAmount).toFixed(7),
+      );
+
+      // Partial payments are accepted in the sync path — cumulative total determines status.
+      // Classification is delegated to the canonical classifyFeePayment helper (#1766)
+      // so the sync path, verify path and updateStudentBalance cannot diverge on the
+      // vocabulary used for a cumulative total below the fee.
+      const cumulativeClassification = classifyFeePayment(
+        cumulativeTotal,
+        student.feeAmount,
+      );
+      const cumulativeStatus = cumulativeClassification.status;
+      const excessAmount = cumulativeClassification.excessAmount;
+
+      let session;
+      try {
+        session = await mongoose.connection.startSession();
+        await session.withTransaction(async () => {
+          // #1760 — one payment row per (schoolId, txHash, opIndex).
+          for (const o of operations) {
+            await savePayment({
+              schoolId,
+              studentId,
+              txHash: tx.hash,
+              opIndex: o.opIndex,
+              correlationId: deriveCorrelationId(tx.hash),
+              amount: o.amount,
+              feeAmount: feeAmountForRecord,
+              feeCategory,
+              feeValidationStatus: cumulativeStatus,
+              excessAmount,
+              status: "SUCCESS",
+              memo,
+              senderAddress: o.payOp.from || null,
+              isSuspicious,
+              suspicionReason,
+              ledger: txLedger,
+              ledgerSequence: txLedger,
+              confirmationStatus,
+              confirmationState: confirmation.state,
+              confirmedAt: txDate,
+              studentDeleted,
+            }, { session });
+          }
+
+          // Fix #1751: delegate all student balance writes to the canonical
+          // updateStudentBalance function so sync never diverges from verify/poller.
+          if (isConfirmed && !isSuspicious && !studentDeleted) {
+            await updateStudentBalance(schoolId, studentId, { session });
+          }
+
+          if (intent) {
+            await PaymentIntent.findOneAndUpdate(
+              { _id: intent._id, schoolId },
+              { status: "completed" },
+              { session }
+            );
+          }
+        });
+      } catch (saveErr) {
+        if (saveErr.code === 'DUPLICATE_TX') {
+          // Another concurrent path (poller or verify) already recorded this tx.
+          // Treat as already-processed rather than an error.
+          summary.new--;
+          summary.alreadyProcessed++;
+          if (intent) {
+            await PaymentIntent.findOneAndUpdate({ _id: intent._id, schoolId }, { status: 'completed' });
+          }
+          continue;
+        }
+        throw saveErr;
+      } finally {
+        if (session) await session.endSession();
+        await lock.release(studentLockKey, studentLockToken);
+      }
+      newPayments++;
+
+      logger.info("Transaction recorded", {
+        txHash: tx.hash,
+        schoolId,
+        studentId,
+        operationCount: operations.length,
+        amount: paymentAmount,
+        feeValidationStatus: cumulativeStatus,
+        isSuspicious,
+        confirmationStatus,
+        confirmationState: confirmation.state,
+        intentMatched: Boolean(intent),
+      });
+    }
+
+    if (!done) {
+      if (page.records.length < 200) break; // last page
+      page = await withStellarRetry(() => page.next(), {
+        label: `syncPaymentsForSchool.next(${schoolId})`,
+      });
+      if (!page || !page.records.length) break;
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Re-check all non-terminal payments for a school and advance each one
+ * (detected/pending -> confirmed -> finalized) per the finality policy
+ * (issue #747). Safe to call repeatedly/concurrently for the same school:
+ * `determineConfirmationState` is idempotent, so a re-run over an unchanged
+ * ledger range leaves already-resolved payments untouched.
+ *
+ * Falls back to the legacy `confirmationStatus` field for payments written
+ * before `confirmationState` existed, so older pending records keep getting
+ * swept without a separate migration step.
+ *
+ * @param {string} schoolId
+ */
+async function finalizeConfirmedPayments(schoolId) {
+  const pending = await Payment.find({
+    schoolId,
+    isSuspicious: false,
+    $or: [
+      { confirmationState: { $in: [CONFIRMATION_STATES.DETECTED, CONFIRMATION_STATES.PENDING, CONFIRMATION_STATES.CONFIRMED] } },
+      { confirmationState: { $exists: false }, confirmationStatus: "pending_confirmation" },
+    ],
+  });
+
+  for (const payment of pending) {
+    const txLedger = payment.ledgerSequence || payment.ledger;
+    if (!txLedger) continue;
+
+    const currentState = payment.confirmationState || CONFIRMATION_STATES.DETECTED;
+    const { state: nextState, changed } = await determineConfirmationState(
+      txLedger,
+      currentState,
+      payment.isSuspicious,
+    );
+    if (!changed) continue;
+
+    if (typeof Payment.findByIdAndUpdate === "function") {
+      await Payment.findOneAndUpdate({ _id: payment._id, schoolId }, {
+        confirmationState: nextState,
+        confirmationStatus: deriveLegacyConfirmationStatus(nextState),
+      });
+    }
+
+    if (!isConfirmedOrAbove(nextState)) continue;
+
+    const student = await Student.findOne({
+      schoolId,
+      studentId: payment.studentId,
+    });
+    if (!student) continue;
+
+    // Fix #1751: delegate the balance write to the single canonical function.
+    // The old inline aggregation used confirmationStatus:'confirmed' which
+    // diverges from updateStudentBalance's status:'SUCCESS' filter — and it
+    // omitted creditAdjustments.  Calling updateStudentBalance here makes
+    // finalizeConfirmedPayments consistent with every other pipeline.
+    await updateStudentBalance(schoolId, payment.studentId, {});
+  }
+}
+
+/**
+ * Parse an incoming Stellar transaction for memo and payment amounts.
+ * If walletAddress is provided, only payments to that wallet are included.
+ */
+async function parseIncomingTransaction(txHash, walletAddress = null) {
+  // withStellarRetry classifies any failure (404/429/5xx/network) into a
+  // structured error before it reaches here — see the design decision
+  // documented in withStellarRetry.js. No local try/catch needed.
+  const tx = await withStellarRetry(
+    () => server.transactions().transaction(txHash).call(),
+    { label: "parseIncomingTransaction", context: `Transaction ${txHash}` },
+  );
+
+  const memo = tx.memo ? tx.memo.trim() : null;
+
+  const ops = await fetchAllOperations(tx, "parseIncomingTransaction.operations");
+  const payments = ops
+    .map((op, i) => ({ op, opIndex: i }))
+    .filter(
+      ({ op }) =>
+        isCreditableOpType(op.type) && (!walletAddress || op.to === walletAddress),
+    )
+    .map(({ op, opIndex }) => {
+      const { assetType, assetCode, assetIssuer } = resolveDeliveredAsset(op);
+      return {
+        opIndex,
+        from: op.from || null,
+        to: op.to,
+        amount: normalizeAmount(resolveCreditedAmount(op)),
+        assetCode,
+        assetType,
+        assetIssuer,
+      };
+    });
+
+  return {
+    hash: tx.hash,
+    successful: tx.successful,
+    memo,
+    payments,
+    created_at: tx.created_at,
+  };
+}
+
+module.exports = {
+  syncPaymentsForSchool,
+  finalizeConfirmedPayments,
+  verifyTransaction,
+  parseIncomingTransaction,
+  validatePaymentAgainstFee,
+  validatePaymentWithDynamicFee,
+  detectAsset,
+  normalizeAmount,
+  extractValidPayment,
+  fetchAllOperations,
+  detectMemoCollision,
+  detectCrossSchoolMemoCollision,
+  detectAbnormalPatterns,
+  computeHistoricalAmountStats,
+  checkConfirmationStatus,
+  // Consumed by transactionPollingService (import + call) and covered by tests —
+  // must be exported or those callers invoke `undefined`.
+  determineConfirmationState,
+  // recordPayment was moved to transactionService.savePayment (db layer split);
+  // re-exported under its original name since paymentController, retryService,
+  // transactionQueueService, and transactionRetryQueue still import it from here.
+  recordPayment: savePayment,
+};

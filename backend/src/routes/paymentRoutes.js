@@ -48,6 +48,8 @@ const {
   getReconciliationReports,
   generateSchoolReconciliationReport,
   correctPlaceholderPayment,
+  lockPaymentForUpdate,
+  unlockPayment,
 } = require('../controllers/paymentAdminController');
 
 const {

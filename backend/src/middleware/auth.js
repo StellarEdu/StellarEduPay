@@ -6,7 +6,7 @@ const { get, set } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { hashIp } = require('../utils/piiRedaction');
-const User = require('../models/User');
+const User = require('../models/userModel');
 const tokenService = require('../services/tokenService');
 
 // ── IP failure tracking constants ──────────────────────────────────────────────
