@@ -6,15 +6,7 @@ import { getErrorMessage } from '../utils/errorMessages';
 import api from '../services/api';
 import { useTranslation } from 'react-i18next';
 import styles from '../styles/login.module.css';
-
-// Only honour same-origin, absolute internal paths as a post-login destination.
-// Anything else (external URLs, protocol-relative "//evil.com", missing) falls
-// back to the dashboard — prevents open-redirect via the returnTo query param.
-function safeReturnTo(returnTo) {
-  if (typeof returnTo !== 'string') return '/dashboard';
-  if (!returnTo.startsWith('/') || returnTo.startsWith('//')) return '/dashboard';
-  return returnTo;
-}
+import { safeReturnTo } from '../utils/safeReturnTo';
 
 export default function LoginPage() {
   const router = useRouter();

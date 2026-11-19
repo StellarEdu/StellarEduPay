@@ -69,28 +69,27 @@ const publicConfigRoutes = require('./routes/publicConfigRoutes');
 const retryQueueRoutes = require('./routes/retryQueueRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
-const { startPolling, stopPolling } = require('./services/transactionPollingService');
-const { startStreaming, stopStreaming } = require('./services/horizonStreamingService');
+const { startPolling } = require('./services/transactionPollingService');
+const { startStreaming } = require('./services/horizonStreamingService');
 const retrySelector = require('./services/retryServiceSelector');
 const { startConsistencyScheduler, stopConsistencyScheduler } = require('./services/consistencyScheduler');
 const { startReminderScheduler, stopReminderScheduler } = require('./services/reminderService');
 const { startPiiAnonymizationScheduler, stopPiiAnonymizationScheduler } = require('./services/piiAnonymizationScheduler');
-const { startWorker: startTxQueueWorker, stopWorker: stopTxQueueWorker } = require('./services/transactionQueueService');
+const { startWorker: startTxQueueWorker } = require('./services/transactionQueueService');
 const { startSessionCleanupScheduler, stopSessionCleanupScheduler } = require('./services/sessionCleanupService');
 const { startReconciliationScheduler, stopReconciliationScheduler } = require('./services/reconciliationService');
 const { startStuckPaymentReconciliationScheduler, stopStuckPaymentReconciliationScheduler } = require('./services/stuckPaymentReconciliation');
 const { startAuditLogCleanupScheduler, stopAuditLogCleanupScheduler } = require('./services/auditLogCleanupService');
 const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./services/metricsRollupService');
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
-const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
+const { startOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
 const { startWalletHealthScheduler, stopWalletHealthScheduler } = require('./services/walletHealthScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startDisputeSlaScheduler, stopDisputeSlaScheduler } = require('./services/disputeNotificationService');
-const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
-const { closeQueue } = require('./queue/transactionQueue');
+const { startWorker: startReportQueueWorker } = require('./services/reportQueueService');
+require('./queue/transactionQueue');
 const { closeRedisClients } = require('./config/redisClient');
-const bullMQRetryService = require('./services/bullMQRetryService');
 const { initializeRetryQueue, setupMonitoring } = require('./config/retryQueueSetup');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
@@ -111,7 +110,6 @@ const { validateMetricsTokenOnStartup } = require('./middleware/metricsAuth');
 try {
   validateMetricsTokenOnStartup();
 } catch (err) {
-  // eslint-disable-next-line no-console
   console.error(`[FATAL] ${err.message}`);
   process.exit(1);
 }

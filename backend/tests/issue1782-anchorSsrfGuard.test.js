@@ -103,6 +103,9 @@ describe('Issue #1782 — homeDomain SSRF guard', () => {
     expect(endpoints).toEqual({
       sep10Url: 'https://anchor.example.com/auth',
       sep24Url: 'https://anchor.example.com/sep24',
+      // No SIGNING_KEY in this toml, so sep10Authenticate will refuse to sign.
+      signingKey: null,
+      webAuthDomain: null,
     });
     expect(mockAxiosGet).toHaveBeenCalledWith(
       'https://anchor.example.com/.well-known/stellar.toml',

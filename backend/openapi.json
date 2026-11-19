@@ -737,6 +737,85 @@
         }
       }
     },
+    "/api/admin/ip-blocks": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "getAdminIpBlocks",
+        "summary": "GET /api/admin/ip-blocks",
+        "description": "Active authentication brute-force blocks. Entries carry hashed IPs only (ipHash), never raw addresses.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "admin",
+        "x-source": "backend/src/routes/adminRoutes.js",
+        "responses": {
+          "200": {
+            "description": "Active blocks."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/ip-blocks/{ipHash}/clear": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "postAdminIpBlocksClear",
+        "summary": "POST /api/admin/ip-blocks/{ipHash}/clear",
+        "description": "Lift every active authentication block for one hashed IP (as returned by GET /api/admin/ip-blocks).",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "admin",
+        "x-source": "backend/src/routes/adminRoutes.js",
+        "parameters": [
+          {
+            "name": "ipHash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Blocks cleared."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/admin/log-level": {
       "post": {
         "tags": [

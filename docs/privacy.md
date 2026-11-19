@@ -105,6 +105,12 @@ The platform applies automatic PII redaction to all application logs:
 - IP addresses are hashed using HMAC-SHA256 with a per-boot secret
 - Same IP produces same hash within a server session (for correlation)
 - Hashes are not reversible and do not persist across server restarts
+- Applies to audit rows and admin alerts too: `auth_failure` audit entries store
+  `details.ipHash` and `ipAddress` as the hash, never the raw IP
+- Auth-failure audit rows always use the `system` tenant. A caller-supplied
+  `X-School-ID` is kept only as `details.claimedSchoolId`, and only when it names an
+  existing school
+- Missing-credential requests are audited at most once per IP per minute
 
 ### Query String Stripping
 - Query strings are stripped from logged URLs to prevent token/secret leakage

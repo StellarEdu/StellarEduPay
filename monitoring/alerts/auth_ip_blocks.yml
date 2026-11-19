@@ -1,0 +1,19 @@
+groups:
+  - name: auth-ip-blocks
+    rules:
+      - alert: AuthIpWideBlockApplied
+        expr: increase(auth_ip_blocks_total{kind="ip"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Whole-IP authentication block applied
+          description: A client IP exceeded the IP-wide auth failure backstop (100 per 5 minutes) and every request from it is being rejected with 429. Check GET /api/admin/ip-blocks; if the source is a trusted office or school network, add it to TRUSTED_NETWORKS and clear the block with POST /api/admin/ip-blocks/{ipHash}/clear.
+      - alert: AuthCredentialBlockSpike
+        expr: increase(auth_ip_blocks_total{kind="credential"}[10m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated credential-level authentication blocks
+          description: More than five credential-level auth blocks in 10 minutes. This can mean a secret rotation left clients with stale tokens, or a brute-force attempt. Review GET /api/admin/ip-blocks.

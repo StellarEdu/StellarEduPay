@@ -9,6 +9,7 @@
  * validation is exercised against genuine XDR, not hand-written fixtures.
  */
 
+const crypto = require('crypto');
 const StellarSdk = jest.requireActual('@stellar/stellar-sdk');
 
 const OUR_PASSPHRASE = StellarSdk.Networks.TESTNET;
@@ -54,6 +55,9 @@ const clientKp = StellarSdk.Keypair.random();   // the account being authenticat
 
 const SEP10_URL = 'https://anchor.example.com/auth';
 
+// What discoverAnchorEndpoints() would return from the anchor's stellar.toml.
+const ANCHOR = { homeDomain: HOME_DOMAIN, signingKey: serverKp.publicKey() };
+
 /**
  * Build a challenge-shaped transaction with the given properties. The builder
  * increments the source sequence, so we start one below the target sequence.
@@ -79,7 +83,8 @@ function buildChallenge({
   const ops = operations || [
     StellarSdk.Operation.manageData({
       name: `${HOME_DOMAIN} auth`,
-      value: Buffer.from('nonce-value-1234567890123456789012').toString('base64'),
+      // SEP-10 requires a 48-byte random nonce.
+      value: crypto.randomBytes(48).toString('base64'),
       source: clientKp.publicKey(),
     }),
   ];
@@ -122,7 +127,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
   test('signs and returns a JWT for a well-formed challenge', async () => {
     serveChallenge(buildChallenge({ timebounds: freshTimebounds() }));
 
-    const jwt = await sep10Authenticate(SEP10_URL, clientKp.publicKey());
+    const jwt = await sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR);
 
     expect(jwt).toBe('jwt-token');
     expect(mockAxiosPost).toHaveBeenCalledTimes(1);
@@ -131,7 +136,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
   test('refuses a challenge whose sequence number is not 0', async () => {
     serveChallenge(buildChallenge({ sequence: '42', timebounds: freshTimebounds() }));
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
@@ -147,7 +152,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
       timebounds: freshTimebounds(),
     }));
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
@@ -157,7 +162,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
       timebounds: freshTimebounds(),
     }));
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
@@ -167,7 +172,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
       timebounds: { minTime: now - 7200, maxTime: now - 3600 },
     }));
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
@@ -179,7 +184,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
       FOREIGN_PASSPHRASE
     );
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
@@ -190,7 +195,7 @@ describe('Issue #1779 — SEP-10 challenge validation before signing', () => {
       FOREIGN_PASSPHRASE
     );
 
-    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey())).rejects.toThrow();
+    await expect(sep10Authenticate(SEP10_URL, clientKp.publicKey(), ANCHOR)).rejects.toThrow();
     expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 });

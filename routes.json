@@ -58,6 +58,16 @@
       "middleware": []
     },
     {
+      "method": "GET",
+      "path": "/api/admin/ip-blocks",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/ip-blocks/:ipHash/clear",
+      "middleware": []
+    },
+    {
       "method": "POST",
       "path": "/api/admin/log-level",
       "middleware": []
