@@ -124,6 +124,34 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
   return res.status(401).json({ error: reason, code });
 }
 
+// ── MFA enrolment gate (#1942) ───────────────────────────────────────────────
+// handleLogin issues a restricted token (mfaSetupPending) when MFA is required
+// (REQUIRE_MFA or school.requireMfa) and the user has not enrolled a personal
+// TOTP secret. Such a token may reach only the enrolment and session endpoints
+// below. Every other route refuses it, so a password alone cannot reach data.
+const MFA_ENROLMENT_ALLOWED_PATHS = new Set([
+  '/api/auth/mfa/user/setup',
+  '/api/auth/mfa/user/verify',
+  '/api/auth/me',
+  '/api/auth/logout',
+]);
+
+function isMfaEnrolmentBlocked(req, decoded) {
+  if (decoded.mfaSetupPending !== true) return false;
+  // Express routes are case-insensitive and ignore a trailing slash, so
+  // normalise the same way before comparing against the allow-list.
+  const path = String(req.originalUrl || req.url || '')
+    .split('?')[0]
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  return !MFA_ENROLMENT_ALLOWED_PATHS.has(path);
+}
+
+const MFA_ENROLLMENT_RESPONSE = {
+  error: 'Multi-factor authentication must be set up before you can access this resource.',
+  code: 'MFA_ENROLLMENT_REQUIRED',
+};
+
 // ── requireAdminAuth ──────────────────────────────────────────────────────────
 // Protects global super-admin endpoints. Accepts JWTs with role:'admin' (env
 // super-admin) or roles including 'super_admin' (DB super-admin).
@@ -172,6 +200,10 @@ async function requireAdminAuth(req, res, next) {
 
     if (decoded.sid && await tokenService.isSessionRevoked(decoded.sid)) {
       return handleAuthFailure(req, res, ip, 'Session has been revoked.', 'SESSION_REVOKED', { countTowardsBlock: false });
+    }
+
+    if (isMfaEnrolmentBlocked(req, decoded)) {
+      return res.status(403).json(MFA_ENROLLMENT_RESPONSE);
     }
 
     // Accept the old role:'admin' shape AND the new roles:['super_admin'] shape
@@ -268,6 +300,10 @@ function requireSchoolAuth(allowedRoles = []) {
     const revoked = await checkSessionRevoked(decoded);
     if (revoked) {
       return res.status(revoked.status).json(revoked.body);
+    }
+
+    if (isMfaEnrolmentBlocked(req, decoded)) {
+      return res.status(403).json(MFA_ENROLLMENT_RESPONSE);
     }
 
     // Super-admin bypass — break-glass access to all tenants

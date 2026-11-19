@@ -48,6 +48,7 @@ const ERROR_MESSAGES = {
   MISSING_AUTH_TOKEN:          "Authentication required. Please log in.",
   MISSING_REFRESH_TOKEN:       "Session token missing. Please log in again.",
   INSUFFICIENT_ROLE:           "You do not have permission to perform this action.",
+  MFA_ENROLLMENT_REQUIRED:     "Two-factor authentication must be set up before you can continue.",
   AUTH_MISCONFIGURED:          "Authentication is misconfigured. Please contact support.",
 
   // Dispute errors
