@@ -2,6 +2,10 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const Joi = require('joi');
+const { resolveFileSecrets } = require('./secrets');
+
+// Populate *_FILE secrets (issue #1829) before anything reads process.env.
+resolveFileSecrets();
 
 const REQUIRED_VARS = ['MONGO_URI', 'JWT_SECRET', 'RECEIPT_SIGNATURE_SECRET'];
 
