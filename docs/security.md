@@ -2,13 +2,41 @@
 
 ## MFA enforcement (`REQUIRE_MFA`)
 
-By default, TOTP MFA is opt-in per user (`User.mfaEnabled`) or per school (`School.mfaEnabled`) — a compromised admin password alone grants full access unless MFA was actively set up.
+By default, TOTP MFA is opt-in per user (`User.mfaEnabled`) — a compromised admin password alone grants full access unless MFA was actively set up. Per-school MFA secrets were removed (#1946); `School.requireMfa` is now the only school-level MFA setting, and it is a policy flag.
 
 Setting `REQUIRE_MFA=true` closes this gap: on login, an admin with no MFA configured (neither their own nor their school's) receives a **restricted** session token instead of full access. `requireSchoolAuth` (`backend/src/middleware/auth.js`) rejects every request from a restricted token except the MFA enrollment endpoints (`POST /api/auth/mfa/user/setup`, `POST /api/auth/mfa/user/verify`) with `403 MFA_SETUP_REQUIRED`, so the frontend must complete enrollment before any protected endpoint becomes reachable. Once `POST /api/auth/mfa/user/verify` succeeds, the restriction is lifted for the current session immediately.
 
 The login response includes `mfaSetupRequired: true` when this restricted session is issued, which the frontend uses to redirect to the MFA setup flow instead of the dashboard.
 
-`REQUIRE_MFA` does not apply to the environment-configured super-admin break-glass account, which is not backed by the `User`/`School` MFA fields.
+`REQUIRE_MFA` does not apply to the environment-configured super-admin break-glass account, which is not backed by the `User` document. It has its own second factor, described below.
+
+## Environment super-admin (break-glass) account (#1947)
+
+The `ADMIN_USERNAME` / `ADMIN_PASSWORD(_HASH)` account can act on every tenant, so it must not rest on one factor.
+
+- **TOTP.** Set `ADMIN_TOTP_SECRET` to a base32 secret. When set, login requires a six-digit `mfaCode` after the password check. Each accepted 30-second step is recorded once (Redis `SET NX` when available), so a code cannot be replayed.
+- **Production.** With `NODE_ENV=production`, env super-admin login is refused (`500 AUTH_MISCONFIGURED`) unless `ADMIN_TOTP_SECRET` is set.
+- **Kill switch.** `ADMIN_LOGIN_DISABLED=true` disables the env account entirely. Use database `super_admin` users instead.
+- **Path selection.** The env path is taken only for a request with `username` and no `email`. Failures count towards the lockout only when the username matches `ADMIN_USERNAME`.
+- **Visibility.** Every successful env login writes a `SUPER_ADMIN_LOGIN` audit row (`severity: high`) and raises an admin alert.
+
+## MFA attempt limiting (#1945)
+
+Enrolment verify (`POST /api/auth/mfa/user/verify`) and disable (`POST /api/auth/mfa/user/disable`) accept a TOTP code from an authenticated session. Wrong codes count towards the account's login lockout: after five failures in 15 minutes the account returns `429 ACCOUNT_LOCKED` regardless of source IP. Each wrong code writes an `MFA_FAILURE` audit row (`severity: high`), and login-time MFA failures do the same. `POST /api/auth/refresh` and `POST /api/auth/logout` are limited to 60 requests per minute per IP.
+
+## Password policy (#1948)
+
+One policy, in `backend/src/utils/passwordPolicy.js`, applies to change-password, set-password (invitation), reset-password and `scripts/hash-admin-password.js`:
+
+| Code | Rule |
+|------|------|
+| `PASSWORD_TOO_SHORT` | Fewer than 12 characters |
+| `PASSWORD_TOO_LONG` | More than 72 UTF-8 bytes. bcrypt ignores bytes past 72, so these are rejected rather than silently truncated |
+| `PASSWORD_CONTAINS_IDENTITY` | Contains the email local part or username (identifiers of 4+ characters) |
+| `PASSWORD_COMMON` | On the bundled common-password list, optionally followed by digits or symbols |
+| `PASSWORD_REUSED` | Equal to the current (change-password) or previous (reset-password) password |
+
+The common-password list is a starter set. A HaveIBeenPwned check is not implemented yet.
 
 ## MFA backup codes (#1774)
 
@@ -516,12 +544,11 @@ An automated regression test (`tests/issue-1554-audit-context-coverage.test.js`)
 |--------|---------|
 | `PASSWORD_CHANGED` | `POST /api/auth/change-password` |
 | `SESSION_REVOKED` | `DELETE /api/auth/sessions/:sessionId` |
-| `MFA_ENABLED` | `POST /api/auth/mfa/setup` → `POST /api/auth/mfa/verify` |
-| `MFA_DISABLED` | `POST /api/auth/mfa/disable` |
-| `MFA_BACKUP_CODES_REGENERATED` | `POST /api/auth/mfa/backup-codes/regenerate` |
 | `USER_MFA_SETUP_INITIATED` | `POST /api/auth/mfa/user/setup` |
 | `USER_MFA_ENABLED` | `POST /api/auth/mfa/user/verify` |
 | `USER_MFA_DISABLED` | `POST /api/auth/mfa/user/disable` |
+| `MFA_FAILURE` | Wrong TOTP or backup code at login, enrolment verify or disable (`severity: high`) |
+| `SUPER_ADMIN_LOGIN` | Successful environment super-admin login (`severity: high`) |
 
 ### Public / intentionally un-audited endpoints
 
