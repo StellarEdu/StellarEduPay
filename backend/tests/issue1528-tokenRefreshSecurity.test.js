@@ -34,6 +34,8 @@ jest.mock('../src/services/alertService', () => ({
   sendAdminAlert: jest.fn(),
 }));
 
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-1234567890abcdef';
+
 const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
@@ -45,13 +47,18 @@ const { getRedisClient } = require('../src/config/redisClient');
 let mockUserDoc = null;
 
 jest.mock('../src/models/userModel', () => ({
-  findById: jest.fn(async (id) => {
-    if (mockUserDoc && mockUserDoc._id === id) {
-      return mockUserDoc;
-    }
-    return null;
-  }),
+  // Mirrors Mongoose: findById(...) is chainable with .lean().
+  findById: jest.fn((id) => ({
+    lean: async () => (mockUserDoc && mockUserDoc._id === id ? mockUserDoc : null),
+  })),
 }));
+
+// Tokens are delivered only as httpOnly cookies (#821), never in the body.
+function accessPayloadFrom(res) {
+  const cookie = (res.headers['set-cookie'] || []).find((c) => c.startsWith('admin_token='));
+  const token = decodeURIComponent(cookie.split(';')[0].slice('admin_token='.length));
+  return jwt.decode(token);
+}
 
 function buildApp() {
   const app = express();
@@ -157,11 +164,8 @@ describe('Issue #1528: Token refresh security', () => {
       .send({ refreshToken })
       .expect(200);
 
-    const { accessToken } = res.body;
-    const decoded = jwt.decode(accessToken, { complete: true });
-
     // Verify that the new token reflects the current roles
-    expect(decoded.payload.roles).toEqual(['read_only']);
+    expect(accessPayloadFrom(res).roles).toEqual(['read_only']);
   });
 
   it('should reflect school changes in the refreshed access token', async () => {
@@ -190,11 +194,8 @@ describe('Issue #1528: Token refresh security', () => {
       .send({ refreshToken })
       .expect(200);
 
-    const { accessToken } = res.body;
-    const decoded = jwt.decode(accessToken, { complete: true });
-
     // Verify that the new token reflects the current schoolId
-    expect(decoded.payload.schoolId).toBe(newSchoolId);
+    expect(accessPayloadFrom(res).schoolId).toBe(newSchoolId);
   });
 
   it('should enforce absolute session maximum lifetime', async () => {
