@@ -371,7 +371,7 @@ function WebhooksPage() {
           loading={deletingEndpoint}
         />
       )}
-    </RequireAdmin>
+    </>
   );
 }
 

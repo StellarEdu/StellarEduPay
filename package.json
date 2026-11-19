@@ -4,6 +4,7 @@
   "scripts": {
     "check:syntax": "node ./scripts/check-syntax.js",
     "check:i18n": "node ./scripts/check-i18n-coverage.js",
+    "check:error-catalog": "node ./scripts/check-error-catalog.js",
     "test": "jest --testPathPattern=tests/ --forceExit",
     "coverage": "jest --testPathPattern=tests/ --forceExit --coverage",
     "coverage:frontend": "cd frontend && npm run coverage",
@@ -21,8 +22,8 @@
     "validate:migrations": "node scripts/validate-migrations.js"
   },
   "devDependencies": {
-    "@babel/core": "^8.0.7",
-    "@babel/preset-env": "^8.0.6",
+    "@babel/core": "^7.29.13",
+    "@babel/preset-env": "^7.29.14",
     "@babel/preset-react": "^7.29.7",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
