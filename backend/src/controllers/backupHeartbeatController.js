@@ -13,7 +13,7 @@
  */
 
 const { backupLastSuccessTimestamp } = require('../metrics');
-const SystemConfig = require('../models/SystemConfig');
+const SystemConfig = require('../models/systemConfigModel');
 const logger = require('../utils/logger');
 
 const BACKUP_LAST_SUCCESS_KEY = 'backupLastSuccessAt';

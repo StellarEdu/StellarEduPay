@@ -122,8 +122,11 @@ export function tr(key, enFallback) {
  * Falls back to the raw message string, or a generic error if neither is available.
  */
 export function getErrorMessage(code, fallback) {
-  if (code && ERROR_MESSAGES[code]) {
-    return tr(`errors.${code}`, ERROR_MESSAGES[code]);
+  // Resolve through the i18n key first so codes that exist only in the locale
+  // files (issue #1830 catalog) are localised, then the legacy English map.
+  if (code) {
+    const message = tr(`errors.${code}`, ERROR_MESSAGES[code]);
+    if (message) return message;
   }
   if (fallback && typeof fallback === "string" && fallback.trim()) return fallback;
   return tr("errors.UNKNOWN", "An unexpected error occurred. Please try again.");

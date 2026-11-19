@@ -561,7 +561,6 @@ export default function FeeAdjustments() {
             </div>
           </ConfirmationModal>
         )}
-      </div>
     </>
   );
 }

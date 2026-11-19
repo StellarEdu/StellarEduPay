@@ -950,4 +950,88 @@ async function correctPlaceholderPayment(req, res, next) {
       return res.status(400).json({
         error: 'studentId, amount, status, and reason are required',
         code: 'VALIDATION_ERROR',
-     
+      });
+    }
+
+    // Find the placeholder payment (zero amount, FAILED status)
+    const placeholder = await Payment.findOne({ schoolId, txHash, amount: 0, status: PAYMENT_STATUS.FAILED });
+    if (!placeholder) {
+      return res.status(404).json({
+        error: 'Placeholder payment not found (must have amount 0 and status FAILED)',
+        code: 'NOT_FOUND',
+      });
+    }
+
+    // Update with the actual transaction data
+    const previousStatus = placeholder.status;
+    const previousAmount = placeholder.amount;
+    const previousStudentId = placeholder.studentId;
+
+    placeholder.studentId = studentId;
+    placeholder.amount = amount;
+    placeholder.status = status;
+    placeholder.feeValidationStatus = 'unknown'; // Will be recalculated as needed
+
+    // Ensure admin override is set for the transition
+    placeholder.$locals.adminOverride = true;
+    const updated = await placeholder.save();
+
+    await logAudit({
+      schoolId,
+      action: 'payment_placeholder_corrected',
+      performedBy: req.auditContext?.performedBy || 'unknown',
+      targetId: txHash,
+      targetType: 'payment',
+      details: {
+        from: {
+          studentId: previousStudentId,
+          amount: previousAmount,
+          status: previousStatus,
+        },
+        to: {
+          studentId,
+          amount,
+          status,
+        },
+        reason,
+      },
+      result: 'success',
+      ipAddress: req.auditContext?.ipAddress,
+      userAgent: req.auditContext?.userAgent,
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  syncAllPayments,
+  getSyncStatus,
+  finalizePayments,
+  generateReceipt,
+  lockPaymentForUpdate,
+  unlockPayment,
+  getDeadLetterJobs,
+  retryDeadLetterJob,
+  getQueueJobStatus,
+  getStuckPayments,
+  updatePaymentStatus,
+  bulkUpdatePaymentStatus,
+  BULK_STATUS_UPDATE_LIMIT,
+  reviewSuspiciousPayment,
+  streamPaymentEvents,
+  initiatePaymentRefund,
+  approvePaymentRefund,
+  rejectPaymentRefund,
+  completePaymentRefund,
+  getPaymentRefunds,
+  getSchoolRefunds,
+  verifyReceipt,
+  getReconciliationReports,
+  generateSchoolReconciliationReport,
+  correctPlaceholderPayment,
+  // Exposed for testing — callers can introspect the lock state
+  _lock: lock,
+};

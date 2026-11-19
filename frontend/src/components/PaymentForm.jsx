@@ -7,6 +7,7 @@ import { getStudent, getPublicStudent, getPaymentInstructions, getStudentPayment
 import DisputeForm from "./DisputeForm";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconCopy, IconCheck, IconAlertTriangle, IconSearch, IconDownload } from "./Icons";
+import GroupedValue from "./GroupedValue";
 
 const STATUS_BADGE = {
   valid:     { cls: "badge badge-success", key: "status.validation.valid" },
@@ -15,12 +16,13 @@ const STATUS_BADGE = {
   unknown:   { cls: "badge badge-neutral", key: "status.validation.unknown" },
 };
 
-function CopyButton({ text, copyKey, copied, onCopy }) {
+function CopyButton({ text, copyKey, copied, onCopy, announce }) {
   const { t } = useTranslation();
   const isCopied = copied === copyKey;
   return (
     <button
-      onClick={() => onCopy(text, copyKey)}
+      type="button"
+      onClick={() => onCopy(text, copyKey, announce)}
       className="btn btn-sm btn-ghost"
       aria-label={isCopied ? t("actions.copied") : t("actions.copyToClipboard")}
       style={{ flexShrink: 0, gap: "0.3rem" }}
@@ -68,6 +70,8 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
   // #1118 — wallets that cannot send free-text memos can switch the QR code to
   // MEMO_ID or MEMO_HASH; all three decode back to the same payment reference.
   const [memoType, setMemoType]               = useState("MEMO_TEXT");
+  // #1832 — polite live-region message so copy/share success is announced.
+  const [announcement, setAnnouncement]       = useState("");
   const errorRef    = useRef(null);
   const debounceRef = useRef(null);
   const qrWrapperRef = useRef(null);
@@ -202,7 +206,11 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
     if (!student?.studentId) return;
     await navigator.clipboard.writeText(sharePaymentUrl(student.studentId)).catch(() => {});
     setShareCopied(true);
-    setTimeout(() => setShareCopied(false), 2000);
+    setAnnouncement(t("paymentForm.linkCopied"));
+    setTimeout(() => {
+      setShareCopied(false);
+      setAnnouncement("");
+    }, 2000);
   }
 
   const retryBalance = useCallback(async () => {
@@ -216,10 +224,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
     }
   }, [studentId]);
 
-  async function copy(text, key) {
+  async function copy(text, key, announce) {
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
+    setAnnouncement(announce || t("actions.copied"));
+    setTimeout(() => {
+      setCopied(null);
+      setAnnouncement("");
+    }, 2000);
   }
 
   async function downloadQr(filename) {
@@ -288,7 +300,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
 
   return (
     <>
-      
+      <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
 
       <div className="card pf-wrap">
         <div className="card-header">
@@ -327,6 +339,8 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                   debounceRef.current = setTimeout(() => lookupStudent(val), 420);
                 }}
                 required
+                aria-invalid={!!error}
+                aria-describedby={error ? "sid-error" : undefined}
                 className="form-input"
               />
             </div>
@@ -336,7 +350,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
           </form>
 
           {error && (
-            <div ref={errorRef} role="alert" tabIndex="-1" className="alert alert-danger" style={{ marginTop: "1rem" }}>
+            <div id="sid-error" ref={errorRef} role="alert" tabIndex={-1} className="alert alert-danger" style={{ marginTop: "1rem" }}>
               <IconAlertTriangle size={15} />
               <span>{error}</span>
             </div>
@@ -408,7 +422,12 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                   <span className="pf-code">{sharePaymentUrl(student.studentId)}</span>
                 </div>
                 <div style={{ background: "#fff", padding: "0.5rem", borderRadius: "8px", alignSelf: "flex-start" }}>
-                  <QRCodeSVG value={sharePaymentUrl(student.studentId)} size={96} />
+                  <QRCodeSVG
+                    value={sharePaymentUrl(student.studentId)}
+                    size={96}
+                    role="img"
+                    aria-label={t("paymentForm.shareQrAria", { name: student.name || student.studentId })}
+                  />
                 </div>
               </div>
 
@@ -416,18 +435,44 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
               <div style={{ marginTop: "1.25rem", marginBottom: "0.875rem" }}>
                 <span className="pf-section-label">{t("paymentForm.walletAddress")}</span>
                 <div className="pf-code-row">
-                  <span className="pf-code">{instructions.walletAddress}</span>
-                  <CopyButton text={instructions.walletAddress} copyKey="wallet" copied={copied} onCopy={copy} />
+                  <span className="pf-code"><GroupedValue value={instructions.walletAddress} /></span>
+                  <CopyButton
+                    text={instructions.walletAddress}
+                    copyKey="wallet"
+                    copied={copied}
+                    onCopy={copy}
+                    announce={t("paymentForm.announceWalletCopied")}
+                  />
                 </div>
               </div>
 
               {/* Memo */}
-              <div style={{ marginBottom: "1.25rem" }}>
-                <span className="pf-section-label">{t("paymentForm.memoRequired")}</span>
+              {/* #1832 — the memo is required for the payment to be credited */}
+              <div
+                role="group"
+                aria-labelledby="memo-title"
+                aria-describedby="memo-help memo-exchange"
+                style={{ marginBottom: "1.25rem", padding: "0.875rem", borderRadius: "var(--radius-sm)", border: "2px solid var(--warning-text)", background: "var(--warning-bg)" }}
+              >
+                <span id="memo-title" className="pf-section-label" style={{ display: "block", color: "var(--warning-text)" }}>
+                  {t("paymentForm.memoRequiredTitle")}
+                </span>
+                <p id="memo-help" style={{ fontSize: "0.8125rem", margin: "0.375rem 0 0.625rem" }}>
+                  {t("paymentForm.memoRequiredExplain")}
+                </p>
                 <div className="pf-code-row">
                   <span className="pf-code">{instructions.memo}</span>
-                  <CopyButton text={instructions.memo} copyKey="memo" copied={copied} onCopy={copy} />
+                  <CopyButton
+                    text={instructions.memo}
+                    copyKey="memo"
+                    copied={copied}
+                    onCopy={copy}
+                    announce={t("paymentForm.announceMemoCopied")}
+                  />
                 </div>
+                <p id="memo-exchange" style={{ fontSize: "0.75rem", margin: "0.5rem 0 0", color: "var(--text-muted)" }}>
+                  {t("paymentForm.memoExchangeWarning")}
+                </p>
               </div>
 
               {/* QR Code */}
@@ -448,6 +493,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                   assetIssuer: nonNative?.issuer,
                 });
                 const encodedMemo = encodeMemo(instructions.memo, activeMemoType);
+                const qrAmount = instructions.feeAmount ?? student.feeAmount ?? 0;
                 const downloadFilename = `stellar-payment-${instructions.memo}.png`;
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
@@ -465,7 +511,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         value={paymentUri}
                         size={200}
                         role="img"
-                        aria-label={t("paymentForm.qrAria", { address: instructions.walletAddress })}
+                        aria-label={t("paymentForm.qrPayAria", { amount: qrAmount, memo: instructions.memo })}
                       />
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -499,8 +545,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                               {t("paymentForm.memoValueForType")}
                             </span>
                             <div className="pf-code-row" style={{ justifyContent: "center" }}>
-                              <span className="pf-code" style={{ wordBreak: "break-all" }}>{encodedMemo}</span>
-                              <CopyButton text={encodedMemo} copyKey="encoded-memo" copied={copied} onCopy={copy} />
+                              <span className="pf-code"><GroupedValue value={encodedMemo} /></span>
+                              <CopyButton
+                                text={encodedMemo}
+                                copyKey="encoded-memo"
+                                copied={copied}
+                                onCopy={copy}
+                                announce={t("paymentForm.announceEncodedMemoCopied")}
+                              />
                             </div>
                           </div>
                         )}
@@ -514,7 +566,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                     <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", marginTop: "0.875rem", flexWrap: "wrap" }}>
                       <button
                         type="button"
-                        onClick={() => copy(paymentUri, "qr-uri")}
+                        onClick={() => copy(paymentUri, "qr-uri", t("paymentForm.uriCopied"))}
                         className="btn btn-sm btn-ghost"
                         aria-label={copied === "qr-uri" ? t("paymentForm.uriCopied") : t("paymentForm.copyUri")}
                         style={{ gap: "0.35rem" }}
@@ -596,8 +648,8 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                           )}
                         </div>
                     </div>
-                    <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem", wordBreak: "break-all" }}>
-                      {p.txHash}
+                    <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "0.25rem" }}>
+                      <GroupedValue value={p.txHash} />
                     </div>
                     {p.confirmedAt && (
                       <div style={{ fontSize: "0.75rem", color: "var(--text-subtle)" }}>

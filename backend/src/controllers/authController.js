@@ -11,10 +11,10 @@ const { logAudit } = require('../services/auditService');
 const {
   getStore,
   revokeAllUserSessions,
-  parseTTL,
   _resetStore,
   TokenStoreUnavailableError,
 } = require('../services/sessionStore');
+const { parseTTL } = require('../utils/ttl');
 
 // ── Constant-time string comparison ───────────────────────────────────────────
 
