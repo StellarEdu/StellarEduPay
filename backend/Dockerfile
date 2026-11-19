@@ -46,11 +46,16 @@ RUN mkdir -p /app/logs && chown appuser:appgroup /app /app/logs
 
 USER appuser
 
+# Port the server listens on. Kept in sync with the default in src/config.
+ENV PORT=5000
+
 # Use a tiny Node one-liner instead of curl: same result, no extra package.
-# Checks /health/live (process-alive probe, no external calls).
+# Checks /health/live (process-alive probe, no external calls) on the port
+# the server actually listens on (#1931). Defaulting with `||` inside the
+# parentheses keeps the URL well-formed whether or not PORT is set.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e \
-  "const h=require('http');h.get('http://localhost:'+process.env.PORT||5000+'/health/live',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
+  "require('http').get('http://127.0.0.1:'+(process.env.PORT||5000)+'/health/live',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 # tini as PID 1: forwards SIGTERM/SIGINT to Node and reaps zombie processes.
 # Node is invoked directly (not via npm) so it receives signals reliably.
