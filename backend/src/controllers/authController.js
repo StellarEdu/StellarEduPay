@@ -296,13 +296,20 @@ async function handleLogin(req, res) {
   // ── MFA check ──────────────────────────────────────────────────────────────
   let mfaSchool = null;
   {
-    const { verifyTotpCode, consumeUserBackupCode } = require('./mfaController');
+    const { verifyUserTotp, consumeUserBackupCode } = require('./mfaController');
 
     if (user.mfaEnabled && user.mfaSecret) {
       if (!mfaCode) {
         return res.status(200).json({ requiresMfa: true });
       }
-      const totpValid = verifyTotpCode(user.mfaSecret, mfaCode);
+      // #1944 — a TOTP code is accepted once; its time step is recorded atomically.
+      let totpValid;
+      try {
+        totpValid = await verifyUserTotp(user, mfaCode);
+      } catch (err) {
+        logger.error('[AuthController] TOTP verification failed to record', { error: err.message });
+        return res.status(503).json({ error: 'Authentication service unavailable.', code: 'AUTH_DB_ERROR' });
+      }
       if (!totpValid) {
         // #1943 — Backup codes are single-use. consumeUserBackupCode marks the
         // code used with a conditional write that matches only while the code is

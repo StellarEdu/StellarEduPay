@@ -11,7 +11,9 @@
  *   5. Backup codes are hashed with a slow, salted KDF.
  */
 
-const { verifyTotpCode, verifyBackupCode } = require('../src/controllers/mfaController');
+// Mocked so the test does not load @stellar/stellar-sdk (ESM-only) via the model.
+jest.mock('../src/models/schoolModel', () => ({ findOne: jest.fn() }));
+const { verifyBackupCode } = require('../src/controllers/mfaController');
 const User = require('../src/models/userModel');
 const speakeasy = require('speakeasy');
 const crypto = require('crypto');
