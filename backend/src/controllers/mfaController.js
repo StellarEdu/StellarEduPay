@@ -203,6 +203,41 @@ async function consumeUserBackupCode(userId, code) {
 
 // ── Route handlers ────────────────────────────────────────────────────────────
 
+// ── Second-factor attempt limiting (#1945) ───────────────────────────────────
+// Enrolment verify and disable accept a TOTP code from an authenticated
+// session. A stolen session must not be able to guess codes freely, so failed
+// codes count towards the same per-account lockout that login uses (5 failures
+// in 15 minutes, then 429 until the lock expires). Each failure is audited.
+// authController is required lazily to avoid a load-time cycle.
+
+async function rejectIfMfaLocked(res, user) {
+  const { isLockedOut } = require('./authController');
+  if (await isLockedOut(String(user.email).trim().toLowerCase())) {
+    res.status(429).json({
+      error: 'Too many failed attempts. Account temporarily locked.',
+      code: 'ACCOUNT_LOCKED',
+    });
+    return true;
+  }
+  return false;
+}
+
+async function recordMfaFailure(req, user, reason) {
+  const { recordLoginFailure, auditMfaFailure } = require('./authController');
+  await recordLoginFailure(String(user.email).trim().toLowerCase()).catch(() => {});
+  await auditMfaFailure(req, {
+    userId: String(user._id),
+    email: user.email,
+    schoolId: user.schoolId,
+    reason,
+  });
+}
+
+async function clearMfaFailures(user) {
+  const { clearLoginFailures } = require('./authController');
+  clearLoginFailures(String(user.email).trim().toLowerCase());
+}
+
 // ── User-level MFA route handlers ────────────────────────────────────────────
 // These operate on the authenticated User document (req.user.userId) rather than
 // a school document. User-level MFA takes precedence over school-level MFA at
@@ -289,6 +324,8 @@ async function verifyAndEnableUserMfa(req, res) {
       return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     }
 
+    if (await rejectIfMfaLocked(res, user)) return undefined;
+
     const verifySecret = secret || (user.mfaSecret ? decryptMfaSecret(user.mfaSecret) : null);
     if (!verifySecret) {
       return res.status(400).json({ error: 'MFA setup must be completed first.', code: 'MFA_NOT_SETUP' });
@@ -302,8 +339,10 @@ async function verifyAndEnableUserMfa(req, res) {
     });
 
     if (!valid) {
+      await recordMfaFailure(req, user, 'enrolment_verify');
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
     }
+    await clearMfaFailures(user);
 
     await User.findByIdAndUpdate(userId, {
       $set: {
@@ -429,6 +468,7 @@ async function disableUserMfa(req, res) {
     if (!user.mfaSecret) {
       return res.status(400).json({ error: 'MFA is not configured for this user.', code: 'MFA_NOT_CONFIGURED' });
     }
+    if (await rejectIfMfaLocked(res, user)) return undefined;
 
     const valid = speakeasy.totp.verify({
       secret: decryptMfaSecret(user.mfaSecret),
@@ -438,8 +478,10 @@ async function disableUserMfa(req, res) {
     });
 
     if (!valid) {
+      await recordMfaFailure(req, user, 'disable');
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
     }
+    await clearMfaFailures(user);
 
     await User.findByIdAndUpdate(userId, {
       $set: { mfaEnabled: false, mfaSecret: null, mfaBackupCodes: [] },

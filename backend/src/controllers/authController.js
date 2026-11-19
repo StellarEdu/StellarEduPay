@@ -184,6 +184,29 @@ async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
   return refreshToken;
 }
 
+// ── MFA failure audit (#1945) ─────────────────────────────────────────────────
+// Every wrong second-factor code produces an audit row, whichever endpoint saw
+// it (login, enrolment verify, disable). Audit failures never change the
+// response.
+async function auditMfaFailure(req, { userId, email, schoolId, reason }) {
+  try {
+    await logAudit({
+      schoolId: schoolId || 'system',
+      action: 'MFA_FAILURE',
+      performedBy: email || userId || 'unknown',
+      targetId: String(userId || email || 'unknown'),
+      targetType: 'user',
+      details: { reason },
+      result: 'failure',
+      severity: 'high',
+      ipAddress: req?.ip || null,
+      userAgent: req?.headers?.['user-agent'] || null,
+    });
+  } catch (err) {
+    logger.warn('[AuthController] Failed to write MFA_FAILURE audit row', { error: err.message });
+  }
+}
+
 // ── Login handler ─────────────────────────────────────────────────────────────
 
 async function handleLogin(req, res) {
@@ -283,9 +306,10 @@ async function handleLogin(req, res) {
       }
       const totpValid = verifyTotpCode(user.mfaSecret, mfaCode);
       if (!totpValid) {
-        const bcIdx = verifyBackupCode(user.mfaBackupCodes || [], mfaCode);
+        const bcIdx = await verifyBackupCode(user.mfaBackupCodes || [], mfaCode);
         if (bcIdx === -1) {
           recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid MFA)'));
+          await auditMfaFailure(req, { userId: user._id.toString(), email: user.email, schoolId: user.schoolId, reason: 'login' });
           return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
         }
         const User = require('../models/userModel');
@@ -694,6 +718,7 @@ async function handleChangePassword(req, res) {
 }
 
 module.exports = {
+  auditMfaFailure,
   handleLogin,
   handleRefresh,
   handleLogout,
@@ -711,5 +736,7 @@ module.exports = {
   // Exported for use in mfaController and userController
   issueRefreshToken,
   isLockedOut,
+  recordLoginFailure,
+  clearLoginFailures,
   isSuperAdmin,
 };
