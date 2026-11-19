@@ -19,6 +19,7 @@ jest.mock('../../hooks/AdminAuthContext', () => ({
 
 jest.mock('../../services/api', () => ({
   getSchoolById: jest.fn(() => Promise.resolve({ data: { name: 'Hill School', adminEmail: 'a@b.c', stellarAddress: 'GABC' } })),
+  getWalletHealth: jest.fn(() => Promise.resolve({ data: { warnings: [] } })),
   updateSchoolById: jest.fn(() => Promise.resolve({ data: {} })),
   getSchoolSettings: jest.fn(() => Promise.resolve({ data: { settings: { reminderEnabled: true, reminderIntervalMs: 86400000, maxSyncBatchSize: 20, maintenanceMode: false } } })),
   updateSchoolSettings: jest.fn(() => Promise.resolve({ data: {} })),

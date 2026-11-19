@@ -1,0 +1,45 @@
+# #1938 — settlement-wallet readiness. school_wallet_warning{code} is the number
+# of active schools whose wallet currently raises that readiness warning, set by
+# the daily leader-only wallet-health job.
+groups:
+  - name: school_wallet_health
+    interval: 1h
+    rules:
+      # A school whose wallet has no USDC trustline makes every USDC payment fail
+      # on the payer's side (op_no_trust). Parents see errors; the school sees nothing.
+      - alert: SchoolWalletUsdcTrustlineMissing
+        expr: sum(school_wallet_warning{code="USDC_TRUSTLINE_MISSING"}) > 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} school wallet(s) cannot receive USDC"
+          description: >
+            At least one active school's settlement wallet has no USDC trustline to the
+            pinned issuer while USDC is accepted. USDC payments to it will fail. See
+            GET /api/schools/:schoolId/wallet-health for the affected school.
+
+      # An account that does not exist on the network cannot receive anything.
+      - alert: SchoolWalletAccountNotFound
+        expr: sum(school_wallet_warning{code="ACCOUNT_NOT_FOUND"}) > 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} school wallet(s) do not exist on the Stellar network"
+          description: >
+            An active school's configured settlement address was not found on Horizon.
+            Payments to it cannot be received until the account is funded or the
+            address is corrected.
+
+      # Below the reserve floor a new trustline or sponsored entry cannot be added.
+      - alert: SchoolWalletLowReserveHeadroom
+        expr: sum(school_wallet_warning{code="LOW_RESERVE_HEADROOM"}) > 0
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} school wallet(s) are close to the base reserve"
+          description: >
+            At least one school wallet has less than the minimum headroom above its base
+            reserve. Top it up before adding trustlines or other ledger entries.

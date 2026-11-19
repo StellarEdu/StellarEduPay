@@ -818,6 +818,11 @@
       "middleware": []
     },
     {
+      "method": "GET",
+      "path": "/api/schools/:schoolId/wallet-health",
+      "middleware": []
+    },
+    {
       "method": "PUT",
       "path": "/api/schools/:schoolId/webhook-secret",
       "middleware": []

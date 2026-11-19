@@ -4,6 +4,7 @@ import PageHero from "../components/PageHero";
 import InlineAlert from "../components/admin/InlineAlert";
 import {
   getSchoolById,
+  getWalletHealth,
   updateSchoolById,
   getSchoolSettings,
   updateSchoolSettings,
@@ -417,6 +418,43 @@ function UsersSection({ schoolId, canManage }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+// #1938 — settlement-wallet readiness. Shows the same warnings the create/update
+// checks and the daily job use. Renders nothing when the check cannot run, so a
+// Horizon outage is never shown as "all clear".
+function WalletHealthSection({ schoolId }) {
+  const { t } = useTranslation();
+  const [state, setState] = useState({ status: "loading", data: null });
+
+  useEffect(() => {
+    let active = true;
+    setState({ status: "loading", data: null });
+    getWalletHealth(schoolId)
+      .then(({ data }) => { if (active) setState({ status: "ready", data }); })
+      .catch(() => { if (active) setState({ status: "unavailable", data: null }); });
+    return () => { active = false; };
+  }, [schoolId]);
+
+  if (state.status !== "ready") return null;
+
+  const warnings = state.data.warnings || [];
+  if (warnings.length === 0) {
+    return <InlineAlert tone="success">{t("settings.walletHealthOk", "The settlement wallet is ready to receive payments.")}</InlineAlert>;
+  }
+
+  return (
+    <section className="card admin-section" aria-labelledby="wallet-health-title">
+      <div className="card-header">
+        <h2 id="wallet-health-title" className="card-title">{t("settings.walletHealthTitle", "Settlement wallet")}</h2>
+      </div>
+      <div className="card-body">
+        <ul>
+          {warnings.map((w) => <li key={w.code}>{w.message}</li>)}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const { t } = useTranslation();
   const can = usePermissions();
@@ -429,6 +467,7 @@ export default function SettingsPage() {
         <InlineAlert tone="warning">{t("settings.noSchool")}</InlineAlert>
       ) : (
         <>
+          <WalletHealthSection schoolId={schoolId} />
           <SchoolProfileSection schoolId={schoolId} canEdit={can("settings.write")} />
           <RuntimeSettingsSection schoolId={schoolId} canEdit={can("settings.write")} />
           <PaymentRulesSection />
