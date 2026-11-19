@@ -3,6 +3,7 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
+const tokenService = require('../services/tokenService');
 const School = require('../models/schoolModel');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
@@ -139,7 +140,6 @@ async function findMatchingBackupCodeIndex(mfaBackupCodes, code) {
     if (!entry || entry.used) continue;
     if (isLegacyBackupCodeHash(entry.hash)) continue; // legacy codes rejected
     const stored = entry.hash.slice(BACKUP_CODE_HASH_PREFIX.length);
-    // eslint-disable-next-line no-await-in-loop
     const match = await bcrypt.compare(normalized, stored);
     if (match) return i;
   }
@@ -581,7 +581,6 @@ async function verifyAndEnableUserMfa(req, res) {
     // metadata and re-mints a restricted access token on every silent refresh even
     // after enrolment is complete, keeping the user in the /mfa-setup loop.
     if (req.user?.mfaSetupPending) {
-      const jwt = require('jsonwebtoken');
       const { parseTTL, getStore, issueRefreshToken } = require('./authController');
       const { role, userId: uid, schoolId, roles } = req.user;
 
@@ -590,7 +589,7 @@ async function verifyAndEnableUserMfa(req, res) {
 
       // Build the full, unrestricted payload (no mfaSetupPending).
       const newPayload = { role, userId: uid, schoolId, roles };
-      const newAccessToken = jwt.sign(newPayload, process.env.JWT_SECRET, { expiresIn: accessTTL });
+      const newAccessToken = tokenService.sign(newPayload, { expiresIn: accessTTL }).token;
 
       // Rotate the refresh token: revoke the old family, issue a clean new one.
       const store = getStore();

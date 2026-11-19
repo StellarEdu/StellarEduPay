@@ -8,6 +8,7 @@ const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { maskEmail } = require('../utils/piiRedaction');
 const { logAudit } = require('../services/auditService');
+const tokenService = require('../services/tokenService');
 const {
   getStore,
   revokeAllUserSessions,
@@ -226,13 +227,11 @@ async function handleLogin(req, res) {
 
     clearLoginFailures(loginId);
 
-    const jwt = require('jsonwebtoken');
-    const secret    = process.env.JWT_SECRET;
     const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
     const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
-    const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+    const token = tokenService.sign(jwtPayload, { expiresIn: accessTTL }).token;
 
     const store = getStore();
     let refreshToken;
@@ -322,8 +321,6 @@ async function handleLogin(req, res) {
 
   clearLoginFailures(loginId);
 
-  const jwt = require('jsonwebtoken');
-  const secret    = process.env.JWT_SECRET;
   const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
@@ -354,7 +351,7 @@ async function handleLogin(req, res) {
     roles:    user.roles,
     ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
   };
-  const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+  const token = tokenService.sign(jwtPayload, { expiresIn: accessTTL }).token;
 
   const store = getStore();
   let refreshToken;
@@ -402,8 +399,6 @@ async function handleRefresh(req, res) {
     return res.status(401).json({ error: 'Session has been revoked.', code: 'SESSION_REVOKED' });
   }
 
-  const jwt = require('jsonwebtoken');
-  const secret     = process.env.JWT_SECRET;
   const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
@@ -493,7 +488,7 @@ async function handleRefresh(req, res) {
     }
   }
 
-  const accessToken = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+  const accessToken = tokenService.sign(jwtPayload, { expiresIn: accessTTL }).token;
 
   // Deliver via cookies only — no tokens in response body (#821)
   res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions(accessTTL));

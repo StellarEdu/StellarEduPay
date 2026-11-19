@@ -34,6 +34,9 @@ jest.mock('../src/services/alertService', () => ({
   sendAdminAlert: jest.fn(),
 }));
 
+// Token signing requires JWT_SECRET; set it before the controller is loaded.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
+
 const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');

@@ -12,7 +12,7 @@
  */
 
 const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
+const tokenService = require('./tokenService');
 const config = require('../config');
 const ParentAccessToken = require('../models/parentAccessTokenModel');
 const Student = require('../models/studentModel');
@@ -90,7 +90,7 @@ async function issueParentLink({ schoolId, studentIds, parentEmail, ttlDays, cre
   const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000);
   const tokenId = crypto.randomBytes(16).toString('hex');
 
-  const token = jwt.sign({ typ: 'parent', sid: schoolId }, _signingKey(), {
+  const token = tokenService.signWithKey({ typ: 'parent', sid: schoolId }, _signingKey(), {
     jwtid: tokenId,
     audience: AUDIENCE,
     expiresIn: days * 24 * 3600,
@@ -157,7 +157,7 @@ async function verifyParentToken(token) {
 
   let payload;
   try {
-    payload = jwt.verify(token, _signingKey(), { audience: AUDIENCE, algorithms: ['HS256'] });
+    payload = tokenService.verifyWithKey(token, _signingKey(), { audience: AUDIENCE });
   } catch (err) {
     const code = err.name === 'TokenExpiredError' ? 'PARENT_TOKEN_EXPIRED' : 'PARENT_TOKEN_INVALID';
     throw _error('This link is invalid or has expired', code, 401);

@@ -2,8 +2,9 @@
 
 const School = require('../models/schoolModel');
 const cache = require('../cache');
-const jwt = require('jsonwebtoken');
+const tokenService = require('../services/tokenService');
 const { logAudit } = require('../services/auditService');
+const logger = require('../utils/logger').child('SchoolContext');
 
 const SUPER_ADMIN_AUDIT_WINDOW_MS = 60 * 60 * 1000;
 
@@ -128,30 +129,45 @@ async function resolveSchool(req, res, next) {
     const cookieToken = req.cookies?.admin_token || null;
     const rawToken = cookieToken || bearerToken;
 
+    // Verification goes through tokenService so the same key, algorithm, issuer
+    // and audience pinning applies as in requireSchoolAuth / requireAdminAuth.
+    // Only the verify call is wrapped: an audit or DB failure below must surface,
+    // not be mistaken for an invalid token.
+    let decoded = null;
     if (rawToken) {
       try {
-        const decoded = jwt.verify(rawToken, process.env.JWT_SECRET);
-        const isSuperAdmin =
-          decoded.role === 'admin' ||
-          (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
+        decoded = tokenService.verify(rawToken);
+      } catch (err) {
+        // Not a token we issued, or expired/tampered. No tenant claim can be
+        // trusted from it. Protected routes reject it in requireSchoolAuth or
+        // requireAdminAuth; public routes continue unauthenticated. Logged so
+        // the drop is visible rather than silent.
+        logger.warn('[SchoolContext] Ignoring unverifiable token for tenant binding', {
+          reason: err.name,
+          endpoint: req.originalUrl,
+        });
+      }
+    }
 
-        if (isSuperAdmin) {
-          // Super-admin override is permitted — audit every cross-tenant use.
-          // The env super-admin token carries no schoolId, so it is always
-          // cross-tenant and must be audited too (#1800).
-          if (!decoded.schoolId || decoded.schoolId !== school.schoolId) {
-            await auditSuperAdminAccess(req, decoded, school);
-          }
-        } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
-          // Non-super-admin token for a different tenant — reject immediately.
-          res.set('Cache-Control', 'no-store');
-          return res.status(403).json({
-            error: 'Forbidden. Token schoolId does not match the requested school.',
-            code: 'TENANT_MISMATCH',
-          });
+    if (decoded) {
+      const isSuperAdmin =
+        decoded.role === 'admin' ||
+        (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));
+
+      if (isSuperAdmin) {
+        // Super-admin override is permitted — audit every cross-tenant use.
+        // The env super-admin token carries no schoolId, so it is always
+        // cross-tenant and must be audited too (#1800).
+        if (!decoded.schoolId || decoded.schoolId !== school.schoolId) {
+          await auditSuperAdminAccess(req, decoded, school);
         }
-      } catch {
-        // Malformed/expired token — let the auth middleware handle it downstream.
+      } else if (decoded.schoolId && decoded.schoolId !== school.schoolId) {
+        // Non-super-admin token for a different tenant — reject immediately.
+        res.set('Cache-Control', 'no-store');
+        return res.status(403).json({
+          error: 'Forbidden. Token schoolId does not match the requested school.',
+          code: 'TENANT_MISMATCH',
+        });
       }
     }
 

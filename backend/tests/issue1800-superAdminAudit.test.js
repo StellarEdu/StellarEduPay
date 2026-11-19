@@ -11,13 +11,15 @@
  *   5. Tokens scoped to the same school are not audited.
  */
 
-const jwt = require('jsonwebtoken');
-const School = require('../src/models/schoolModel');
+const tokenService = require('../src/services/tokenService');
 const cache = require('../src/cache');
 const { logAudit } = require('../src/services/auditService');
 const { resolveSchool } = require('../src/middleware/schoolContext');
 
 jest.mock('../src/services/auditService', () => ({ logAudit: jest.fn().mockResolvedValue({}) }));
+// Mocked so the test does not load @stellar/stellar-sdk (ESM-only) via the model.
+jest.mock('../src/models/schoolModel', () => ({ findOne: jest.fn() }));
+const School = require('../src/models/schoolModel');
 
 const SECRET = 'issue1800-test-secret';
 const school = {
@@ -70,10 +72,7 @@ describe('Super-admin school access audit (#1800)', () => {
   });
 
   it('audits the env super-admin token, which carries no schoolId', async () => {
-    const token = jwt.sign(
-      { role: 'admin', username: 'ops@platform.test', userId: 'super_admin', roles: ['super_admin'], iat: 1000001 },
-      SECRET
-    );
+    const token = tokenService.sign({ role: 'admin', username: 'ops@platform.test', userId: 'super_admin', roles: ['super_admin'] }).token;
     const next = jest.fn();
 
     await resolveSchool(makeReq({ token }), makeRes(), next);
@@ -89,7 +88,7 @@ describe('Super-admin school access audit (#1800)', () => {
   });
 
   it('records req.ip and ignores a forged X-Forwarded-For header', async () => {
-    const token = jwt.sign({ role: 'admin', username: 'ops@platform.test', iat: 1000002 }, SECRET);
+    const token = tokenService.sign({ role: 'admin', username: 'ops@platform.test' }).token;
 
     await resolveSchool(
       makeReq({ token, ip: '192.168.1.10', forwardedFor: '203.0.113.99, 192.168.1.10' }),
@@ -104,10 +103,7 @@ describe('Super-admin school access audit (#1800)', () => {
   });
 
   it('attributes the access to the named DB super-admin via userId', async () => {
-    const token = jwt.sign(
-      { role: 'admin', userId: 'user-42', schoolId: 'SCH-OTHER', iat: 1000003 },
-      SECRET
-    );
+    const token = tokenService.sign({ role: 'admin', userId: 'user-42', schoolId: 'SCH-OTHER' }).token;
 
     await resolveSchool(makeReq({ token }), makeRes(), jest.fn());
 
@@ -115,7 +111,7 @@ describe('Super-admin school access audit (#1800)', () => {
   });
 
   it('writes one entry per session, school and hour', async () => {
-    const token = jwt.sign({ role: 'admin', username: 'ops@platform.test', jti: 'sess-dedup', iat: 1000004 }, SECRET);
+    const token = tokenService.sign({ role: 'admin', username: 'ops@platform.test' }).token;
 
     await resolveSchool(makeReq({ token }), makeRes(), jest.fn());
     await resolveSchool(makeReq({ token }), makeRes(), jest.fn());
@@ -125,10 +121,7 @@ describe('Super-admin school access audit (#1800)', () => {
   });
 
   it('does not audit a token scoped to the same school', async () => {
-    const token = jwt.sign(
-      { role: 'admin', userId: 'user-7', schoolId: school.schoolId, iat: 1000005 },
-      SECRET
-    );
+    const token = tokenService.sign({ role: 'admin', userId: 'user-7', schoolId: school.schoolId }).token;
     const next = jest.fn();
 
     await resolveSchool(makeReq({ token }), makeRes(), next);
