@@ -40,7 +40,17 @@ jobs:
       packages: write
     strategy:
       matrix:
-        component: [backend, frontend]
+        include:
+          - component: backend
+            context: backend
+            dockerfile: backend/Dockerfile
+          - component: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+          # Backup tooling image (#1630, #1927); built from the repo root.
+          - component: backup-tools
+            context: .
+            dockerfile: deploy/backup/Dockerfile
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,7 +70,8 @@ jobs:
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.component }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           build-args: |
             APP_VERSION=${{ needs.release-please.outputs.version }}

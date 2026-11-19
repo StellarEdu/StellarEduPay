@@ -7,7 +7,7 @@ kind: Kustomization
 # Image Promotion Workflow:
 #
 #   1. CI pipeline builds images on merge to main and tags them with commit SHA.
-#      Example: stellaredupay/backend:sha-abc1234
+#      Example: ghcr.io/stellaredu/stellaredupay-backend:sha-abc1234
 #
 #   2. Update newTag below to promote the validated build to testnet.
 #      Example: newTag: sha-abc1234
@@ -30,13 +30,13 @@ resources:
   - ../../
 
 images:
-  - name: ghcr.io/mystery-cli/stellaredupay-backend
-    newName: ghcr.io/mystery-cli/stellaredupay-backend
+  - name: ghcr.io/stellaredu/stellaredupay-backend
+    newName: ghcr.io/stellaredu/stellaredupay-backend
     newTag: sha-PLACEHOLDER
-  - name: ghcr.io/mystery-cli/stellaredupay-frontend
-    newName: ghcr.io/mystery-cli/stellaredupay-frontend
+  - name: ghcr.io/stellaredu/stellaredupay-frontend
+    newName: ghcr.io/stellaredu/stellaredupay-frontend
     newTag: sha-PLACEHOLDER
-  - name: stellaredupay/backup-tools
+  - name: ghcr.io/stellaredu/stellaredupay-backup-tools
     newTag: sha-PLACEHOLDER
 
 # Uncomment for private registries:
