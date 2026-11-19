@@ -97,8 +97,18 @@ async function reconcileAll(schoolId) {
 
       for (const s of students) {
         try {
+          // Suspicious payments are settled on-chain but must not credit the
+          // student's balance until reviewed, so they are excluded here.
           const [agg] = await Payment.aggregate([
-            { $match: { schoolId: s.schoolId, studentId: s.studentId, status: 'SUCCESS', deletedAt: null } },
+            {
+              $match: {
+                schoolId: s.schoolId,
+                studentId: s.studentId,
+                status: 'SUCCESS',
+                isSuspicious: { $ne: true },
+                deletedAt: null,
+              },
+            },
             { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
           ]);
           const paymentTotal = agg?.computedTotal ?? 0;
@@ -238,14 +248,25 @@ async function generateReconciliationReport(schoolId) {
       return null;
     }
 
+    // Suspicious payments are still settled on-chain (the school wallet holds
+    // the funds), so they count toward funds received and wallet
+    // reconciliation even though they are excluded from student balances.
     const dbPayments = await Payment.find({ schoolId, status: 'SUCCESS', deletedAt: null }).lean();
 
     // Amounts of different assets (XLM, USDC) must never be summed together.
     // Group credited totals by assetCode so drift is computed per asset.
     const dbTotalsByAsset = {};
+    const pendingReviewByAsset = {};
+    let pendingReviewCount = 0;
     for (const p of dbPayments) {
       const asset = p.assetCode || 'XLM';
       dbTotalsByAsset[asset] = parseFloat(((dbTotalsByAsset[asset] || 0) + (p.amount || 0)).toFixed(7));
+      if (p.isSuspicious === true) {
+        pendingReviewByAsset[asset] = parseFloat(
+          ((pendingReviewByAsset[asset] || 0) + (p.amount || 0)).toFixed(7),
+        );
+        pendingReviewCount++;
+      }
     }
 
     // The chain total is expensive to compute (paginated Horizon fetch + a
@@ -295,6 +316,7 @@ async function generateReconciliationReport(schoolId) {
         drift,
         driftPercentage,
         alertRaised: assetAlert,
+        pendingReviewTotal: pendingReviewByAsset[asset] || 0,
       };
     }
 
@@ -309,6 +331,8 @@ async function generateReconciliationReport(schoolId) {
       details: {
         schoolName: school.name,
         checkTime: new Date().toISOString(),
+        pendingReviewCount,
+        pendingReviewByAsset,
       },
     });
 

@@ -108,6 +108,8 @@ function buildDateRangeFilter({ startDate, endDate, timezone = 'UTC' }) {
  * @returns {Promise<string>} ISO timestamp or '0' if no payments
  */
 async function getDataVersion(schoolId) {
+  // #1972 — suspicious payments are stored as SUCCESS (funds received) and
+  // must invalidate cached reports just like any other settled payment.
   const latest = await Payment.findOne(
     { schoolId, status: 'SUCCESS', deletedAt: null },
     'confirmedAt'
@@ -165,6 +167,23 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         underpaidCount:{ $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
         unknownCount:  { $sum: { $cond: [{ $in: ['$feeValidationStatus', ['valid', 'partial', 'underpaid', 'overpaid']] }, 0, 1] } },
         uniqueStudents:{ $addToSet: '$studentId' },
+        // #1972 — suspicious payments are real money received; count them in
+        // revenue totals but surface how many are still awaiting review.
+        suspiciousCount: { $sum: { $cond: [{ $eq: ['$isSuspicious', true] }, 1, 0] } },
+        pendingReviewCount: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$isSuspicious', true] },
+                  { $eq: [{ $ifNull: ['$reviewStatus', 'pending_review'] }, 'pending_review'] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
         // #1767 — never sum amounts across assets. Collect per-asset sums keyed
         // by assetCode so XLM and USDC stay in separate buckets.
         assetTotals: {
@@ -190,6 +209,8 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         underpaidCount: 1,
         unknownCount: 1,
         uniqueStudentCount: { $size: '$uniqueStudents' },
+        suspiciousCount: 1,
+        pendingReviewCount: 1,
         // #1767 — fold the pushed (asset, amount) pairs into per-asset sums.
         assetTotals: {
           $arrayToObject: {
@@ -253,6 +274,10 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
       underpaidCount: row.underpaidCount,
       unknownCount: row.unknownCount,
       uniqueStudentCount: row.uniqueStudentCount,
+      // #1972 — flagged-but-received payments are included in totals above;
+      // these counters tell consumers how many still need review.
+      suspiciousCount: row.suspiciousCount || 0,
+      pendingReviewCount: row.pendingReviewCount || 0,
       totalFiatAmount: row.totalFiatAmount,
       fiatCurrency: row.fiatCurrency,
       fiatCoverage,
@@ -313,6 +338,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       acc.overpaidCount += row.overpaidCount;
       acc.underpaidCount+= row.underpaidCount;
       acc.unknownCount  += row.unknownCount;
+      acc.suspiciousCount += row.suspiciousCount || 0;
+      acc.pendingReviewCount += row.pendingReviewCount || 0;
       acc.totalFiatAmount = parseFloat((acc.totalFiatAmount + (row.totalFiatAmount || 0)).toFixed(2));
       acc.fiatSnapshotCount += Math.round(((row.fiatCoverage || 0) / 100) * row.paymentCount);
       return acc;
@@ -325,6 +352,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       overpaidCount: 0,
       underpaidCount: 0,
       unknownCount: 0,
+      suspiciousCount: 0,
+      pendingReviewCount: 0,
       totalFiatAmount: 0,
       fiatSnapshotCount: 0,
     }
@@ -480,10 +509,14 @@ function reportToCsv(report) {
   lines.push(`Overpaid,${csvEscape(report.summary.overpaidCount)}`);
   lines.push(`Underpaid,${csvEscape(report.summary.underpaidCount)}`);
   lines.push(`Unknown,${csvEscape(report.summary.unknownCount)}`);
+  // #1972 — suspicious payments are included in the totals above (funds
+  // received) but flagged so reviewers know how many need attention.
+  lines.push(`Suspicious Payments,${csvEscape(report.summary.suspiciousCount || 0)}`);
+  lines.push(`Pending Review,${csvEscape(report.summary.pendingReviewCount || 0)}`);
   lines.push(`Fully Paid Students,${csvEscape(report.summary.fullyPaidStudentCount)}`);
   lines.push('');
   lines.push('--- Daily Breakdown ---');
-  lines.push('Date,Asset,Total Amount,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students');
+  lines.push('Date,Asset,Total Amount,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students,Suspicious,Pending Review');
   for (const row of report.byDate) {
     const assets = Object.entries(row.totals || {});
     if (assets.length === 0) {
@@ -496,6 +529,8 @@ function reportToCsv(report) {
         csvEscape(row.underpaidCount),
         csvEscape(row.unknownCount),
         csvEscape(row.uniqueStudentCount),
+        csvEscape(row.suspiciousCount || 0),
+        csvEscape(row.pendingReviewCount || 0),
       ].join(','));
       continue;
     }
@@ -511,6 +546,8 @@ function reportToCsv(report) {
         csvEscape(row.underpaidCount),
         csvEscape(row.unknownCount),
         csvEscape(row.uniqueStudentCount),
+        csvEscape(row.suspiciousCount || 0),
+        csvEscape(row.pendingReviewCount || 0),
       ].join(','));
     }
   }
@@ -607,11 +644,13 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       { $sort: { class: 1 } },
     ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
 
-    // 5 most recent successful payments (small bounded query, always fast)
+    // 5 most recent successful payments (small bounded query, always fast).
+    // #1972 — suspicious payments are SUCCESS (funds received) and are shown
+    // with their review status rather than hidden.
     Payment.find({ schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null })
       .sort({ confirmedAt: -1 })
       .limit(5)
-      .select('txHash studentId amount feeValidationStatus confirmedAt')
+      .select('txHash studentId amount feeValidationStatus confirmedAt isSuspicious reviewStatus')
       .lean(),
 
     Student.aggregate([
@@ -667,7 +706,9 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
  */
 
 // Current accounting export schema version — increment when columns change shape.
-const ACCOUNTING_SCHEMA_VERSION = 1;
+// #1972 — bumped to 2: added is_suspicious / review_status columns so flagged
+// payments (which are real funds received) are visible to accounting.
+const ACCOUNTING_SCHEMA_VERSION = 2;
 
 const ACCOUNTING_HEADERS_V1 = [
   'schema_version', 'exported_at', 'school_id', 'tx_hash', 'student_id', 'class',
@@ -675,6 +716,9 @@ const ACCOUNTING_HEADERS_V1 = [
   'fee_validation_status', 'excess_amount',
   'fiat_amount_at_payment', 'fiat_currency_at_payment', 'fiat_rate_at_payment',
   'reference_code', 'status',
+  // #1972 — suspicion is separate from settlement; these columns flag rows
+  // that are received but still awaiting review.
+  'is_suspicious', 'review_status',
 ];
 
 /**
@@ -738,6 +782,8 @@ function formatAccountingRow(r, exportedAt) {
     fiatRate,
     csvEscape(r.referenceCode ?? ''),
     csvEscape(r.status),
+    r.isSuspicious ? 'true' : 'false',
+    csvEscape(r.reviewStatus ?? ''),
   ].map(v => csvEscape(v)).join(',');
 }
 

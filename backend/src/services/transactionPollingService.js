@@ -114,13 +114,17 @@ async function processTransaction(tx, school, fencingToken) {
   }
 
   const { payOp, memo, asset } = valid;
+  // detectAsset returns { assetCode, assetType, assetIssuer } — the code lives
+  // on `assetCode`, never `asset.code` (#1555, #1970). Fall back to the
+  // operation's own asset code so per-asset limits are always applied.
+  const assetCode = asset?.assetCode || payOp?.asset?.assetCode || 'XLM';
   // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
   const paymentAmount = normalizeToNumber(payOp.amount);
 
-  // Validate payment amount is within configured limits
+  // Validate payment amount is within configured limits for THIS asset
   const limitValidation = await validatePaymentAmount(paymentAmount, {
     schoolId,
-    asset: asset?.code,
+    asset: assetCode,
   });
   if (!limitValidation.valid) {
     logger.warn('Payment outside limits', {
@@ -128,6 +132,7 @@ async function processTransaction(tx, school, fencingToken) {
       correlationId,
       schoolId,
       amount: paymentAmount,
+      asset: assetCode,
       error: limitValidation.error
     });
     return { processed: false, reason: 'amount_limit_exceeded' };
@@ -248,7 +253,7 @@ async function processTransaction(tx, school, fencingToken) {
     networkFee,
     // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
     fiatSnapshot: isConfirmed && !isSuspicious
-      ? await captureFiatSnapshot(paymentAmount, asset || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
+      ? await captureFiatSnapshot(paymentAmount, assetCode || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
       : null,
   };
 
@@ -287,7 +292,7 @@ async function processTransaction(tx, school, fencingToken) {
       confirmationStatus,
     });
 
-    return { processed: true, payment: paymentData };
+    return { processed: true, payment: paymentData, payments: [paymentData] };
   } catch (error) {
     if (error.code === 11000) {
       return { processed: false, reason: 'duplicate' };
@@ -454,9 +459,14 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
           if (tx.paging_token) cursor = tx.paging_token;
           continue;
         }
+        // processTransaction records one row per creditable operation (#1760),
+        // so a single tx may yield several payments. Count each recorded row.
         const result = await processTransaction(tx, scope, fencingToken);
-        if (result.processed) {
-          processedCount++;
+        const recorded = result.processed
+          ? (Array.isArray(result.payments) ? result.payments.length : 1)
+          : 0;
+        if (recorded > 0) {
+          processedCount += recorded;
           if (retired) {
             logger.warn('Payment credited to a retired wallet address', {
               schoolId: school.schoolId,
