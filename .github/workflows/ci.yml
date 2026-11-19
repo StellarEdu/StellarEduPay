@@ -170,6 +170,22 @@ jobs:
         run: cd backend && npm ci --ignore-scripts
       - name: Run ESLint (backend)
         run: cd backend && npx eslint src/ --max-warnings=0
+      # Fail when backend code requires a package that backend/package.json does
+      # not declare. Hoisting from the root package.json used to hide these
+      # (issue #1928). Unused-dependency reports are informational only.
+      - name: Check for undeclared backend dependencies (depcheck)
+        run: |
+          cd backend
+          npx depcheck --json > depcheck-report.json || true
+          node -e "
+            const report = require('./depcheck-report.json');
+            const missing = Object.keys(report.missing || {});
+            if (missing.length > 0) {
+              console.error('Undeclared backend dependencies: ' + missing.join(', '));
+              process.exit(1);
+            }
+            console.log('No undeclared backend dependencies.');
+          "
       - name: Verify root package-lock.json is in sync
         run: npm ci --dry-run
       - name: Verify frontend package-lock.json is in sync
