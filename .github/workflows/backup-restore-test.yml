@@ -12,11 +12,19 @@ on:
 
 permissions:
   contents: read
+  # Needed by the notify step to open an issue when no Slack webhook is configured.
+  issues: write
 
 jobs:
   backup-restore-test:
     name: Run test-backup-recovery.sh
     runs-on: ubuntu-latest
+    env:
+      # Public fixture key (not a secret) required by seed-test-data.js to pass
+      # its School validation. SEED_STUDENT_COUNT produces a fixture large enough
+      # to clear MIN_SEED_DOCUMENTS and the backup size floor (issue #1926).
+      SCHOOL_WALLET_ADDRESS: GDHFRS5UNHDG3NSIOOVQDSSCKNCPXH3C2MMB2ALH4VYLJ5DEJIKFJAOV
+      SEED_STUDENT_COUNT: "300"
     services:
       mongodb:
         image: mongo:7
@@ -30,6 +38,16 @@ jobs:
           --health-start-period 10s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+
+      # The seed script and backend models require the backend's dependencies
+      # (dotenv, mongoose). Installed before any Node code runs (issue #1926).
+      - name: Install backend dependencies
+        run: cd backend && npm ci --ignore-scripts
 
       - name: Install MongoDB Database Tools (mongodump/mongorestore/mongosh)
         run: |
@@ -83,10 +101,18 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.BACKUP_ALERT_SLACK_WEBHOOK }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "::warning::BACKUP_ALERT_SLACK_WEBHOOK not set; skipping failure notification"
+          # A failed restore test must never be silent. Prefer Slack; if no
+          # webhook is configured, open a GitHub issue so someone is told (#1926).
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            payload=$(printf '{"text":"Backup restore test failed on main: %s"}' "$RUN_URL")
+            curl -sS -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"
             exit 0
           fi
-          payload=$(printf '{"text":"Backup restore test failed on main: %s"}' "$RUN_URL")
-          curl -sS -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"
+          echo "::warning::BACKUP_ALERT_SLACK_WEBHOOK not set; opening a GitHub issue instead"
+          gh issue create \
+            --title "Backup restore test failed on main" \
+            --body "The scheduled backup restore test failed: $RUN_URL. Set the BACKUP_ALERT_SLACK_WEBHOOK secret to receive these alerts in Slack."
+

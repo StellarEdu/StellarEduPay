@@ -29,7 +29,10 @@
  * Safe to re-run: all writes use upsert so repeated runs produce identical records.
  */
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../backend/.env') });
+// dotenv is resolved from backend/node_modules (the same tree as mongoose below)
+// so CI only needs `npm ci` inside backend/ — the root package.json is not installed there.
+require(require('path').resolve(__dirname, '../backend/node_modules/dotenv'))
+  .config({ path: require('path').resolve(__dirname, '../backend/.env') });
 
 // Patch env so config/index.js validation passes when models are loaded.
 process.env.SCHOOL_WALLET_ADDRESS = process.env.SCHOOL_WALLET_ADDRESS || 'PLACEHOLDER';
