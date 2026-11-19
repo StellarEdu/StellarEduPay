@@ -23,6 +23,7 @@ const EMPTY_FORM = {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
+  const { t } = useTranslation();
   const [fees, setFees]             = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
