@@ -4,11 +4,11 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const tokenService = require('../services/tokenService');
+const schoolCache = require('../services/schoolCacheInvalidator');
 const School = require('../models/schoolModel');
 const User = require('../models/userModel');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
-const schoolCache = require('../services/schoolCacheInvalidator');
 const { revokeAllUserSessions } = require('../services/sessionStore');
 
 // ── MFA secret encryption (AES-256-GCM) ──────────────────────────────────────
@@ -211,43 +211,6 @@ async function verifyBackupCode(mfaBackupCodes, code) {
 }
 
 /**
- * Atomically consume a backup code on a School document.
- * The filter requires the matched array element to still be unused, so two
- * concurrent requests presenting the same code cannot both succeed (#1533).
- * Returns the updated document, or null if the code was already used/invalid.
- */
-async function consumeSchoolBackupCode(slug, code) {
-  const school = await School.findOne({ slug, isActive: true });
-  if (!school) return { status: 'not_found' };
-
-  const rate = checkBackupCodeRateLimit(`school:${slug}`);
-  if (!rate.allowed) return { status: 'rate_limited', retryAfterMs: rate.retryAfterMs };
-
-  const idx = await findMatchingBackupCodeIndex(school.mfaBackupCodes, code);
-  if (idx === -1) {
-    recordBackupCodeAttempt(`school:${slug}`);
-    return { status: 'invalid' };
-  }
-
-  const updated = await School.findOneAndUpdate(
-    {
-      slug,
-      isActive: true,
-      [`mfaBackupCodes.${idx}.used`]: false,
-    },
-    { $set: { [`mfaBackupCodes.${idx}.used`]: true } },
-    { new: true }
-  );
-  if (!updated) {
-    // Lost the race — another request consumed this code.
-    recordBackupCodeAttempt(`school:${slug}`);
-    return { status: 'invalid' };
-  }
-  clearBackupCodeAttempts(`school:${slug}`);
-  return { status: 'ok', school: updated };
-}
-
-/**
  * Atomically consume a backup code on a User document.
  * Returns { status, user? }.
  */
@@ -280,74 +243,23 @@ async function consumeUserBackupCode(userId, code) {
 
 // ── Route handlers ────────────────────────────────────────────────────────────
 
-/**
- * POST /api/auth/mfa/setup
- * Headers: X-School-Slug
- *
- * Generates a TOTP secret and backup codes, stores them (unenabled) on the
- * school document, and returns the plaintext versions to the caller.
- * MFA is not active until /mfa/verify is called.
- */
-async function setupMfa(req, res) {
-  const slug = req.headers['x-school-slug'];
-  if (!slug) {
-    return res.status(400).json({ error: 'X-School-Slug header is required.', code: 'MISSING_SCHOOL_SLUG' });
+// ── Second-factor attempt limiting (#1945) ───────────────────────────────────
+// Enrolment verify and disable accept a TOTP code from an authenticated
+// session. A stolen session must not be able to guess codes freely, so failed
+// codes count towards the same per-account lockout that login uses (5 failures
+// in 15 minutes, then 429 until the lock expires). Each failure is audited.
+// authController is required lazily to avoid a load-time cycle.
+
+async function rejectIfMfaLocked(res, user) {
+  const { isLockedOut } = require('./authController');
+  if (await isLockedOut(String(user.email).trim().toLowerCase())) {
+    res.status(429).json({
+      error: 'Too many failed attempts. Account temporarily locked.',
+      code: 'ACCOUNT_LOCKED',
+    });
+    return true;
   }
-
-  try {
-    const school = await School.findOne({ slug, isActive: true });
-    if (!school) {
-      return res.status(404).json({ error: 'School not found.', code: 'SCHOOL_NOT_FOUND' });
-    }
-
-    // #1180 — Refuse to overwrite credentials when MFA is already active.
-    // An authenticated admin must call /mfa/disable (with a valid TOTP code)
-    // before re-issuing a new secret, preventing silent credential overwrites.
-    if (school.mfaEnabled) {
-      return res.status(400).json({
-        error: 'MFA is already active for this school. Disable MFA before setting it up again.',
-        code: 'MFA_ALREADY_ACTIVE',
-      });
-    }
-
-    const generated = speakeasy.generateSecret({
-      name: `StellarEduPay (${school.name || slug})`,
-      issuer: 'StellarEduPay',
-    });
-    // Real speakeasy returns `base32`; test mock may return `secret` — accept both
-    const totpSecret = generated.base32 || generated.secret;
-    const qrCode = generated.otpauth_url;
-
-    const backupCodes = generateBackupCodes();
-    const backupCodeHashes = await hashBackupCodes(backupCodes);
-
-    // Store encrypted secret + hashed backup codes (pending; mfaEnabled stays false)
-    school.mfaSecret = encryptMfaSecret(totpSecret);
-    school.mfaBackupCodes = backupCodeHashes.map((hash) => ({ hash, used: false }));
-    await school.save();
-    schoolCache.invalidate(school);
-
-    // #1180 — Audit credential generation so every setup attempt is traceable.
-    await logAudit({
-      schoolId: school.schoolId || slug,
-      action: 'MFA_SECRET_GENERATED',
-      performedBy: req.admin?.username || req.user?.userId || req.admin?.email || req.user?.email || 'admin',
-      targetId: school._id?.toString() || slug,
-      targetType: 'school',
-      details: { slug },
-      result: 'success',
-      severity: 'high',
-    });
-
-    return res.json({
-      secret: totpSecret,
-      qrCode,
-      backupCodes,
-    });
-  } catch (err) {
-    logger.error('[MFA] setupMfa error', { error: err.message });
-    return res.status(500).json({ error: 'Failed to set up MFA.', code: 'MFA_SETUP_ERROR' });
-  }
+  return false;
 }
 
 /**
@@ -475,6 +387,22 @@ async function disableMfa(req, res) {
   }
 }
 
+async function recordMfaFailure(req, user, reason) {
+  const { recordLoginFailure, auditMfaFailure } = require('./authController');
+  await recordLoginFailure(String(user.email).trim().toLowerCase()).catch(() => {});
+  await auditMfaFailure(req, {
+    userId: String(user._id),
+    email: user.email,
+    schoolId: user.schoolId,
+    reason,
+  });
+}
+
+async function clearMfaFailures(user) {
+  const { clearLoginFailures } = require('./authController');
+  clearLoginFailures(String(user.email).trim().toLowerCase());
+}
+
 // ── User-level MFA route handlers ────────────────────────────────────────────
 // These operate on the authenticated User document (req.user.userId) rather than
 // a school document. User-level MFA takes precedence over school-level MFA at
@@ -561,6 +489,8 @@ async function verifyAndEnableUserMfa(req, res) {
       return res.status(404).json({ error: 'User not found.', code: 'USER_NOT_FOUND' });
     }
 
+    if (await rejectIfMfaLocked(res, user)) return undefined;
+
     const verifySecret = secret || (user.mfaSecret ? decryptMfaSecret(user.mfaSecret) : null);
     if (!verifySecret) {
       return res.status(400).json({ error: 'MFA setup must be completed first.', code: 'MFA_NOT_SETUP' });
@@ -569,8 +499,10 @@ async function verifyAndEnableUserMfa(req, res) {
     const valid = await verifyAndRecordTotp(User, { _id: userId }, verifySecret, code);
 
     if (!valid) {
+      await recordMfaFailure(req, user, 'enrolment_verify');
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
     }
+    await clearMfaFailures(user);
 
     await User.findByIdAndUpdate(userId, {
       $set: {
@@ -811,12 +743,15 @@ async function disableUserMfa(req, res) {
     if (!user.mfaSecret) {
       return res.status(400).json({ error: 'MFA is not configured for this user.', code: 'MFA_NOT_CONFIGURED' });
     }
+    if (await rejectIfMfaLocked(res, user)) return undefined;
 
     const valid = await verifyAndRecordTotp(User, { _id: userId }, decryptMfaSecret(user.mfaSecret), code);
 
     if (!valid) {
+      await recordMfaFailure(req, user, 'disable');
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
     }
+    await clearMfaFailures(user);
 
     await User.findByIdAndUpdate(userId, {
       $set: { mfaEnabled: false, mfaSecret: null, mfaBackupCodes: [] },
@@ -846,10 +781,6 @@ async function disableUserMfa(req, res) {
 }
 
 module.exports = {
-  setupMfa,
-  verifyAndEnableMfa,
-  disableMfa,
-  regenerateBackupCodes,
   setupUserMfa,
   verifyAndEnableUserMfa,
   disableUserMfa,
@@ -858,7 +789,6 @@ module.exports = {
   verifyBackupCode,
   hashBackupCode,
   hashBackupCodes,
-  consumeSchoolBackupCode,
   consumeUserBackupCode,
   normalizeBackupCode,
   isLegacyBackupCodeHash,

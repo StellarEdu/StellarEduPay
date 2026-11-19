@@ -8,7 +8,9 @@ const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const tokenService = require('../services/tokenService');
 const { maskEmail } = require('../utils/piiRedaction');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { logAudit } = require('../services/auditService');
+const { isAdminTotpConfigured, verifyAdminTotp } = require('../services/adminTotpService');
 const {
   getStore,
   revokeAllUserSessions,
@@ -211,6 +213,136 @@ async function recordBackupCodeUse(user, updatedUser) {
   }
 }
 
+// ── MFA failure audit (#1945) ─────────────────────────────────────────────────
+// Every wrong second-factor code produces an audit row, whichever endpoint saw
+// it (login, enrolment verify, disable). Audit failures never change the
+// response.
+async function auditMfaFailure(req, { userId, email, schoolId, reason }) {
+  try {
+    await logAudit({
+      schoolId: schoolId || 'system',
+      action: 'MFA_FAILURE',
+      performedBy: email || userId || 'unknown',
+      targetId: String(userId || email || 'unknown'),
+      targetType: 'user',
+      details: { reason },
+      result: 'failure',
+      severity: 'high',
+      ipAddress: req?.ip || null,
+      userAgent: req?.headers?.['user-agent'] || null,
+    });
+  } catch (err) {
+    logger.warn('[AuthController] Failed to write MFA_FAILURE audit row', { error: err.message });
+  }
+}
+
+// ── Env super-admin login (#1947) ─────────────────────────────────────────────
+
+async function handleEnvAdminLogin(req, res, { username, password, mfaCode }) {
+  if (process.env.ADMIN_LOGIN_DISABLED === 'true') {
+    return res.status(403).json({
+      error: 'Environment super-admin login is disabled. Use a database super-admin account.',
+      code: 'ADMIN_LOGIN_DISABLED',
+    });
+  }
+
+  const envUsername     = process.env.ADMIN_USERNAME;
+  const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
+  const envPassword     = process.env.ADMIN_PASSWORD;
+
+  if (!envUsername || (!envPassword && !envPasswordHash)) {
+    return res.status(500).json({
+      error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
+      code: 'AUTH_MISCONFIGURED',
+    });
+  }
+
+  const adminTotpConfigured = isAdminTotpConfigured();
+  if (process.env.NODE_ENV === 'production' && !adminTotpConfigured) {
+    // Refuse the break-glass login rather than let one factor guard every tenant.
+    logger.error('[AuthController] ADMIN_TOTP_SECRET is required for env super-admin login in production');
+    return res.status(500).json({
+      error: 'Server misconfiguration: ADMIN_TOTP_SECRET is required in production.',
+      code: 'AUTH_MISCONFIGURED',
+    });
+  }
+
+  const loginId = String(username).trim().toLowerCase();
+  const usernameMatch = safeEqual(loginId, envUsername);
+  let credValid = false;
+
+  if (envPasswordHash) {
+    credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
+  } else {
+    credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
+  }
+
+  if (!credValid) {
+    // Only failures against the real admin username count towards its lockout.
+    if (usernameMatch) {
+      recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (env admin invalid credentials)'));
+    }
+    return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  if (adminTotpConfigured) {
+    if (!mfaCode) {
+      return res.status(200).json({ requiresMfa: true });
+    }
+    const totp = await verifyAdminTotp(mfaCode);
+    if (!totp.ok) {
+      await recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (env admin invalid MFA)'));
+      await auditMfaFailure(req, { userId: 'super_admin', email: null, schoolId: 'system', reason: totp.reason });
+      return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
+    }
+  }
+
+  clearLoginFailures(loginId);
+
+  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+
+  const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
+  // #1939/#1940 — sign through tokenService and bind the token to the refresh session.
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
+
+  const store = getStore();
+  let refreshToken;
+  try {
+    refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req, sessionId);
+  } catch (err) {
+    logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
+    return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
+  }
+
+  // #1947 — every break-glass login is high-severity and alerts an admin.
+  try {
+    await logAudit({
+      schoolId: 'system',
+      action: 'SUPER_ADMIN_LOGIN',
+      performedBy: 'env-super-admin',
+      targetId: 'super_admin',
+      targetType: 'user',
+      details: { mfaVerified: adminTotpConfigured },
+      result: 'success',
+      severity: 'high',
+      ipAddress: req.ip || null,
+      userAgent: req.headers?.['user-agent'] || null,
+    });
+  } catch (err) {
+    logger.warn('[AuthController] Failed to write SUPER_ADMIN_LOGIN audit row', { error: err.message });
+  }
+  sendAdminAlert('Environment super-admin login', { ip: req.ip || 'unknown', mfaVerified: adminTotpConfigured })
+    .catch(() => logger.debug('[AuthController] super-admin login alert missed'));
+
+  // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
+  res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+  res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
+
+  return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
+}
+
 // ── Login handler ─────────────────────────────────────────────────────────────
 
 async function handleLogin(req, res) {
@@ -224,59 +356,16 @@ async function handleLogin(req, res) {
     });
   }
 
-  // ── ENV super-admin path ───────────────────────────────────────────────────
+  // ── ENV super-admin path (#1947) ──────────────────────────────────────────
+  // The path is chosen explicitly: a request with a username and no email is
+  // the break-glass login. Every DB user signs in with an email, so their
+  // failures are never recorded against the env account's identity.
+  if (!email && username) {
+    return handleEnvAdminLogin(req, res, { username, password, mfaCode });
+  }
+
   if (!email) {
-    const envUsername     = process.env.ADMIN_USERNAME;
-    const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
-    const envPassword     = process.env.ADMIN_PASSWORD;
-
-    if (!envUsername || (!envPassword && !envPasswordHash)) {
-      return res.status(500).json({
-        error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
-        code: 'AUTH_MISCONFIGURED',
-      });
-    }
-
-    const usernameMatch = loginId ? safeEqual(loginId, envUsername) : false;
-    let credValid = false;
-
-    if (envPasswordHash) {
-      credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
-    } else {
-      credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
-    }
-
-    if (!credValid) {
-      recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid credentials)'));
-      return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
-    }
-
-    clearLoginFailures(loginId);
-
-    const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
-    const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
-
-    const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
-    // #1939 — sign through tokenService so the token matches what requireAdminAuth verifies.
-    // #1940 — the access token's sid is the refresh session id, so revoking the
-    // session (logout, revoke, password change) denies both tokens.
-    const sessionId = crypto.randomBytes(16).toString('hex');
-    const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
-
-    const store = getStore();
-    let refreshToken;
-    try {
-      refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req, sessionId);
-    } catch (err) {
-      logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
-      return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
-    }
-
-    // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
-    res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
-    res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
-
-    return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
+    return res.status(400).json({ error: 'email or username is required.', code: 'VALIDATION_ERROR' });
   }
 
   // ── DB user path ───────────────────────────────────────────────────────────
@@ -335,6 +424,7 @@ async function handleLogin(req, res) {
         }
         if (consumed.status !== 'ok') {
           recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid MFA)'));
+          await auditMfaFailure(req, { userId: user._id.toString(), email: user.email, schoolId: user.schoolId, reason: 'login' });
           return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
         }
         await recordBackupCodeUse(user, consumed.user);
@@ -705,13 +795,6 @@ async function handleChangePassword(req, res) {
     });
   }
 
-  if (newPassword.length < 8) {
-    return res.status(400).json({
-      error: 'New password must be at least 8 characters.',
-      code: 'VALIDATION_ERROR',
-    });
-  }
-
   const userId = req.admin?.userId;
 
   // Super-admin (env-based) path
@@ -720,6 +803,13 @@ async function handleChangePassword(req, res) {
       error: 'Super-admin password must be changed via environment variables.',
       code: 'FORBIDDEN',
     });
+  }
+
+  // Cheap, identity-free policy checks run before any DB work or bcrypt, so
+  // oversized or trivially weak input is rejected without a hash computation.
+  const earlyPolicy = validatePasswordPolicy(newPassword);
+  if (!earlyPolicy.valid) {
+    return res.status(400).json({ error: earlyPolicy.message, code: earlyPolicy.code });
   }
 
   let user;
@@ -738,6 +828,18 @@ async function handleChangePassword(req, res) {
   const currentValid = Boolean(currentPassword) && await bcrypt.compare(currentPassword, user.passwordHash);
   if (!currentValid) {
     return res.status(401).json({ error: 'Current password is incorrect.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  // Identity-aware policy (email local part / username) and reuse check.
+  const policy = validatePasswordPolicy(newPassword, { email: user.email });
+  if (!policy.valid) {
+    return res.status(400).json({ error: policy.message, code: policy.code });
+  }
+  if (await bcrypt.compare(newPassword, user.passwordHash)) {
+    return res.status(400).json({
+      error: 'New password must be different from your current password.',
+      code: 'PASSWORD_REUSED',
+    });
   }
 
   const newHash = await bcrypt.hash(newPassword, 12);
@@ -780,6 +882,7 @@ async function handleChangePassword(req, res) {
 }
 
 module.exports = {
+  auditMfaFailure,
   handleLogin,
   handleRefresh,
   handleLogout,
@@ -797,5 +900,7 @@ module.exports = {
   // Exported for use in mfaController and userController
   issueRefreshToken,
   isLockedOut,
+  recordLoginFailure,
+  clearLoginFailures,
   isSuperAdmin,
 };

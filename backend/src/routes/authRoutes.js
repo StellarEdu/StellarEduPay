@@ -4,10 +4,9 @@ const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
 const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleChangePassword } = require('../controllers/authController');
 const {
-  setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
 } = require('../controllers/mfaController');
-const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
+const { requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 const router = express.Router();
@@ -20,13 +19,23 @@ const loginLimiter = rl(
   { error: 'Too many login attempts, please try again later.', code: 'RATE_LIMIT_EXCEEDED' }
 );
 
+// #1945 — refresh and logout were unthrottled. Refresh costs a store lookup per
+// call and can be flooded with random tokens, so both get a per-IP limit. The
+// explicit `name` keeps this counter separate from other limiters in Redis.
+const sessionLimiter = rl(
+  60 * 1000,
+  60,
+  { error: 'Too many requests, please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
+  { name: 'auth:session' }
+);
+
 // ── Core auth routes ──────────────────────────────────────────────────────────
 // login / logout / refresh are public or semi-public — no auditContext (no
 // authenticated actor yet at the time they run). The controllers themselves
 // call logAudit with their own context when needed.
 router.post('/login', loginLimiter, handleLogin);
-router.post('/refresh', handleRefresh);
-router.post('/logout', handleLogout);
+router.post('/refresh', sessionLimiter, handleRefresh);
+router.post('/logout', sessionLimiter, handleLogout);
 // #1769 — /me must work for every authenticated role (school owners, staff,
 // read_only), not just super-admins; the frontend derives schoolId/roles here.
 router.get('/me', requireSchoolAuth(), handleMe);
@@ -43,13 +52,10 @@ router.get('/sessions', requireSchoolAuth(), handleListSessions);
 // #1554 — session revocation changes auth state; attribute the actor.
 router.delete('/sessions/:sessionId', requireSchoolAuth(), auditContext, handleRevokeSession);
 
-// ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
-// #1554 — all MFA mutations (setup/verify/disable/backup) affect authentication
-// state and must appear in the audit trail with the acting admin's identity.
-router.post('/mfa/setup',   requireAdminAuth, auditContext, setupMfa);
-router.post('/mfa/verify',  requireAdminAuth, auditContext, verifyAndEnableMfa);
-router.post('/mfa/disable', requireAdminAuth, auditContext, disableMfa);
-router.post('/mfa/backup-codes/regenerate', requireAdminAuth, auditContext, regenerateBackupCodes);
+// #1946 — The school-level MFA endpoints (/mfa/setup, /mfa/verify,
+// /mfa/disable, /mfa/backup-codes/regenerate) were removed. They managed a
+// shared per-school TOTP secret and authenticated backup-code regeneration with
+// one process-wide password. Per-user MFA below is the only supported path.
 
 // ── User-level TOTP / MFA routes (any authenticated user) ────────────────────
 router.post('/mfa/user/setup',   requireSchoolAuth(), auditContext, setupUserMfa);

@@ -316,12 +316,6 @@ const schoolSchema = new mongoose.Schema(
       type: [String],
       default: ['JSS1', 'JSS2', 'JSS3', 'SS1', 'SS2', 'SS3'],
     },
-    mfaBackupCodes: [
-      {
-        hash: { type: String, required: true },
-        used: { type: Boolean, default: false },
-      },
-    ],
   },
   { timestamps: true }
 );
@@ -335,6 +329,8 @@ schoolSchema.set('toJSON', {
   transform: (doc, ret) => {
     delete ret.jwtSecret;
     delete ret.internalNotes;
+    // #1946 — school-level MFA secrets were removed; these deletes stay so any
+    // legacy values still present before migration 037 runs are never serialised.
     delete ret.mfaSecret;
     delete ret.mfaBackupCodes;
     return ret;

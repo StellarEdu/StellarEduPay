@@ -103,7 +103,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('returns 400 when currentPassword is missing', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { newPassword: 'newpass123' } }), res,
+        makeReq({ body: { newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._status).toBe(400);
       expect(res._json.code).toBe('VALIDATION_ERROR');
@@ -118,13 +118,13 @@ describe('POST /api/auth/change-password (#1360)', () => {
       expect(res._json.code).toBe('VALIDATION_ERROR');
     });
 
-    it('returns 400 when newPassword is shorter than 8 characters', async () => {
+    it('returns 400 PASSWORD_TOO_SHORT when newPassword is shorter than 12 characters (#1948)', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
         makeReq({ body: { currentPassword: 'current', newPassword: 'short' } }), res,
       );
       expect(res._status).toBe(400);
-      expect(res._json.code).toBe('VALIDATION_ERROR');
+      expect(res._json.code).toBe('PASSWORD_TOO_SHORT');
     });
   });
 
@@ -133,7 +133,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
       const res = makeRes();
       await authController.handleChangePassword(
         makeReq({
-          body:  { currentPassword: 'current', newPassword: 'newpass123' },
+          body:  { currentPassword: 'current', newPassword: 'Fresh-Passphrase-2026' },
           admin: { userId: 'super_admin' },
         }),
         res,
@@ -146,7 +146,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
       const res = makeRes();
       await authController.handleChangePassword(
         makeReq({
-          body:  { currentPassword: 'current', newPassword: 'newpass123' },
+          body:  { currentPassword: 'current', newPassword: 'Fresh-Passphrase-2026' },
           admin: {},
         }),
         res,
@@ -160,7 +160,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
       mockFindById.mockResolvedValue(null);
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'current', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'current', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._status).toBe(404);
     });
@@ -171,7 +171,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
 
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'wrongpass', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'wrongpass', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._status).toBe(401);
       expect(res._json.code).toBe('INVALID_CREDENTIALS');
@@ -188,7 +188,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('updates passwordHash in the database with the new hash', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
         'user-123',
@@ -199,7 +199,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('returns 200 with a success message', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._status).toBe(200);
       expect(res._json.message).toMatch(/password changed/i);
@@ -208,7 +208,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('response message mentions session invalidation (#1360)', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._json.message).toMatch(/sessions have been invalidated/i);
     });
@@ -216,7 +216,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('clears the access token HttpOnly cookie so caller must re-login (#1360)', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._cleared).toContain('admin_token');
     });
@@ -224,7 +224,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
     it('clears the refresh token HttpOnly cookie so stolen tokens are invalidated (#1360)', async () => {
       const res = makeRes();
       await authController.handleChangePassword(
-        makeReq({ body: { currentPassword: 'correct', newPassword: 'newpass123' } }), res,
+        makeReq({ body: { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' } }), res,
       );
       expect(res._cleared).toContain('admin_refresh_token');
     });
@@ -239,7 +239,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
       const res = makeRes();
       await authController.handleChangePassword(
         makeReq({
-          body:  { currentPassword: 'correct', newPassword: 'newpass1234' },
+          body:  { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' },
           admin: { userId: 'user-xyz' },
         }),
         res,
@@ -267,7 +267,7 @@ describe('POST /api/auth/change-password (#1360)', () => {
       const res = makeRes();
       await authController.handleChangePassword(
         makeReq({
-          body:  { currentPassword: 'correct', newPassword: 'newpass1234' },
+          body:  { currentPassword: 'correct', newPassword: 'Fresh-Passphrase-2026' },
           admin: { userId },
         }),
         res,
