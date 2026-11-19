@@ -3,36 +3,23 @@
 const logger = require('../utils/logger').child('AuthMiddleware');
 const { logAudit } = require('../services/auditService');
 const { get, set } = require('../cache');
-const { sendAdminAlert } = require('../services/alertService');
-const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { hashIp, stripQueryString } = require('../utils/piiRedaction');
 const User = require('../models/userModel');
 const School = require('../models/School');
 const tokenService = require('../services/tokenService');
-
-// ── IP failure tracking constants ──────────────────────────────────────────────
-const IP_FAIL_WINDOW = 300;  // 5 minutes (seconds)
-const IP_FAIL_THRESHOLD = 5; // block after 5 failures
-const IP_BLOCK_TTL = 900;    // 15 minutes (seconds)
+const {
+  findActiveBlock,
+  recordAuthFailure,
+  BLOCK_TTL,
+} = require('../services/authIpBlockService');
 
 // Missing-credential requests are not counted towards a block, but they still
 // reach the server, so they are audited at most once per IP per window.
 const MISSING_TOKEN_AUDIT_WINDOW = 60; // seconds
 
-// Counter and block keys use the raw IP on purpose: they are short-lived Redis
-// entries that must match across replicas, and hashIp() uses a per-process
-// secret, so its output differs between pods. Raw IPs never reach logs,
-// alerts or audit rows (see handleAuthFailure).
-function ipFailKey(ip) {
-  return `ip_auth_fail:${ip}`;
-}
-
-function ipBlockKey(ip) {
-  return `ip_blocked:${ip}`;
-}
-
+// Keyed by hashIp so the in-process audit sampler never holds a raw address.
 function missingTokenAuditKey(ip) {
-  return `auth_missing_audit:${ip}`;
+  return `auth_missing_audit:${hashIp(ip)}`;
 }
 
 // X-School-ID is attacker-controlled at this point (no token has been verified),
@@ -46,6 +33,19 @@ async function resolveClaimedSchoolId(headerValue) {
     logger.warn('[AuthMiddleware] Failed to verify claimed school', { error: err.message });
     return undefined;
   }
+}
+
+// Cookie first, then Bearer header. Both middlewares use the same precedence.
+function presentedToken(req) {
+  const authHeader = req.headers?.['authorization'];
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const cookieToken = req.cookies?.admin_token || null;
+  return cookieToken || bearerToken;
+}
+
+function sendIpBlocked(res) {
+  if (typeof res.set === 'function') res.set('Retry-After', String(BLOCK_TTL));
+  return res.status(429).json({ error: 'Too many requests, IP temporarily blocked.', code: 'IP_BLOCKED' });
 }
 
 // ── Session revocation check ──────────────────────────────────────────────────
@@ -127,41 +127,11 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
   }
 
   if (countTowardsBlock) {
-    const failKey = ipFailKey(ip);
-    const blockKey = ipBlockKey(ip);
-
-    // Try Redis first (cluster-wide counting), fall back to in-process cache
-    let failCount = 0;
-    const redis = getRedisClient();
-    if (redis && isRedisReady()) {
-      try {
-        failCount = await redis.incr(failKey);
-        if (failCount === 1) await redis.expire(failKey, IP_FAIL_WINDOW);
-
-        if (failCount >= IP_FAIL_THRESHOLD) {
-          await redis.set(blockKey, '1', 'EX', IP_BLOCK_TTL);
-          set(blockKey, true, IP_BLOCK_TTL); // also cache in-memory fallback
-          await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
-        }
-      } catch (err) {
-        logger.warn('[AuthMiddleware] Redis error tracking IP failure', { error: err.message, ip });
-        // Fall through to in-process fallback
-        failCount = (get(failKey) || 0) + 1;
-        set(failKey, failCount, IP_FAIL_WINDOW);
-        if (failCount >= IP_FAIL_THRESHOLD) {
-          set(blockKey, true, IP_BLOCK_TTL);
-          await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
-        }
-      }
-    } else {
-      // Redis not available, use in-process cache (per-replica, not cluster-wide)
-      failCount = (get(failKey) || 0) + 1;
-      set(failKey, failCount, IP_FAIL_WINDOW);
-      if (failCount >= IP_FAIL_THRESHOLD) {
-        set(blockKey, true, IP_BLOCK_TTL);
-        await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
-      }
-    }
+    // Blocks are scoped to (IP, presented token). A shared NAT address is only
+    // blocked for the credential that keeps failing; the IP-wide backstop is high.
+    await recordAuthFailure({ ip, token: presentedToken(req) }).catch((err) => {
+      logger.error('[AuthMiddleware] Failed to record auth failure', { error: err.message, ipHash });
+    });
   }
 
   return res.status(401).json({ error: reason, code });
@@ -173,30 +143,11 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
 
 async function requireAdminAuth(req, res, next) {
   const ip = req.ip || req.connection?.remoteAddress || 'unknown';
-  const blockKey = ipBlockKey(ip);
+  const token = presentedToken(req);
 
-  // Check Redis first for cluster-wide block, then local cache fallback
-  const redis = getRedisClient();
-  let isBlocked = false;
-  if (redis && isRedisReady()) {
-    try {
-      isBlocked = await redis.exists(blockKey);
-    } catch (err) {
-      logger.debug('[AuthMiddleware] Redis block check failed', { error: err.message, ip });
-      isBlocked = get(blockKey) ? 1 : 0;
-    }
-  } else {
-    isBlocked = get(blockKey) ? 1 : 0;
+  if (await findActiveBlock({ ip, token })) {
+    return sendIpBlocked(res);
   }
-
-  if (isBlocked) {
-    return res.status(429).json({ error: 'Too many requests, IP temporarily blocked.', code: 'IP_BLOCKED' });
-  }
-
-  const authHeader = req.headers['authorization'];
-  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const cookieToken = req.cookies?.admin_token || null;
-  const token = cookieToken || bearerToken;
 
   if (!token) {
     // A missing credential is "not logged in yet", not a brute-force attempt —
@@ -259,30 +210,11 @@ async function requireAdminAuth(req, res, next) {
 function requireSchoolAuth(allowedRoles = []) {
   return async function schoolAuthMiddleware(req, res, next) {
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
-    const blockKey = ipBlockKey(ip);
+    const token = presentedToken(req);
 
-    // Check Redis first for cluster-wide block, then local cache fallback
-    const redis = getRedisClient();
-    let isBlocked = false;
-    if (redis && isRedisReady()) {
-      try {
-        isBlocked = await redis.exists(blockKey);
-      } catch (err) {
-        logger.debug('[AuthMiddleware] Redis block check failed', { error: err.message, ip });
-        isBlocked = get(blockKey) ? 1 : 0;
-      }
-    } else {
-      isBlocked = get(blockKey) ? 1 : 0;
+    if (await findActiveBlock({ ip, token })) {
+      return sendIpBlocked(res);
     }
-
-    if (isBlocked) {
-      return res.status(429).json({ error: 'Too many requests, IP temporarily blocked.', code: 'IP_BLOCKED' });
-    }
-
-    const authHeader = req.headers['authorization'];
-    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    const cookieToken = req.cookies?.admin_token || null;
-    const token = cookieToken || bearerToken;
 
     if (!token) {
       // See requireAdminAuth: a missing credential is not a brute-force attempt.
@@ -358,7 +290,9 @@ function requireSchoolAuth(allowedRoles = []) {
     const headerSchoolId = req.headers['x-school-id'];
     const isEnvSuperAdmin = decoded.role === 'admin';
     if (!isEnvSuperAdmin && headerSchoolId && decoded.schoolId && String(decoded.schoolId) !== String(headerSchoolId)) {
-      return handleAuthFailure(req, res, ip, 'Token school does not match requested school.', 'TENANT_MISMATCH');
+      // A stale school selection is a client mistake, not a guessing attempt, so it
+      // is audited but never counts towards an IP or credential block (#1950).
+      return handleAuthFailure(req, res, ip, 'Token school does not match requested school.', 'TENANT_MISMATCH', { countTowardsBlock: false });
     }
 
     // Role check

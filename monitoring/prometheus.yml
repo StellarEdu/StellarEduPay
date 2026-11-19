@@ -7,6 +7,7 @@ rule_files:
   - "alerts/horizon_poll.yml"
   - "alerts/payment_limits.yml"
   - "alerts/receipts.yml"
+  - "alerts/auth_ip_blocks.yml"
   - "alerts/webhook_alerts.yml"
   - "alerts/api_errors.yml"
   - "alerts/api_latency.yml"

@@ -37,8 +37,15 @@ const {
   discardDeadLetterEvent,
   getOutboxStats,
 } = require('../controllers/outboxAdminController');
+const { listIpBlocks, clearIpBlock } = require('../controllers/authIpBlockAdminController');
 const { requireAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
+
+// GET /api/admin/ip-blocks — active auth brute-force blocks, hashed IPs only (#1950)
+router.get('/ip-blocks', requireAdminAuth, listIpBlocks);
+
+// POST /api/admin/ip-blocks/:ipHash/clear — lift blocks for one hashed IP (#1950)
+router.post('/ip-blocks/:ipHash/clear', requireAdminAuth, auditContext, clearIpBlock);
 
 // POST /api/admin/log-level — change log level at runtime
 router.post('/log-level', requireAdminAuth, auditContext, setLogLevel);

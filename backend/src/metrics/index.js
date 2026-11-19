@@ -24,7 +24,7 @@ new client.Gauge({
       for (const { _id, count } of counts) {
         this.set({ status: _id }, count);
       }
-    } catch (_) {
+    } catch {
       // DB may not be ready yet — scrape still succeeds with stale/zero values
     }
   },
@@ -98,7 +98,7 @@ new client.Gauge({
         const m = dlqResult.value.metrics;
         this.set({ queue: 'transaction-dead-letter' }, m.waiting || 0);
       }
-    } catch (_) {
+    } catch {
       // Redis may not be configured — scrape still succeeds
     }
   },
@@ -132,7 +132,7 @@ new client.Gauge({
         // Dead-lettered jobs land as waiting in the DLQ (no DLQ worker drains them).
         this.set({ queue: 'transaction-dead-letter' }, (m.waiting || 0) + (m.failed || 0));
       }
-    } catch (_) {
+    } catch {
       // Redis may not be configured — scrape still succeeds
     }
   },
@@ -148,7 +148,7 @@ new client.Gauge({
     try {
       const { connections } = require('../services/sseService').getStats();
       this.set(connections);
-    } catch (_) {
+    } catch {
       // SSE service not loaded — scrape still succeeds
     }
   },
@@ -162,7 +162,7 @@ new client.Gauge({
     try {
       const { schools } = require('../services/sseService').getStats();
       this.set(schools);
-    } catch (_) {
+    } catch {
       // SSE service not loaded — scrape still succeeds
     }
   },
@@ -184,7 +184,7 @@ new client.Gauge({
       for (const [status, count] of Object.entries(counts)) {
         this.set({ status }, count);
       }
-    } catch (_) {
+    } catch {
       // DB may not be ready yet — scrape still succeeds
     }
   },
@@ -204,7 +204,7 @@ const stuckPaymentsGauge = new client.Gauge({
         deletedAt: null,
       });
       this.set(count);
-    } catch (_) {
+    } catch {
       // DB may not be ready yet — scrape still succeeds with stale/zero values
     }
   },
@@ -234,6 +234,15 @@ const receiptGenerationFailuresTotal = new client.Counter({
 const sendAdminAlertTotal = new client.Counter({
   name: 'send_admin_alert_total',
   help: 'Total number of admin alerts triggered',
+  registers: [registry],
+});
+
+// Brute-force blocks applied by the auth middleware, by scope (#1950).
+// kind="ip" is the whole-IP backstop; kind="credential" is one token from one IP.
+const authIpBlocksTotal = new client.Counter({
+  name: 'auth_ip_blocks_total',
+  help: 'Total number of authentication blocks applied, by kind',
+  labelNames: ['kind'],
   registers: [registry],
 });
 
@@ -388,7 +397,7 @@ const mongoConnectionState = new client.Gauge({
     try {
       const mongoose = require('mongoose');
       this.set(mongoose.connection.readyState);
-    } catch (_) {
+    } catch {
       // mongoose not loaded — scrape still succeeds
     }
   },
@@ -439,7 +448,7 @@ const leaderElectionIsLeader = new client.Gauge({
     try {
       const leaderElection = require('../services/leaderElection');
       this.set(leaderElection.isLeader() ? 1 : 0);
-    } catch (_) {
+    } catch {
       // Leader election may not be wired up yet — scrape still succeeds
     }
   },
@@ -453,7 +462,7 @@ const leaderElectionTenureSeconds = new client.Gauge({
     try {
       const leaderElection = require('../services/leaderElection');
       this.set(leaderElection.getTenureSeconds());
-    } catch (_) {
+    } catch {
       // Leader election may not be wired up yet — scrape still succeeds
     }
   },
@@ -530,7 +539,7 @@ new client.Gauge({
         { sort: { createdAt: 1 }, lean: true }
       );
       this.set(oldest ? (Date.now() - oldest.createdAt.getTime()) / 1000 : 0);
-    } catch (_) {
+    } catch {
       // DB may not be ready yet — scrape still succeeds with stale/zero values
     }
   },
@@ -555,6 +564,7 @@ module.exports = {
   suspiciousPaymentFlagged,
   receiptGenerationFailuresTotal,
   sendAdminAlertTotal,
+  authIpBlocksTotal,
   transactionQueueDepth,
   paymentLimitTriggeredTotal,
   paymentBatchTotal,
