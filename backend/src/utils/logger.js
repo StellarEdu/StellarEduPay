@@ -6,16 +6,24 @@
  * Provides consistent logging with levels, timestamps, and context.
  * Supports runtime log level changes via setLevel() — no server restart needed.
  *
- * File transports use DailyRotateFile (winston-daily-rotate-file):
- *   - logs/combined-%DATE%.log  — all levels
- *   - logs/error-%DATE%.log     — errors only
+ * Output always goes to stdout/stderr as one JSON object per line. That is
+ * the only sink in containers (Kubernetes, Docker), where the root filesystem
+ * may be read-only and the platform already collects and rotates stdout.
+ *
+ * File transports (winston-daily-rotate-file) are OPT-IN for bare-metal or VM
+ * installs. They are only attached when LOG_TO_FILE=true (default: false):
+ *   - $LOG_DIR/combined-%DATE%.log  — all levels   (LOG_DIR default: logs)
+ *   - $LOG_DIR/error-%DATE%.log     — errors only
  * Rotation is controlled by LOG_MAX_SIZE (default: 100m) and
- * LOG_MAX_FILES (default: 14d) environment variables.
+ * LOG_MAX_FILES (default: 14d) when file logging is enabled.
+ *
+ * Issue #1934: previously the file transports were always attached, so a pod
+ * with a read-only root filesystem failed on every write to ./logs.
  */
 
 const winston = require('winston');
 require('winston-daily-rotate-file');
-const { redactPii, stripQueryString } = require('./piiRedaction');
+const { redactPii } = require('./piiRedaction');
 const { currentTraceIds } = require('../tracing');
 
 const path = require('path');

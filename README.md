@@ -782,25 +782,35 @@ LOG_LEVEL=debug npm run dev
 
 #### File Logging
 
-Application logs are also written to disk with daily rotation:
-- **Combined:** `logs/combined-YYYY-MM-DD.log` (all levels)
-- **Errors only:** `logs/error-YYYY-MM-DD.log` (errors only)
+Logs are always written to stdout/stderr as structured JSON, one object per line.
+That is the only sink in Docker and Kubernetes, where the root filesystem is
+usually read-only and the platform collects and rotates container output.
+
+File logging is **opt-in** (issue #1934) and off by default. Enable it on bare-metal
+or VM installs only:
+- **Combined:** `$LOG_DIR/combined-YYYY-MM-DD.log` (all levels)
+- **Errors only:** `$LOG_DIR/error-YYYY-MM-DD.log` (errors only)
 
 Configuration via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOG_MAX_SIZE` | `100m` | Size before file rotation |
-| `LOG_MAX_FILES` | `14d` | Keep this many rotated files |
+| `LOG_TO_FILE` | `false` | Set to `true` to write the rotating files above |
+| `LOG_DIR` | `logs` | Writable directory for the log files (use an absolute path in production) |
+| `LOG_MAX_SIZE` | `100m` | Size before file rotation (file logging only) |
+| `LOG_MAX_FILES` | `14d` | Keep this many rotated files (file logging only) |
 
 Examples:
 ```bash
-# Keep larger files
-LOG_MAX_SIZE=500m npm start
+# Bare metal: write rotating files to an absolute path
+LOG_TO_FILE=true LOG_DIR=/var/log/stellaredupay npm start
 
-# Shorter retention
-LOG_MAX_FILES=7d npm start
+# Keep larger files, shorter retention
+LOG_TO_FILE=true LOG_MAX_SIZE=500m LOG_MAX_FILES=7d npm start
 ```
+
+Do not set `LOG_TO_FILE=true` in Kubernetes or Docker. Use `kubectl logs`, or a
+log aggregator such as Loki or CloudWatch, instead.
 
 ### Recommended Alerting Thresholds
 

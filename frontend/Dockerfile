@@ -20,6 +20,16 @@ RUN npm ci --ignore-scripts
 ARG NEXT_PUBLIC_API_URL=""
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
+# Issue #1933: the /api/* same-origin proxy (next.config.js `rewrites`) is
+# resolved by `next build` and written into the routes manifest. It must be
+# declared as an ARG here — Docker silently drops undeclared build args, so the
+# value never reached the build and the image baked in http://localhost:5000,
+# which is the frontend container itself. The default matches the compose
+# service name and the k8s configmap (http://backend:5000). To point an image
+# at a different backend, rebuild it with --build-arg BACKEND_PROXY_TARGET=...
+ARG BACKEND_PROXY_TARGET=http://backend:5000
+ENV BACKEND_PROXY_TARGET=$BACKEND_PROXY_TARGET
+
 # NEXT_PUBLIC_STELLAR_NETWORK is intentionally NOT set at build time.
 # The runtime value is fetched from GET /api/public-config at startup.
 # Setting it here would re-introduce the build-time bake-in problem.
