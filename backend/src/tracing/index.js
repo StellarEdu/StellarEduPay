@@ -4,13 +4,14 @@
  * Distributed tracing (OpenTelemetry) — #1636.
  *
  * OFF BY DEFAULT. Set OTEL_TRACING_ENABLED=true to turn it on. The OTel SDK
- * packages are optional: they are loaded lazily and are not part of the
- * default install, so an image built without them simply logs a warning and
- * runs with tracing disabled. To enable tracing in an image:
+ * packages are regular backend dependencies (#1929), loaded lazily so that
+ * tracing costs nothing when disabled. If they fail to load, development logs
+ * a warning and runs without tracing; production (NODE_ENV=production) refuses
+ * to start, so a misconfigured deployment is noticed immediately.
  *
- *   npm install @opentelemetry/api @opentelemetry/sdk-node \
- *     @opentelemetry/auto-instrumentations-node \
- *     @opentelemetry/exporter-trace-otlp-http
+ * Span exports are scrubbed: query strings are removed from URL attributes and
+ * secret-looking parameters (token, password, ...) are masked in every string
+ * attribute before the exporter sees them.
  *
  * Auto-instrumentation covers http/express (incoming requests and outgoing
  * axios calls, which also propagates W3C `traceparent` to webhook receivers),
@@ -52,12 +53,77 @@ function isEnabled() {
 }
 
 /**
+ * Attribute keys that carry a full URL or query string. Query strings are
+ * dropped entirely: parent-portal and password-reset tokens travel in them.
+ */
+const URL_ATTRIBUTE_KEYS = new Set(['http.url', 'url.full', 'http.target']);
+
+/**
+ * Secret-looking query/form parameters. Anything matching is masked in every
+ * string attribute and span name, whatever instrumentation produced it.
+ */
+const SECRET_PARAM_RE = /((?:^|[?&;\s"'])(?:access_token|refresh_token|reset_token|token|password|secret|api[_-]?key|code)=)[^&;\s"'#]*/gi;
+
+function redactString(value) {
+  return value.replace(SECRET_PARAM_RE, '$1[REDACTED]');
+}
+
+const QUERY_ONLY_ATTRIBUTE_KEYS = new Set(['url.query', 'http.query']);
+
+function redactAttributeValue(key, value) {
+  if (typeof value !== 'string') return value;
+  if (QUERY_ONLY_ATTRIBUTE_KEYS.has(key)) return value ? '[REDACTED]' : value;
+  if (URL_ATTRIBUTE_KEYS.has(key)) {
+    const cut = value.indexOf('?');
+    if (cut !== -1) return `${value.slice(0, cut)}?[REDACTED]`;
+  }
+  return redactString(value);
+}
+
+/**
+ * Wraps the real exporter so that every span is scrubbed before it leaves the
+ * process. Done at export time so it covers all instrumentations, not just
+ * http.
+ */
+class RedactingSpanExporter {
+  constructor(inner) {
+    this.inner = inner;
+  }
+
+  export(spans, resultCallback) {
+    for (const span of spans) {
+      if (typeof span.name === 'string') span.name = redactString(span.name);
+      if (span.attributes) {
+        for (const key of Object.keys(span.attributes)) {
+          span.attributes[key] = redactAttributeValue(key, span.attributes[key]);
+        }
+      }
+    }
+    return this.inner.export(spans, resultCallback);
+  }
+
+  forceFlush() {
+    return typeof this.inner.forceFlush === 'function' ? this.inner.forceFlush() : Promise.resolve();
+  }
+
+  shutdown() {
+    return this.inner.shutdown();
+  }
+}
+
+/**
  * Start the OTel SDK. Must run before express, mongoose, ioredis etc. are
  * required so auto-instrumentation can patch them — app.js calls it first.
  *
+ * In production (NODE_ENV=production) a missing SDK is a startup error rather
+ * than a silent downgrade, so operators who asked for tracing notice at once.
+ *
+ * @param {object} [options]
+ * @param {object} [options.traceExporter] exporter override (tests use an
+ *   in-memory exporter); defaults to OTLP over HTTP.
  * @returns {boolean} whether tracing is active
  */
-function initTracing() {
+function initTracing(options = {}) {
   if (enabled) return true;
   if (process.env.OTEL_TRACING_ENABLED !== 'true') return false;
 
@@ -75,17 +141,20 @@ function initTracing() {
       `deployment.environment=${process.env.NODE_ENV || 'development'}`,
     ].filter(Boolean).join(',');
 
+    const innerExporter = options.traceExporter || new OTLPTraceExporter();
+
     sdk = new NodeSDK({
-      traceExporter: new OTLPTraceExporter(),
+      traceExporter: new RedactingSpanExporter(innerExporter),
       instrumentations: [
         getNodeAutoInstrumentations({
           // fs and dns spans are noise for this service.
           '@opentelemetry/instrumentation-fs': { enabled: false },
           '@opentelemetry/instrumentation-dns': { enabled: false },
           '@opentelemetry/instrumentation-net': { enabled: false },
-          // Never record health probes / metrics scrapes as traces.
+          // Metrics scrapes are high-frequency noise. Health probes are traced
+          // (see #1929 acceptance criteria).
           '@opentelemetry/instrumentation-http': {
-            ignoreIncomingRequestHook: (req) => /^\/(health|metrics)/.test(req.url || ''),
+            ignoreIncomingRequestHook: (req) => /^\/metrics(?:[/?]|$)/.test(req.url || ''),
           },
         }),
       ],
@@ -105,6 +174,9 @@ function initTracing() {
     sdk = null;
     api = null;
     enabled = false;
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(`[Tracing] OTEL_TRACING_ENABLED=true but the OpenTelemetry SDK could not be loaded: ${err.message}`);
+    }
     // eslint-disable-next-line no-console
     console.warn(JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -219,6 +291,7 @@ function currentTraceIds() {
 
 module.exports = {
   initTracing,
+  redactString,
   shutdownTracing,
   isEnabled,
   withSpan,

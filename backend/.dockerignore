@@ -1,0 +1,22 @@
+# Keep the build context small and free of secrets and host artifacts (#1930).
+# node_modules is installed inside the image from the lockfile, never copied
+# from the host (host builds of native modules do not match the image's libc).
+node_modules
+npm-debug.log*
+
+# Secrets and local configuration. Never bake these into an image.
+.env
+.env.*
+
+# Runtime output and test/coverage artifacts.
+logs
+*.log
+coverage
+tests
+
+# Version control and editor/OS noise.
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
