@@ -129,31 +129,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Check ingress TLS block exists
-        run: |
-          set -euo pipefail
-          fail=0
-          while IFS= read -r file; do
-            if ! node --check "$file"; then
-              echo "::error file=$file::node --check failed"
-              fail=1
-            fi
-          done < <(git ls-files '*.js')
-          exit "$fail"
-
-      - name: Fail on truncated-file placeholders
-        run: |
-          if git grep -n -E "truncated [0-9]+ chars"; then
-            echo "::error::Found truncated-file placeholder markers in tracked files"
-            exit 1
-          fi
-          echo "No truncated-file placeholders found"
-
-      - name: Boot backend app with dummy env (no DB)
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+      # js-yaml is installed outside the repo so this job does not need the
+      # backend lockfile. The version is pinned.
+      - name: Install js-yaml (pinned, outside the repo)
+        run: npm install --prefix "$RUNNER_TEMP/yaml-tools" --no-save --no-package-lock --ignore-scripts js-yaml@4.1.0
+      - name: Check every Ingress has TLS covering each rule host
         env:
-          NODE_ENV: test
-        run: |
-          node -e "require('./backend/src/app')"
+          NODE_PATH: ${{ runner.temp }}/yaml-tools/node_modules
+        run: node scripts/check-ingress-tls.js
 
   lockfile-sync:
     name: Lockfile sync

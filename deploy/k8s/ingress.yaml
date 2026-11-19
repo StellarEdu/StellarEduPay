@@ -14,12 +14,14 @@ metadata:
 spec:
   ingressClassName: nginx
   # TLS configuration — certificate termination at the Ingress
+  # Replace stellaredupay.example.com in BOTH places (here and rules[].host).
+  # CI (scripts/check-ingress-tls.js, #1923) fails when a rule host is not covered by a tls host.
   tls:
     - hosts:
         - stellaredupay.example.com
       secretName: stellaredupay-tls
   rules:
-    - host: YOUR_DOMAIN_HERE  # Replace with your domain name (e.g., stellaredupay.example.com)
+    - host: stellaredupay.example.com
       http:
         paths:
           # API traffic goes directly to the backend; /api prefix is preserved
