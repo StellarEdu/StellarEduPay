@@ -5,8 +5,9 @@ const { logAudit } = require('../services/auditService');
 const { get, set } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
-const { hashIp } = require('../utils/piiRedaction');
+const { hashIp, stripQueryString } = require('../utils/piiRedaction');
 const User = require('../models/userModel');
+const School = require('../models/School');
 const tokenService = require('../services/tokenService');
 
 // ── IP failure tracking constants ──────────────────────────────────────────────
@@ -14,12 +15,37 @@ const IP_FAIL_WINDOW = 300;  // 5 minutes (seconds)
 const IP_FAIL_THRESHOLD = 5; // block after 5 failures
 const IP_BLOCK_TTL = 900;    // 15 minutes (seconds)
 
+// Missing-credential requests are not counted towards a block, but they still
+// reach the server, so they are audited at most once per IP per window.
+const MISSING_TOKEN_AUDIT_WINDOW = 60; // seconds
+
+// Counter and block keys use the raw IP on purpose: they are short-lived Redis
+// entries that must match across replicas, and hashIp() uses a per-process
+// secret, so its output differs between pods. Raw IPs never reach logs,
+// alerts or audit rows (see handleAuthFailure).
 function ipFailKey(ip) {
   return `ip_auth_fail:${ip}`;
 }
 
 function ipBlockKey(ip) {
   return `ip_blocked:${ip}`;
+}
+
+function missingTokenAuditKey(ip) {
+  return `auth_missing_audit:${ip}`;
+}
+
+// X-School-ID is attacker-controlled at this point (no token has been verified),
+// so it is only recorded as a claim when it names a school that actually exists.
+async function resolveClaimedSchoolId(headerValue) {
+  if (typeof headerValue !== 'string' || !headerValue) return undefined;
+  try {
+    const school = await School.exists({ schoolId: headerValue });
+    return school ? headerValue : undefined;
+  } catch (err) {
+    logger.warn('[AuthMiddleware] Failed to verify claimed school', { error: err.message });
+    return undefined;
+  }
 }
 
 // ── Session revocation check ──────────────────────────────────────────────────
@@ -66,22 +92,39 @@ async function checkSessionRevoked(decoded) {
 
 async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock = true } = {}) {
   const ipHash = hashIp(ip);
-  logger.warn(`Failed auth attempt: ${reason}`, { ipHash, endpoint: req.originalUrl, code });
+  const endpoint = stripQueryString(req.originalUrl);
+  logger.warn(`Failed auth attempt: ${reason}`, { ipHash, endpoint, code });
 
-  const schoolId = req.headers['x-school-id'] || 'system';
+  // Every failure is audited under the system tenant, never under a tenant the
+  // caller names. Missing-credential probes are sampled to one row per IP per window.
+  let shouldAudit = true;
+  if (code === 'MISSING_AUTH_TOKEN') {
+    shouldAudit = !get(missingTokenAuditKey(ip));
+    if (shouldAudit) set(missingTokenAuditKey(ip), true, MISSING_TOKEN_AUDIT_WINDOW);
+  }
 
-  await logAudit({
-    schoolId,
-    action: 'auth_failure',
-    performedBy: 'anonymous',
-    targetId: 'admin_auth',
-    targetType: 'school',
-    details: { ip, endpoint: req.originalUrl, code, reason },
-    result: 'failure',
-    errorMessage: reason,
-    ipAddress: ip,
-    userAgent: req.headers?.['user-agent'],
-  });
+  if (shouldAudit) {
+    const claimedSchoolId = await resolveClaimedSchoolId(req.headers?.['x-school-id']);
+
+    await logAudit({
+      schoolId: 'system',
+      action: 'auth_failure',
+      performedBy: 'anonymous',
+      targetType: 'auth',
+      details: {
+        ipHash,
+        endpoint,
+        code,
+        reason,
+        ...(claimedSchoolId ? { claimedSchoolId } : {}),
+      },
+      result: 'failure',
+      errorMessage: reason,
+      // Stored hashed, consistent with the logging policy in docs/privacy.md.
+      ipAddress: ipHash,
+      userAgent: req.headers?.['user-agent'],
+    });
+  }
 
   if (countTowardsBlock) {
     const failKey = ipFailKey(ip);
@@ -98,7 +141,7 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
         if (failCount >= IP_FAIL_THRESHOLD) {
           await redis.set(blockKey, '1', 'EX', IP_BLOCK_TTL);
           set(blockKey, true, IP_BLOCK_TTL); // also cache in-memory fallback
-          await sendAdminAlert(`IP ${ip} blocked due to repeated auth failures`, { ip, endpoint: req.originalUrl });
+          await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
         }
       } catch (err) {
         logger.warn('[AuthMiddleware] Redis error tracking IP failure', { error: err.message, ip });
@@ -107,7 +150,7 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
         set(failKey, failCount, IP_FAIL_WINDOW);
         if (failCount >= IP_FAIL_THRESHOLD) {
           set(blockKey, true, IP_BLOCK_TTL);
-          await sendAdminAlert(`IP ${ip} blocked due to repeated auth failures`, { ip, endpoint: req.originalUrl });
+          await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
         }
       }
     } else {
@@ -116,7 +159,7 @@ async function handleAuthFailure(req, res, ip, reason, code, { countTowardsBlock
       set(failKey, failCount, IP_FAIL_WINDOW);
       if (failCount >= IP_FAIL_THRESHOLD) {
         set(blockKey, true, IP_BLOCK_TTL);
-        await sendAdminAlert(`IP ${ip} blocked due to repeated auth failures`, { ip, endpoint: req.originalUrl });
+        await sendAdminAlert(`IP ${ipHash} blocked due to repeated auth failures`, { ipHash, endpoint });
       }
     }
   }
