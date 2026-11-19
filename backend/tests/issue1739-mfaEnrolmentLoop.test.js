@@ -92,20 +92,20 @@ const mockUserBase = {
 };
 
 // Mutable so tests can flip mfaEnabled after the verify step.
-let liveUserState = { ...mockUserBase };
+let mockLiveUserState = { ...mockUserBase };
 
 jest.mock('../src/models/userModel', () => ({
-  findOne:         jest.fn(async () => ({ ...liveUserState })),
-  findById:        jest.fn(async () => ({ ...liveUserState, save: jest.fn().mockResolvedValue(true) })),
+  findOne:         jest.fn(async () => ({ ...mockLiveUserState })),
+  findById:        jest.fn(async () => ({ ...mockLiveUserState, save: jest.fn().mockResolvedValue(true) })),
   findByIdAndUpdate: jest.fn(async (id, update) => {
     // Simulate the update so subsequent findById calls see mfaEnabled:true
     if (update?.$set?.mfaEnabled !== undefined) {
-      liveUserState.mfaEnabled = update.$set.mfaEnabled;
+      mockLiveUserState.mfaEnabled = update.$set.mfaEnabled;
     }
     if (update?.$set?.mfaSecret !== undefined) {
-      liveUserState.mfaSecret = update.$set.mfaSecret;
+      mockLiveUserState.mfaSecret = update.$set.mfaSecret;
     }
-    return { ...liveUserState };
+    return { ...mockLiveUserState };
   }),
 }));
 
@@ -201,7 +201,7 @@ function decodeToken(token) {
 describe('Issue #1739: REQUIRE_MFA enrolment loop', () => {
   beforeEach(() => {
     // Reset live user state to "not enrolled" for each test
-    liveUserState = {
+    mockLiveUserState = {
       ...mockUserBase,
       mfaEnabled: false,
       mfaSecret: null,
@@ -504,8 +504,8 @@ describe('Issue #1739: REQUIRE_MFA enrolment loop', () => {
       });
 
       // At this point the live user record shows mfaEnabled:true (enrolled).
-      liveUserState.mfaEnabled = true;
-      liveUserState.mfaSecret  = 'encrypted-secret-value';
+      mockLiveUserState.mfaEnabled = true;
+      mockLiveUserState.mfaSecret  = 'encrypted-secret-value';
 
       const req = {
         cookies: { admin_refresh_token: refreshToken },
@@ -526,8 +526,8 @@ describe('Issue #1739: REQUIRE_MFA enrolment loop', () => {
 
     it('DOES set mfaSetupPending on the new token when user is still not enrolled', async () => {
       // User has not yet enrolled — mfaEnabled remains false.
-      liveUserState.mfaEnabled = false;
-      liveUserState.mfaSecret  = null;
+      mockLiveUserState.mfaEnabled = false;
+      mockLiveUserState.mfaSecret  = null;
 
       const store = authController.getStore();
       const refreshToken = 'rt-still-pending';

@@ -257,6 +257,8 @@ const schoolSchema = new mongoose.Schema(
      */
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String, default: null },
+    // Last accepted TOTP time step; see userModel.mfaLastUsedStep (#1944).
+    mfaLastUsedStep: { type: Number, default: null },
     /**
      * MFA policy flag (issue #1553).
      *

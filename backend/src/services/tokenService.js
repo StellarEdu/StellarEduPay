@@ -96,12 +96,25 @@ function verify(token) {
   return decoded;
 }
 
+// Key-explicit helpers for token families that intentionally use their own
+// key and audience (e.g. parent portal links). They keep jsonwebtoken confined
+// to this module; access tokens must use sign()/verify() above.
+function signWithKey(payload, key, options = {}) {
+  return jwt.sign(payload, key, { algorithm: ALGORITHM, ...options });
+}
+
+function verifyWithKey(token, key, options = {}) {
+  return jwt.verify(token, key, { algorithms: [ALGORITHM], ...options });
+}
+
 module.exports = {
   ISSUER,
   AUDIENCE,
   ALGORITHM,
   sign,
   verify,
+  signWithKey,
+  verifyWithKey,
   revokeSession,
   isSessionRevoked,
   getAccessTTL,

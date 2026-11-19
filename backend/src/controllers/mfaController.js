@@ -3,11 +3,12 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
+const tokenService = require('../services/tokenService');
 const School = require('../models/schoolModel');
+const User = require('../models/userModel');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
 const schoolCache = require('../services/schoolCacheInvalidator');
-const tokenService = require('../services/tokenService');
 const { revokeAllUserSessions } = require('../services/sessionStore');
 
 // ── MFA secret encryption (AES-256-GCM) ──────────────────────────────────────
@@ -140,7 +141,6 @@ async function findMatchingBackupCodeIndex(mfaBackupCodes, code) {
     if (!entry || entry.used) continue;
     if (isLegacyBackupCodeHash(entry.hash)) continue; // legacy codes rejected
     const stored = entry.hash.slice(BACKUP_CODE_HASH_PREFIX.length);
-    // eslint-disable-next-line no-await-in-loop
     const match = await bcrypt.compare(normalized, stored);
     if (match) return i;
   }
@@ -149,18 +149,55 @@ async function findMatchingBackupCodeIndex(mfaBackupCodes, code) {
 
 // ── Helpers exported for use in authController ────────────────────────────────
 
-function verifyTotpCode(encryptedSecret, token) {
+const TOTP_STEP_SECONDS = 30;
+const TOTP_WINDOW = 1; // accept one step either side of now (clock skew)
+
+/**
+ * Verify a TOTP code and record the time step it was accepted in (#1944).
+ *
+ * RFC 6238 §5.2: a verifier MUST NOT accept a second use of an OTP once it has
+ * been accepted. The step is recorded with a conditional write that only
+ * matches while the stored step is older, so two concurrent uses of one code
+ * cannot both succeed. A write error propagates to the caller.
+ *
+ * @param {import('mongoose').Model} Model  User or School
+ * @param {object} filter                   selects the single document
+ * @param {string} secret                   plaintext base32 TOTP secret
+ * @param {string} token                    submitted code
+ * @returns {Promise<boolean>}
+ */
+async function verifyAndRecordTotp(Model, filter, secret, token) {
+  const match = speakeasy.totp.verifyDelta({
+    secret,
+    encoding: 'base32',
+    token: String(token ?? ''),
+    window: TOTP_WINDOW,
+  });
+  if (!match) return false;
+
+  const step = Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS) + match.delta;
+  const res = await Model.updateOne(
+    {
+      ...filter,
+      $or: [{ mfaLastUsedStep: null }, { mfaLastUsedStep: { $lt: step } }],
+    },
+    { $set: { mfaLastUsedStep: step } }
+  );
+  return res.modifiedCount === 1;
+}
+
+/**
+ * Verify a user's TOTP code at login, with replay protection (#1944).
+ * Returns false if the stored secret cannot be decrypted.
+ */
+async function verifyUserTotp(user, token) {
+  let secret;
   try {
-    const secret = decryptMfaSecret(encryptedSecret);
-    return speakeasy.totp.verify({
-      secret,
-      encoding: 'base32',
-      token,
-      window: 1,
-    });
+    secret = decryptMfaSecret(user.mfaSecret);
   } catch {
     return false;
   }
+  return verifyAndRecordTotp(User, { _id: user._id }, secret, token);
 }
 
 /**
@@ -346,12 +383,7 @@ async function verifyAndEnableMfa(req, res) {
       return res.status(400).json({ error: 'MFA setup must be completed first.', code: 'MFA_NOT_SETUP' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: verifySecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    const valid = await verifyAndRecordTotp(School, { slug }, verifySecret, code);
 
     if (!valid) {
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
@@ -412,12 +444,7 @@ async function disableMfa(req, res) {
       return res.status(400).json({ error: 'MFA is not configured for this school.', code: 'MFA_NOT_CONFIGURED' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: decryptMfaSecret(school.mfaSecret),
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    const valid = await verifyAndRecordTotp(School, { slug }, decryptMfaSecret(school.mfaSecret), code);
 
     if (!valid) {
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
@@ -539,12 +566,7 @@ async function verifyAndEnableUserMfa(req, res) {
       return res.status(400).json({ error: 'MFA setup must be completed first.', code: 'MFA_NOT_SETUP' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: verifySecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    const valid = await verifyAndRecordTotp(User, { _id: userId }, verifySecret, code);
 
     if (!valid) {
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
@@ -683,12 +705,7 @@ async function regenerateBackupCodes(req, res) {
           code: 'MFA_NOT_CONFIGURED',
         });
       }
-      verified = speakeasy.totp.verify({
-        secret: decryptMfaSecret(school.mfaSecret),
-        encoding: 'base32',
-        token: code,
-        window: 1,
-      });
+      verified = await verifyAndRecordTotp(School, { slug }, decryptMfaSecret(school.mfaSecret), code);
       if (!verified) {
         return res.status(401).json({
           error: 'Invalid TOTP code.',
@@ -795,12 +812,7 @@ async function disableUserMfa(req, res) {
       return res.status(400).json({ error: 'MFA is not configured for this user.', code: 'MFA_NOT_CONFIGURED' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: decryptMfaSecret(user.mfaSecret),
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    const valid = await verifyAndRecordTotp(User, { _id: userId }, decryptMfaSecret(user.mfaSecret), code);
 
     if (!valid) {
       return res.status(400).json({ error: 'Invalid TOTP code.', code: 'INVALID_MFA_CODE' });
@@ -842,7 +854,7 @@ module.exports = {
   verifyAndEnableUserMfa,
   disableUserMfa,
   // exported for use in authController
-  verifyTotpCode,
+  verifyUserTotp,
   verifyBackupCode,
   hashBackupCode,
   hashBackupCodes,

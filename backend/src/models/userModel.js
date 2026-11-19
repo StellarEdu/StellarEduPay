@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema(
     tokenVersion: { type: Number, default: 0 },
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String, default: null },
+    // Last accepted TOTP time step (floor(unix/30)). Codes at or before this
+    // step are rejected to prevent replay within the validity window (#1944).
+    mfaLastUsedStep: { type: Number, default: null },
     mfaBackupCodes: [
       {
         // Salted slow hash (bcrypt/scrypt). Never store the raw code.
