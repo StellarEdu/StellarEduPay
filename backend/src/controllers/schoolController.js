@@ -6,6 +6,7 @@ const StellarSdk = require('@stellar/stellar-sdk');
 const School = require('../models/schoolModel');
 const { logAudit } = require('../services/auditService');
 const { verifyStellarAccountFunding } = require('../services/stellarAccountVerificationService');
+const { assessWallet } = require('../services/walletHealthService');
 const { validateWebhookUrl } = require('../utils/validateWebhookUrl');
 const schoolCache = require('../services/schoolCacheInvalidator');
 const { buildWalletRotation } = require('../services/walletRotationService');
@@ -169,6 +170,21 @@ function isValidTimezone(tz) {
   }
 }
 
+// #1938 — wallet-readiness blocks. Only states where payments cannot land are
+// blocking; anything else is returned as warnings.
+const WALLET_BLOCK_MESSAGES = {
+  ACCOUNT_NOT_FOUND: 'The Stellar account does not exist on the network. Fund it before using it as the school wallet.',
+  USDC_TRUSTLINE_MISSING: 'USDC is accepted but the school wallet has no USDC trustline to the pinned issuer. Add the trustline before continuing.',
+};
+
+function walletBlockedResponse(res, wallet) {
+  return res.status(409).json({
+    error: WALLET_BLOCK_MESSAGES[wallet.blockingCode] || 'The school wallet is not ready to receive payments.',
+    code: wallet.blockingCode,
+    warnings: wallet.warnings,
+  });
+}
+
 // POST /api/schools
 async function createSchool(req, res, next) {
   try {
@@ -210,6 +226,10 @@ async function createSchool(req, res, next) {
         });
       }
     }
+
+    // #1938 — evaluate the wallet first; a wallet that cannot receive payments is rejected.
+    const wallet = await assessWallet(stellarAddress);
+    if (wallet.blockingCode) return walletBlockedResponse(res, wallet);
 
     // Verify Stellar account funding (non-blocking)
     const { warning } = await verifyStellarAccountFunding(stellarAddress);
@@ -253,7 +273,7 @@ async function createSchool(req, res, next) {
       return res.status(202).json({ ...school.toObject(), warning });
     }
 
-    res.status(201).json(school);
+    res.status(201).json({ ...school.toJSON(), warnings: wallet.warnings });
   } catch (err) {
     if (err.code === 11000) {
       const field = err.message.includes('slug') ? 'slug' : 'schoolId';
@@ -455,9 +475,15 @@ async function updateSchool(req, res, next) {
 
     // Verify Stellar account funding if address is being updated (non-blocking)
     let warning = null;
+    let walletWarnings = null;
     if (updates.stellarAddress) {
       const { warning: fundingWarning } = await verifyStellarAccountFunding(updates.stellarAddress);
       warning = fundingWarning;
+
+      // #1938 — a changed wallet must be able to receive the advertised payments.
+      const wallet = await assessWallet(updates.stellarAddress);
+      if (wallet.blockingCode) return walletBlockedResponse(res, wallet);
+      walletWarnings = wallet.warnings;
     }
 
     // Changing the address through this route is a rotation too: retire the
@@ -508,10 +534,10 @@ async function updateSchool(req, res, next) {
 
     // Return 202 with warning if account is unfunded
     if (warning) {
-      return res.status(202).json({ ...school.toObject(), warning });
+      return res.status(202).json({ ...school.toJSON(), warning, ...(walletWarnings && { warnings: walletWarnings }) });
     }
 
-    res.json(school);
+    res.json(walletWarnings ? { ...school.toJSON(), warnings: walletWarnings } : school);
   } catch (err) {
     // Handle Mongoose validation errors
     if (err.name === 'ValidationError') {
@@ -578,6 +604,10 @@ async function rotateStellarAddress(req, res, next) {
 
     const previousStellarAddress = school.stellarAddress;
 
+    // #1938 — the new wallet must be able to receive the advertised payments.
+    const wallet = await assessWallet(stellarAddress);
+    if (wallet.blockingCode) return walletBlockedResponse(res, wallet);
+
     // Verify the new Stellar account is funded (non-blocking — same as
     // updateSchool()'s stellarAddress path).
     const { warning } = await verifyStellarAccountFunding(stellarAddress);
@@ -629,10 +659,10 @@ async function rotateStellarAddress(req, res, next) {
     }
 
     if (warning) {
-      return res.status(202).json({ ...school.toObject(), warning });
+      return res.status(202).json({ ...school.toJSON(), warning, warnings: wallet.warnings });
     }
 
-    res.json(school);
+    res.json({ ...school.toJSON(), warnings: wallet.warnings });
   } catch (err) {
     if (err.name === 'ValidationError') {
       const validationErrors = Object.values(err.errors).map(e => e.message);
@@ -952,4 +982,36 @@ async function clearSchoolSetting(req, res, next) {
   }
 }
 
-module.exports = { createSchool, getAllSchools, getSchool, updateSchool, rotateStellarAddress, rotateWebhookSecret, deactivateSchool, deprecatedDeleteSchool, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting };
+// GET /api/schools/:schoolId/wallet-health  (owner / super-admin) — #1938
+// Runs the same readiness evaluation as create/update/rotate, on demand.
+async function getWalletHealth(req, res, next) {
+  try {
+    const school = await School.findOne({ schoolId: req.params.schoolId, isActive: true })
+      .select('schoolId stellarAddress')
+      .lean();
+    if (!school) {
+      const e = new Error('School not found');
+      e.code = 'NOT_FOUND';
+      return next(e);
+    }
+
+    const wallet = await assessWallet(school.stellarAddress);
+    if (wallet.status === 'unavailable') {
+      return res.status(503).json({
+        error: 'Horizon is unavailable, so the wallet cannot be checked right now.',
+        code: 'HORIZON_UNAVAILABLE',
+      });
+    }
+
+    return res.json({
+      schoolId: school.schoolId,
+      stellarAddress: school.stellarAddress,
+      checkedAt: new Date().toISOString(),
+      ...wallet.health,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { createSchool, getAllSchools, getSchool, updateSchool, rotateStellarAddress, rotateWebhookSecret, deactivateSchool, deprecatedDeleteSchool, activateSchool, registerWebhook, getSchoolSettings, updateSchoolSettings, clearSchoolSetting, getWalletHealth };

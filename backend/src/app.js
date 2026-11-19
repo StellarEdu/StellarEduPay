@@ -37,6 +37,7 @@ if (process.env.NODE_ENV !== 'production') {
 mongoose.set('sanitizeFilter', true);
 
 const studentRoutes = require('./routes/studentRoutes');
+const payLinkRoutes = require('./routes/payLinkRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const feeRoutes = require('./routes/feeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
@@ -83,6 +84,7 @@ const { startMetricsRollupScheduler, stopMetricsRollupScheduler } = require('./s
 const { startWebhookRetryScheduler, stopWebhookRetryScheduler } = require('./services/webhookRetryScheduler');
 const { startOutboxDispatcher, stopOutboxDispatcher } = require('./services/outboxDispatcher');
 const { startReconciliationReportScheduler, stopReconciliationReportScheduler } = require('./services/reconciliationReportScheduler');
+const { startWalletHealthScheduler, stopWalletHealthScheduler } = require('./services/walletHealthScheduler');
 const { startJobRecoveryScheduler, stopJobRecoveryScheduler } = require('./services/jobRecoveryScheduler');
 const { startDisputeSlaScheduler, stopDisputeSlaScheduler } = require('./services/disputeNotificationService');
 const { startWorker: startReportQueueWorker, stopWorker: stopReportQueueWorker } = require('./services/reportQueueService');
@@ -249,6 +251,8 @@ app.use(maintenanceMode);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
 app.use('/api/students', studentRoutes);
+// #1937 — signed pay links: POST /api/students/:id/pay-link[/revoke] and public GET /api/pay/:token
+app.use('/api', payLinkRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
 app.use('/api/reports', reportRoutes);
@@ -404,6 +408,7 @@ connectDatabase().then(async () => {
     startAuditLogCleanupScheduler();
     startWebhookRetryScheduler();
     startReconciliationReportScheduler();
+    startWalletHealthScheduler();
     startMetricsRollupScheduler();
     startJobRecoveryScheduler();
     startDisputeSlaScheduler();
@@ -420,6 +425,7 @@ connectDatabase().then(async () => {
     stopAuditLogCleanupScheduler();
     stopWebhookRetryScheduler();
     stopReconciliationReportScheduler();
+    stopWalletHealthScheduler();
     stopMetricsRollupScheduler();
     stopJobRecoveryScheduler();
     stopDisputeSlaScheduler();

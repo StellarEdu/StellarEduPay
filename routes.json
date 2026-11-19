@@ -463,6 +463,11 @@
       "middleware": []
     },
     {
+      "method": "GET",
+      "path": "/api/pay/:token",
+      "middleware": []
+    },
+    {
       "method": "DELETE",
       "path": "/api/payment-plans/:studentId",
       "middleware": []
@@ -813,6 +818,11 @@
       "middleware": []
     },
     {
+      "method": "GET",
+      "path": "/api/schools/:schoolId/wallet-health",
+      "middleware": []
+    },
+    {
       "method": "PUT",
       "path": "/api/schools/:schoolId/webhook-secret",
       "middleware": []
@@ -875,6 +885,16 @@
     {
       "method": "GET",
       "path": "/api/students/:studentId/fee-history",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/pay-link",
+      "middleware": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/students/:studentId/pay-link/revoke",
       "middleware": []
     },
     {

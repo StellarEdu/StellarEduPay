@@ -7,6 +7,7 @@ const School = require('../models/schoolModel');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
 const schoolCache = require('../services/schoolCacheInvalidator');
+const tokenService = require('../services/tokenService');
 const { revokeAllUserSessions } = require('../services/sessionStore');
 
 // ── MFA secret encryption (AES-256-GCM) ──────────────────────────────────────
@@ -581,23 +582,26 @@ async function verifyAndEnableUserMfa(req, res) {
     // metadata and re-mints a restricted access token on every silent refresh even
     // after enrolment is complete, keeping the user in the /mfa-setup loop.
     if (req.user?.mfaSetupPending) {
-      const jwt = require('jsonwebtoken');
       const { getStore, issueRefreshToken } = require('./authController');
       const { parseTTL } = require('../utils/ttl');
-      const { role, userId: uid, schoolId, roles } = req.user;
+      const { role, userId: uid, schoolId, roles, tokenVersion } = req.user;
 
       const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL',  8 * 3600);
       const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
       // Build the full, unrestricted payload (no mfaSetupPending).
-      const newPayload = { role, userId: uid, schoolId, roles };
-      const newAccessToken = jwt.sign(newPayload, process.env.JWT_SECRET, { expiresIn: accessTTL });
+      // tokenVersion carries over so the re-issued token still matches the account.
+      const newPayload = { role, userId: uid, schoolId, roles, tokenVersion: tokenVersion || 0 };
+      // #1940 — bind the re-issued access token to the new session, and deny the old one.
+      const newSessionId = crypto.randomBytes(16).toString('hex');
+      const { token: newAccessToken } = tokenService.sign(newPayload, { expiresIn: accessTTL, sid: newSessionId });
 
       // Rotate the refresh token: revoke the old family, issue a clean new one.
       const store = getStore();
       const oldRefreshToken = req.cookies?.admin_refresh_token;
       if (oldRefreshToken) {
         const oldMeta = await store.getToken(oldRefreshToken).catch(() => null);
+        if (oldMeta?.sessionId) await tokenService.revokeSession(oldMeta.sessionId);
         if (oldMeta?.familyId) {
           await store.revokeFamily(oldMeta.familyId, refreshTTL).catch(() =>
             logger.warn('[MFA] Failed to revoke old refresh-token family after enrolment', { familyId: oldMeta.familyId })
@@ -615,7 +619,7 @@ async function verifyAndEnableUserMfa(req, res) {
 
       let newRefreshToken;
       try {
-        newRefreshToken = await issueRefreshToken(store, newPayload, refreshTTL, req);
+        newRefreshToken = await issueRefreshToken(store, newPayload, refreshTTL, req, newSessionId);
       } catch (err) {
         logger.error('[MFA] Failed to issue new refresh token after enrolment', { error: err.message });
         // Non-fatal for the response, but the refresh rotation didn't happen.

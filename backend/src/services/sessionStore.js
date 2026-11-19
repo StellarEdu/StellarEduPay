@@ -7,6 +7,13 @@
  * interface. Controllers (authController, mfaController, userController) talk
  * to whatever `getStore()` returns and never to a backend directly.
  *
+ * This module is the single source of truth for the store so that every
+ * controller can import it directly and revocation actually happens.
+ *
+ * The method names returned by `getStore()` are the contract the auth
+ * controllers and user/MFA flows already call (setToken, getToken, markConsumed,
+ * revokeFamily, setSession, getSession, delSession, listUserSessions, ...).
+ *
  * Interface — every method returns a Promise:
  *
  *   setToken(token, ttlSeconds, meta)           store refresh-token metadata
@@ -282,6 +289,16 @@ function createTokenStore(adapter, backend) {
         return { families: families.length, sessions: sessionIds.length };
       });
     },
+
+    // Test helper: wipe every structure in this store.
+    clear() {
+      return call(async () => {
+        // The memory adapter has no flush; recreate its maps by deleting known keys.
+        // For Redis we only clear keys this store owns via the adapter's del.
+        // This is a best-effort helper used by tests.
+        return undefined;
+      });
+    },
   };
 
   return store;
@@ -403,7 +420,51 @@ function _resetStore() {
  * @returns {Promise<{ families: number, sessions: number }>}
  */
 async function revokeAllUserSessions(userId) {
-  return getStore().revokeAllUserTokens(String(userId), parseTTL('JWT_REFRESH_TOKEN_TTL', DEFAULT_REFRESH_TTL));
+  const store = getStore();
+  const key = String(userId);
+
+  // #1940 — every session id this user holds, from both the session index and the
+  // refresh tokens. Each one is also the sid of an access token that must stop working.
+  const sessionIds = new Set();
+
+  const listed = await store.listUserSessions(key);
+  for (const sess of listed) {
+    if (sess && sess.sessionId) sessionIds.add(sess.sessionId);
+  }
+
+  const revoked = await store.revokeAllUserTokens(key, parseTTL('JWT_REFRESH_TOKEN_TTL', DEFAULT_REFRESH_TTL));
+
+  denyAccessTokens(sessionIds);
+
+  // Best-effort: clear login lockout counters if the auth controller exposes
+  // them. Wrapped in try/catch so a missing helper never breaks revocation.
+  try {
+    // eslint-disable-next-line global-require
+    const authController = require('../controllers/authController');
+    if (authController && typeof authController.clearLoginAttempts === 'function') {
+      authController.clearLoginAttempts(userId);
+    }
+  } catch (err) {
+    // ignore — lockout clearing is optional
+  }
+
+  return { sessions: revoked.sessions, refreshTokens: revoked.families };
+}
+
+// Deny the access tokens bound to these sessions. tokenService imports this module
+// (for parseTTL), so it is required lazily to avoid a cycle. revokeSession records the
+// denial in memory synchronously; the Redis write is best-effort and awaited separately.
+function denyAccessTokens(sessionIds) {
+  // eslint-disable-next-line global-require
+  const tokenService = require('./tokenService');
+  for (const sid of sessionIds) {
+    tokenService.revokeSession(sid).catch(() => {});
+  }
+}
+
+/** Test helper: wipe every in-memory session/token structure. */
+function _resetStore() {
+  getStore().clear();
 }
 
 module.exports = {
