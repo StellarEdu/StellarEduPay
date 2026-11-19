@@ -335,6 +335,7 @@ export default function FeesPage() {
               </p>
             </div>
           ) : (
+            <>
             <div style={{ overflowX: "auto" }}>
               <table
                 className="data-table"
@@ -412,6 +413,7 @@ export default function FeesPage() {
                 </button>
               </div>
             )}
+            </>
           )}
         </div>
       </div>
