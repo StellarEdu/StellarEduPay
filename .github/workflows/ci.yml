@@ -24,9 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Same Node as .nvmrc, the engines field and the Docker images (Node 24).
+      # Node 20 cannot run the backend (#1924).
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
 
       - name: Syntax check every tracked .js file
         run: |
@@ -48,11 +52,19 @@ jobs:
           fi
           echo "No truncated-file placeholders found"
 
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+
       - name: Boot backend app with dummy env (no DB)
+        working-directory: backend
         env:
           NODE_ENV: test
-        run: |
-          node -e "require('./backend/src/app')"
+          # config/index.js refuses to load without these (Joi validation).
+          JWT_SECRET: ci-only-${{ github.run_id }}-0123456789abcdef0123456789
+          RECEIPT_SIGNATURE_SECRET: ci-only-receipt-0123456789abcdef0123456789
+          MONGO_URI: mongodb://127.0.0.1:1/ci
+        run: node -e "require('./src/app'); console.log('boot ok'); process.exit(0)"
 
   audit:
     name: Dependency security audit
@@ -519,7 +531,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

@@ -51,7 +51,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
       - name: Set up k6
         uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
       - name: Install traffic-generator dependencies
