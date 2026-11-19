@@ -1,0 +1,655 @@
+{
+  "_description": "Catalog of every error code the backend can return in an API error envelope. Each code must have an English message at frontend/src/i18n/locales/en.js errors.<CODE>. Enforced by scripts/check-error-catalog.js (issue #1830).",
+  "codes": {
+    "ACCOUNT_DISABLED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.ACCOUNT_DISABLED"
+    },
+    "ACCOUNT_LOCKED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.ACCOUNT_LOCKED"
+    },
+    "AMOUNT_TOO_HIGH": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.AMOUNT_TOO_HIGH"
+    },
+    "AMOUNT_TOO_LOW": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.AMOUNT_TOO_LOW"
+    },
+    "ANCHOR_NOT_CONFIGURED": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.ANCHOR_NOT_CONFIGURED"
+    },
+    "ASSET_NOT_ACCEPTED": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.ASSET_NOT_ACCEPTED"
+    },
+    "AUTH_DB_ERROR": {
+      "category": "auth",
+      "retryable": true,
+      "userMessageKey": "errors.AUTH_DB_ERROR"
+    },
+    "AUTH_MISCONFIGURED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.AUTH_MISCONFIGURED"
+    },
+    "BATCH_TOO_LARGE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.BATCH_TOO_LARGE"
+    },
+    "CONFIGURATION_ERROR": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.CONFIGURATION_ERROR"
+    },
+    "CONFLICT": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.CONFLICT"
+    },
+    "CSV_INVALID_EXTENSION": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.CSV_INVALID_EXTENSION"
+    },
+    "CSV_INVALID_FORMAT": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.CSV_INVALID_FORMAT"
+    },
+    "CSV_INVALID_MIME_TYPE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.CSV_INVALID_MIME_TYPE"
+    },
+    "CSV_TOO_LARGE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.CSV_TOO_LARGE"
+    },
+    "CSV_TOO_MANY_ROWS": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.CSV_TOO_MANY_ROWS"
+    },
+    "DB_ERROR": {
+      "category": "system",
+      "retryable": true,
+      "userMessageKey": "errors.DB_ERROR"
+    },
+    "DEDUP_ERROR": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.DEDUP_ERROR"
+    },
+    "DISPUTE_ALREADY_EXISTS": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.DISPUTE_ALREADY_EXISTS"
+    },
+    "DUPLICATE_DELIVERY": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.DUPLICATE_DELIVERY"
+    },
+    "DUPLICATE_FEE_STRUCTURE": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.DUPLICATE_FEE_STRUCTURE"
+    },
+    "DUPLICATE_PAYMENT_INTENT": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.DUPLICATE_PAYMENT_INTENT"
+    },
+    "DUPLICATE_RULE": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.DUPLICATE_RULE"
+    },
+    "EMAIL_WEBHOOK_NOT_CONFIGURED": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.EMAIL_WEBHOOK_NOT_CONFIGURED"
+    },
+    "EVENT_NOT_FOUND": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.EVENT_NOT_FOUND"
+    },
+    "FEE_STRUCTURE_NOT_FOUND": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.FEE_STRUCTURE_NOT_FOUND"
+    },
+    "FORBIDDEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.FORBIDDEN"
+    },
+    "HORIZON_ALL_FAILED": {
+      "category": "integration",
+      "retryable": true,
+      "userMessageKey": "errors.HORIZON_ALL_FAILED"
+    },
+    "HORIZON_ALL_UNAVAILABLE": {
+      "category": "integration",
+      "retryable": true,
+      "userMessageKey": "errors.HORIZON_ALL_UNAVAILABLE"
+    },
+    "HORIZON_UNAVAILABLE": {
+      "category": "integration",
+      "retryable": true,
+      "userMessageKey": "errors.HORIZON_UNAVAILABLE"
+    },
+    "IDEMPOTENCY_KEY_IN_PROGRESS": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.IDEMPOTENCY_KEY_IN_PROGRESS"
+    },
+    "IDEMPOTENCY_KEY_REUSE": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.IDEMPOTENCY_KEY_REUSE"
+    },
+    "IDEMPOTENCY_SERVICE_UNAVAILABLE": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.IDEMPOTENCY_SERVICE_UNAVAILABLE"
+    },
+    "INSUFFICIENT_ROLE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INSUFFICIENT_ROLE"
+    },
+    "INTENT_EXPIRED": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INTENT_EXPIRED"
+    },
+    "INTENT_MISMATCH": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INTENT_MISMATCH"
+    },
+    "INTENT_NOT_FOUND": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INTENT_NOT_FOUND"
+    },
+    "INTENT_NOT_PENDING": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INTENT_NOT_PENDING"
+    },
+    "INTERNAL_ERROR": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.INTERNAL_ERROR"
+    },
+    "INVALID_AMOUNT": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_AMOUNT"
+    },
+    "INVALID_CLASS_OPTIONS": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_CLASS_OPTIONS"
+    },
+    "INVALID_CREDENTIALS": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_CREDENTIALS"
+    },
+    "INVALID_DISPUTE_TRANSITION": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_DISPUTE_TRANSITION"
+    },
+    "INVALID_FEE": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_FEE"
+    },
+    "INVALID_FEE_CATEGORY": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_FEE_CATEGORY"
+    },
+    "INVALID_FORMAT": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_FORMAT"
+    },
+    "INVALID_HASH_FORMAT": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_HASH_FORMAT"
+    },
+    "INVALID_HASH_LENGTH": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_HASH_LENGTH"
+    },
+    "INVALID_HASH_TYPE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_HASH_TYPE"
+    },
+    "INVALID_JOB_STATE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_JOB_STATE"
+    },
+    "INVALID_LOG_LEVEL": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_LOG_LEVEL"
+    },
+    "INVALID_MAINTENANCE_FLAG": {
+      "category": "availability",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_MAINTENANCE_FLAG"
+    },
+    "INVALID_MFA_CODE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_MFA_CODE"
+    },
+    "INVALID_PASSWORD": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_PASSWORD"
+    },
+    "INVALID_PAYLOAD": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_PAYLOAD"
+    },
+    "INVALID_PAYMENT_LIMITS": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_PAYMENT_LIMITS"
+    },
+    "INVALID_REFRESH_TOKEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_REFRESH_TOKEN"
+    },
+    "INVALID_ROLES": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_ROLES"
+    },
+    "INVALID_SETTING_KEY": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_SETTING_KEY"
+    },
+    "INVALID_SIGNATURE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_SIGNATURE"
+    },
+    "INVALID_STELLAR_ADDRESS": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_STELLAR_ADDRESS"
+    },
+    "INVALID_SUSPICIOUS_AMOUNT_CONFIG": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_SUSPICIOUS_AMOUNT_CONFIG"
+    },
+    "INVALID_SUSPICIOUS_PAYMENT_MULTIPLIER": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_SUSPICIOUS_PAYMENT_MULTIPLIER"
+    },
+    "INVALID_TIMEZONE": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_TIMEZONE"
+    },
+    "INVALID_TOKEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_TOKEN"
+    },
+    "INVALID_TRANSITION": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_TRANSITION"
+    },
+    "INVALID_WEBHOOK_URL": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.INVALID_WEBHOOK_URL"
+    },
+    "IP_BLOCKED": {
+      "category": "availability",
+      "retryable": false,
+      "userMessageKey": "errors.IP_BLOCKED"
+    },
+    "JOB_NOT_FOUND": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.JOB_NOT_FOUND"
+    },
+    "LAST_OWNER": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.LAST_OWNER"
+    },
+    "MAINTENANCE_MODE": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.MAINTENANCE_MODE"
+    },
+    "MFA_ALREADY_ACTIVE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_ALREADY_ACTIVE"
+    },
+    "MFA_DISABLE_ERROR": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_DISABLE_ERROR"
+    },
+    "MFA_ENABLE_ERROR": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_ENABLE_ERROR"
+    },
+    "MFA_NOT_AVAILABLE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_NOT_AVAILABLE"
+    },
+    "MFA_NOT_CONFIGURED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_NOT_CONFIGURED"
+    },
+    "MFA_NOT_SETUP": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_NOT_SETUP"
+    },
+    "MFA_REGENERATE_ERROR": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_REGENERATE_ERROR"
+    },
+    "MFA_SETUP_ERROR": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MFA_SETUP_ERROR"
+    },
+    "MISSING_HASH": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_HASH"
+    },
+    "MISSING_IDEMPOTENCY_KEY": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_IDEMPOTENCY_KEY"
+    },
+    "MISSING_MFA_CODE": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_MFA_CODE"
+    },
+    "MISSING_REFRESH_TOKEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_REFRESH_TOKEN"
+    },
+    "MISSING_SCHOOL_CONTEXT": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_SCHOOL_CONTEXT"
+    },
+    "MISSING_SCHOOL_ID": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_SCHOOL_ID"
+    },
+    "MISSING_SCHOOL_SLUG": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_SCHOOL_SLUG"
+    },
+    "MISSING_TENANT_CLAIM": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_TENANT_CLAIM"
+    },
+    "MISSING_TIMESTAMP": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.MISSING_TIMESTAMP"
+    },
+    "NOT_FLAGGED": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.NOT_FLAGGED"
+    },
+    "NOT_FOUND": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.NOT_FOUND"
+    },
+    "PAYLOAD_TOO_COMPLEX": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.PAYLOAD_TOO_COMPLEX"
+    },
+    "PAYMENT_LOCKED": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.PAYMENT_LOCKED"
+    },
+    "PDF_GENERATION_ERROR": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.PDF_GENERATION_ERROR"
+    },
+    "PLAN_ALREADY_EXISTS": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.PLAN_ALREADY_EXISTS"
+    },
+    "QUEUE_FULL": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.QUEUE_FULL"
+    },
+    "RATE_LIMIT_EXCEEDED": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.RATE_LIMIT_EXCEEDED"
+    },
+    "REASON_REQUIRED": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.REASON_REQUIRED"
+    },
+    "REQUEST_TIMEOUT": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.REQUEST_TIMEOUT"
+    },
+    "RETRY_QUEUE_UNAVAILABLE": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.RETRY_QUEUE_UNAVAILABLE"
+    },
+    "SCHOOL_INACTIVE": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.SCHOOL_INACTIVE"
+    },
+    "SCHOOL_MAINTENANCE_MODE": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.SCHOOL_MAINTENANCE_MODE"
+    },
+    "SCHOOL_NOT_FOUND": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.SCHOOL_NOT_FOUND"
+    },
+    "SELF_DEACTIVATION_FORBIDDEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.SELF_DEACTIVATION_FORBIDDEN"
+    },
+    "SELF_DEMOTION_FORBIDDEN": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.SELF_DEMOTION_FORBIDDEN"
+    },
+    "SERVICE_UNAVAILABLE": {
+      "category": "availability",
+      "retryable": true,
+      "userMessageKey": "errors.SERVICE_UNAVAILABLE"
+    },
+    "SESSION_CHECK_FAILED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.SESSION_CHECK_FAILED"
+    },
+    "SESSION_LIST_ERROR": {
+      "category": "auth",
+      "retryable": true,
+      "userMessageKey": "errors.SESSION_LIST_ERROR"
+    },
+    "SESSION_NOT_FOUND": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.SESSION_NOT_FOUND"
+    },
+    "SESSION_REVOKED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.SESSION_REVOKED"
+    },
+    "SNS_CONFIRMATION_FAILED": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.SNS_CONFIRMATION_FAILED"
+    },
+    "STELLAR_ADDRESS_UNCHANGED": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.STELLAR_ADDRESS_UNCHANGED"
+    },
+    "STELLAR_NETWORK_ERROR": {
+      "category": "integration",
+      "retryable": true,
+      "userMessageKey": "errors.STELLAR_NETWORK_ERROR"
+    },
+    "STEP_UP_REQUIRED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.STEP_UP_REQUIRED"
+    },
+    "STUDENT_ID_GENERATION_FAILED": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.STUDENT_ID_GENERATION_FAILED"
+    },
+    "SYNC_IN_PROGRESS": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.SYNC_IN_PROGRESS"
+    },
+    "SYNC_RATE_LIMITED": {
+      "category": "payment",
+      "retryable": true,
+      "userMessageKey": "errors.SYNC_RATE_LIMITED"
+    },
+    "TENANT_MISMATCH": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.TENANT_MISMATCH"
+    },
+    "TIMESTAMP_SKEW": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.TIMESTAMP_SKEW"
+    },
+    "TOKEN_STORE_ERROR": {
+      "category": "auth",
+      "retryable": true,
+      "userMessageKey": "errors.TOKEN_STORE_ERROR"
+    },
+    "TX_FAILED": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.TX_FAILED"
+    },
+    "UNAUTHORIZED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.UNAUTHORIZED"
+    },
+    "UNSUPPORTED_CURRENCY": {
+      "category": "payment",
+      "retryable": false,
+      "userMessageKey": "errors.UNSUPPORTED_CURRENCY"
+    },
+    "UNSUPPORTED_PROVIDER": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.UNSUPPORTED_PROVIDER"
+    },
+    "USER_EXISTS": {
+      "category": "validation",
+      "retryable": false,
+      "userMessageKey": "errors.USER_EXISTS"
+    },
+    "USER_NOT_FOUND": {
+      "category": "resource",
+      "retryable": false,
+      "userMessageKey": "errors.USER_NOT_FOUND"
+    },
+    "VALIDATION_ERROR": {
+      "category": "system",
+      "retryable": false,
+      "userMessageKey": "errors.VALIDATION_ERROR"
+    },
+    "VERIFICATION_REQUIRED": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.VERIFICATION_REQUIRED"
+    },
+    "WEAK_PASSWORD": {
+      "category": "auth",
+      "retryable": false,
+      "userMessageKey": "errors.WEAK_PASSWORD"
+    },
+    "WEAK_WEBHOOK_SECRET": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.WEAK_WEBHOOK_SECRET"
+    },
+    "WEBHOOK_ERROR": {
+      "category": "integration",
+      "retryable": false,
+      "userMessageKey": "errors.WEBHOOK_ERROR"
+    }
+  }
+}

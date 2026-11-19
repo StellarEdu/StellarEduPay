@@ -2,14 +2,18 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const Joi = require('joi');
+const { resolveFileSecrets } = require('./secrets');
+
+// Populate *_FILE secrets (issue #1829) before anything reads process.env.
+resolveFileSecrets();
 
 const REQUIRED_VARS = ['MONGO_URI', 'JWT_SECRET', 'RECEIPT_SIGNATURE_SECRET'];
 
 const schema = Joi.object({
   // ── Required ────────────────────────────────────────────────────────────────
   MONGO_URI: Joi.string().required(),
-  JWT_SECRET: Joi.string().min(32).required().secret(),
-  RECEIPT_SIGNATURE_SECRET: Joi.string().required().secret(),
+  JWT_SECRET: Joi.string().min(32).required(),
+  RECEIPT_SIGNATURE_SECRET: Joi.string().required(),
 
   // ── Server ──────────────────────────────────────────────────────────────────
   PORT: Joi.number().integer().min(0).max(65535).default(5000),
@@ -149,7 +153,7 @@ const schema = Joi.object({
   SMTP_PORT: Joi.number().integer().min(0).max(65535).default(587),
   SMTP_SECURE: Joi.boolean().truthy("true").falsy("false").default(false),
   SMTP_USER: Joi.string().allow(null, "").default(null),
-  SMTP_PASS: Joi.string().allow(null, "").default(null).secret(),
+  SMTP_PASS: Joi.string().allow(null, "").default(null),
   SMTP_FROM: Joi.string().allow(null, "").default(null),
 })
   .unknown(true) // tolerate variables owned by other modules during migration
