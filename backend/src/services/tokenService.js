@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { get, set, del } = require('../cache');
-const { parseTTL } = require('./sessionStore');
+const { parseTTL } = require('../utils/ttl');
 
 const ISSUER = 'stellaredupay-api';
 const AUDIENCE = 'stellaredupay-admin';
@@ -83,11 +83,17 @@ function sign(payload, options = {}) {
 }
 
 function verify(token) {
-  return jwt.verify(token, getSigningKey(), {
+  const decoded = jwt.verify(token, getSigningKey(), {
     algorithms: [ALGORITHM],
     issuer: ISSUER,
     audience: AUDIENCE,
   });
+  // #1940 — once legacy tokens (no sid) have expired, set REQUIRE_SESSION_ID=true so
+  // tokens that cannot be revoked by session are refused. Off by default for one release.
+  if (process.env.REQUIRE_SESSION_ID === 'true' && !decoded.sid) {
+    throw new jwt.JsonWebTokenError('session id (sid) required');
+  }
+  return decoded;
 }
 
 module.exports = {

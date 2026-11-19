@@ -17,4 +17,6 @@
 
 {{#if portalUrl}}View balances, payment history and receipts: {{portalUrl}}
 
+{{/if}}{{#if payUrl}}Pay this fee without typing a student ID: {{payUrl}}
+
 {{/if}}{{#if unsubscribeUrl}}{{i18n_unsubscribeText}} {{unsubscribeUrl}}{{/if}}

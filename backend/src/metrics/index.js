@@ -545,9 +545,19 @@ new client.Gauge({
   },
 });
 
+// school_wallet_warning{code} — active schools whose settlement wallet currently
+// raises each readiness warning (#1938). Set by the daily wallet-health job.
+const schoolWalletWarningGauge = new client.Gauge({
+  name: 'school_wallet_warning',
+  help: 'Number of active schools whose settlement wallet currently raises each readiness warning code',
+  labelNames: ['code'],
+  registers: [registry],
+});
+
 module.exports = {
   registry,
   buildInfoGauge,
+  schoolWalletWarningGauge,
   mongoConnectionState,
   mongoConnectionErrorsTotal,
   horizonPollBudgetRemaining,

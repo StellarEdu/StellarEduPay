@@ -6,6 +6,7 @@ rule_files:
   - "alerts/price_feed.yml"
   - "alerts/horizon_poll.yml"
   - "alerts/payment_limits.yml"
+  - "alerts/wallet_health.yml"
   - "alerts/receipts.yml"
   - "alerts/auth_ip_blocks.yml"
   - "alerts/webhook_alerts.yml"

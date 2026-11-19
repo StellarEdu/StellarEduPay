@@ -32,23 +32,23 @@ function mockRes() {
 }
 
 describe('handleLogin', () => {
-  it('returns 401 for wrong password', () => {
+  it('returns 401 for wrong password', async () => {
     const res = mockRes();
-    handleLogin({ body: { username: 'admin', password: 'wrong' } }, res);
+    await handleLogin({ body: { username: 'admin', password: 'wrong' } }, res);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_CREDENTIALS' }));
   });
 
-  it('returns 401 for wrong username', () => {
+  it('returns 401 for wrong username', async () => {
     const res = mockRes();
-    handleLogin({ body: { username: 'hacker', password: 'correct-password' } }, res);
+    await handleLogin({ body: { username: 'hacker', password: 'correct-password' } }, res);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_CREDENTIALS' }));
   });
 
-  it('returns 401 when body is empty', () => {
+  it('returns 401 when body is empty', async () => {
     const res = mockRes();
-    handleLogin({ body: {} }, res);
+    await handleLogin({ body: {} }, res);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_CREDENTIALS' }));
   });
@@ -71,11 +71,11 @@ describe('handleLogin', () => {
     expect(payload.username).toBe('admin');
   });
 
-  it('returns 500 when ADMIN_USERNAME is not configured', () => {
+  it('returns 500 when ADMIN_USERNAME is not configured', async () => {
     const saved = process.env.ADMIN_USERNAME;
     delete process.env.ADMIN_USERNAME;
     const res = mockRes();
-    handleLogin({ body: { username: 'admin', password: 'correct-password' } }, res);
+    await handleLogin({ body: { username: 'admin', password: 'correct-password' } }, res);
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'AUTH_MISCONFIGURED' }));
     process.env.ADMIN_USERNAME = saved;

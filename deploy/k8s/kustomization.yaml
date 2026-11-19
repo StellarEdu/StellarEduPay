@@ -14,7 +14,7 @@ kind: Kustomization
 #   immutable commit SHAs from your CI pipeline:
 #
 #     images:
-#       - name: stellaredupay/backend
+#       - name: ghcr.io/stellaredu/stellaredupay-backend
 #         newTag: sha-abc1234
 #
 #   For private registries, add imagePullSecrets to the overlay:

@@ -16,8 +16,9 @@ const {
   getSchoolSettings,
   updateSchoolSettings,
   clearSchoolSetting,
+  getWalletHealth,
 } = require('../controllers/schoolController');
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 // ?includeInactive=true requires admin auth (cookie or Bearer, admin/super_admin)
@@ -50,6 +51,8 @@ router.patch('/:schoolId/activate',   requireAdminAuth, auditContext, activateSc
 router.post('/:slug/webhooks', requireAdminAuth, auditContext, registerWebhook);
 
 // Per-school settings overrides
+// #1938 — owner (or super-admin, via requireSchoolAuth's bypass) can read wallet readiness.
+router.get('/:schoolId/wallet-health', requireSchoolAuth(['owner']), getWalletHealth);
 router.get('/:schoolId/settings',     requireAdminAuth, auditContext, getSchoolSettings);
 router.patch('/:schoolId/settings',   requireAdminAuth, auditContext, updateSchoolSettings);
 router.delete('/:schoolId/settings/:key', requireAdminAuth, auditContext, clearSchoolSetting);

@@ -43,6 +43,18 @@ export default function MyApp({ Component, pageProps }) {
   // blocking script) so the component is correct on first render — no flash.
   const [dark, setDark] = useState(getInitialDark);
 
+  // Issue #1831: offline support for the public payment pages. Registered only
+  // in production builds and only on the parent-facing routes, so admin pages
+  // and development never get a service worker.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") return;
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    if (!(pathname === "/pay-fees" || pathname.startsWith("/pay/"))) return;
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Offline support is a progressive enhancement; ignore registration failures.
+    });
+  }, [pathname]);
+
   // Issue #1586: sync <html> classes whenever dark changes, but do NOT write to
   // localStorage here — that is the explicit-toggle handler's responsibility.
   useEffect(() => {

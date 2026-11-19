@@ -3,6 +3,8 @@
 const logger = require('../utils/logger').child('AuthMiddleware');
 const { logAudit } = require('../services/auditService');
 const { get, set } = require('../cache');
+const { sendAdminAlert } = require('../services/alertService');
+const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { hashIp, stripQueryString } = require('../utils/piiRedaction');
 const User = require('../models/userModel');
 const School = require('../models/School');
@@ -58,6 +60,9 @@ function sendIpBlocked(res) {
 // send back when it has been revoked.
 async function checkSessionRevoked(decoded) {
   // Env super-admin tokens (role:'admin') are not backed by a DB user row.
+  // #1939 — the env super-admin's userId is the literal 'super_admin', which is not
+  // an ObjectId; looking it up would throw a CastError and fail every request.
+  if (decoded.userId === 'super_admin') return null;
   if (decoded.role === 'admin' && !decoded.userId && !decoded.sub) return null;
 
   const userId = decoded.userId || decoded.sub || decoded.id;

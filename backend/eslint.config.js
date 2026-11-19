@@ -85,4 +85,26 @@ export default [
       ],
     },
   },
+  {
+    // #1939 — access tokens are signed and verified only through services/tokenService,
+    // so issuance and verification cannot drift apart again. parentPortalService is a
+    // separate token type with its own key and audience; it stays on jsonwebtoken on
+    // purpose, because routing it through tokenService would let parent tokens pass
+    // the admin middleware.
+    files: ['src/**/*.js'],
+    ignores: ['src/services/tokenService.js', 'src/services/parentPortalService.js'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'jsonwebtoken',
+              message: 'Sign and verify access tokens through services/tokenService.js (#1939), not jsonwebtoken directly.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

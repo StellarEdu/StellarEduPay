@@ -24,14 +24,15 @@ spec:
                 - "*"
       verifyImages:
         - imageReferences:
-            - "ghcr.io/mystery-cli/stellaredupay-backend:*"
-            - "ghcr.io/mystery-cli/stellaredupay-frontend:*"
+            - "ghcr.io/stellaredu/stellaredupay-backend:*"
+            - "ghcr.io/stellaredu/stellaredupay-frontend:*"
+            - "ghcr.io/stellaredu/stellaredupay-backup-tools:*"
           mutateDigest: true
           verifyDigest: true
           attestors:
             - entries:
                 - keyless:
                     issuer: https://token.actions.githubusercontent.com
-                    subject: https://github.com/Mystery-CLI/StellarEduPay/.github/workflows/container-publish.yml@refs/heads/main
+                    subject: https://github.com/StellarEdu/StellarEduPay/.github/workflows/container-publish.yml@refs/heads/main
                     rekor:
                       url: https://rekor.sigstore.dev

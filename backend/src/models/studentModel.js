@@ -25,6 +25,9 @@ const studentSchema = new mongoose.Schema(
     class: { type: String, required: true, index: true },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    // #1937 — bumped by POST /students/:id/pay-link/revoke. Pay-link tokens carry
+    // the version they were issued at and are rejected once it moves on.
+    linkVersion: { type: Number, default: 0, min: 0 },
     fees: { type: [feeCategorySchema], default: [] },
     paymentDeadline: { type: Date, default: null },
     feePaid: { type: Boolean, default: false, index: true },

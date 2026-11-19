@@ -2,7 +2,7 @@
 
 const mongoose = require('mongoose');
 const logger = require('../utils/logger');
-const SystemConfig = require('../models/SystemConfig');
+const SystemConfig = require('../models/systemConfigModel');
 const { register, Gauge } = require('prom-client');
 
 // Interval at which we check whether a durable job is due. Short enough that a

@@ -33,6 +33,7 @@ const email = require('./email');
 const { sendSms, sendWhatsApp, isTwilioConfigured } = require('./smsService');
 const School = require('../models/schoolModel');
 const { formatCryptoAmount, formatWithFiatEquivalent } = require('../utils/formatMoney');
+const { buildReminderPayUrl } = require('./payLinkService');
 
 /**
  * Verify the active email provider is reachable/configured.
@@ -51,7 +52,7 @@ async function verifySmtp() {
  * @param {string} [opts.assetCode]   - Asset code for amount display, e.g. 'XLM' or 'USDC'
  * @param {string} [opts.localCurrency] - ISO 4217 fiat currency for fiat equivalent, e.g. 'NGN'
  */
-async function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, portalUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address, supportContact, locale, timezone, assetCode, localCurrency }) {
+async function buildReminderEmail({ studentName, studentId, className, feeAmount, remainingBalance, schoolName, reminderCount, unsubscribeUrl, portalUrl, payUrl, escalationLevel, paymentDeadline, logoUrl, primaryColor, address, supportContact, locale, timezone, assetCode, localCurrency }) {
   const outstanding = remainingBalance != null ? remainingBalance : feeAmount;
   // Issue #1587: use the school's configured locale for translated labels.
   const resolvedLocale = locale || 'en';
@@ -102,6 +103,8 @@ async function buildReminderEmail({ studentName, studentId, className, feeAmount
     unsubscribeUrl: unsubscribeUrl || '',
     // #1637: per-family parent portal magic link (opt-in, PARENT_PORTAL_EMAIL_LINKS)
     portalUrl: portalUrl || '',
+    // #1937: signed pay link (opt-in via PAY_LINK_EMAIL_LINKS)
+    payUrl: payUrl || '',
     logoUrl: logoUrl || '',
     primaryColor: primaryColor || '#1a56db',
     schoolAddress: address || '',
@@ -171,10 +174,17 @@ async function sendFeeReminder(opts) {
     }
   }
 
+  // #1937: a signed link lets the parent pay without typing a student ID.
+  // Opt-in; returns '' when disabled or unconfigured, and never blocks the email.
+  const payUrl = opts.schoolId && opts.studentId
+    ? await buildReminderPayUrl({ schoolId: opts.schoolId, studentId: opts.studentId })
+    : '';
+
   const { subject, text, html } = await buildReminderEmail({
     ...opts,
     unsubscribeUrl,
     portalUrl,
+    payUrl,
     logoUrl: school?.logoUrl || '',
     primaryColor: school?.primaryColor || '#1a56db',
     address: school?.address || '',
