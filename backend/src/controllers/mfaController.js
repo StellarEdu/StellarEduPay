@@ -591,13 +591,16 @@ async function verifyAndEnableUserMfa(req, res) {
       // Build the full, unrestricted payload (no mfaSetupPending).
       // tokenVersion carries over so the re-issued token still matches the account.
       const newPayload = { role, userId: uid, schoolId, roles, tokenVersion: tokenVersion || 0 };
-      const { token: newAccessToken } = tokenService.sign(newPayload, { expiresIn: accessTTL });
+      // #1940 — bind the re-issued access token to the new session, and deny the old one.
+      const newSessionId = crypto.randomBytes(16).toString('hex');
+      const { token: newAccessToken } = tokenService.sign(newPayload, { expiresIn: accessTTL, sid: newSessionId });
 
       // Rotate the refresh token: revoke the old family, issue a clean new one.
       const store = getStore();
       const oldRefreshToken = req.cookies?.admin_refresh_token;
       if (oldRefreshToken) {
         const oldMeta = await store.getToken(oldRefreshToken).catch(() => null);
+        if (oldMeta?.sessionId) await tokenService.revokeSession(oldMeta.sessionId);
         if (oldMeta?.familyId) {
           await store.revokeFamily(oldMeta.familyId, refreshTTL).catch(() =>
             logger.warn('[MFA] Failed to revoke old refresh-token family after enrolment', { familyId: oldMeta.familyId })
@@ -615,7 +618,7 @@ async function verifyAndEnableUserMfa(req, res) {
 
       let newRefreshToken;
       try {
-        newRefreshToken = await issueRefreshToken(store, newPayload, refreshTTL, req);
+        newRefreshToken = await issueRefreshToken(store, newPayload, refreshTTL, req, newSessionId);
       } catch (err) {
         logger.error('[MFA] Failed to issue new refresh token after enrolment', { error: err.message });
         // Non-fatal for the response, but the refresh rotation didn't happen.

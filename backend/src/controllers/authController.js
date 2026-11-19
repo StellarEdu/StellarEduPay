@@ -162,9 +162,8 @@ function extractDeviceInfo(req) {
 
 // Persist a refresh token and create a session record. Returns the generated
 // refreshToken string. Throws on store write failure (#820).
-async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
+async function issueRefreshToken(store, jwtPayload, refreshTTL, req, sessionId = crypto.randomBytes(16).toString('hex')) {
   const familyId  = crypto.randomBytes(16).toString('hex');
-  const sessionId = crypto.randomBytes(16).toString('hex');
   const refreshToken = crypto.randomBytes(40).toString('hex');
 
   await store.setToken(refreshToken, refreshTTL, { familyId, sessionId, ...jwtPayload });
@@ -232,12 +231,15 @@ async function handleLogin(req, res) {
 
     const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
     // #1939 — sign through tokenService so the token matches what requireAdminAuth verifies.
-    const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
+    // #1940 — the access token's sid is the refresh session id, so revoking the
+    // session (logout, revoke, password change) denies both tokens.
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
 
     const store = getStore();
     let refreshToken;
     try {
-      refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
+      refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req, sessionId);
     } catch (err) {
       logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
       return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
@@ -354,12 +356,14 @@ async function handleLogin(req, res) {
     tokenVersion: user.tokenVersion || 0,
     ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
   };
-  const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
+  // #1940 — same session id for the access token and the refresh session.
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
 
   const store = getStore();
   let refreshToken;
   try {
-    refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
+    refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req, sessionId);
   } catch (err) {
     logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
     return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
@@ -493,7 +497,8 @@ async function handleRefresh(req, res) {
     }
   }
 
-  const { token: accessToken } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
+  // #1940 — the refreshed access token stays bound to the same session.
+  const { token: accessToken } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: meta.sessionId });
 
   // Deliver via cookies only — no tokens in response body (#821)
   res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions(accessTTL));
@@ -515,8 +520,22 @@ async function handleLogout(req, res) {
       const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
       await store.revokeFamily(meta.familyId, refreshTTL).catch(() => logger.debug('[AuthController] revokeFamily on logout missed'));
       if (meta.sessionId) await store.delSession(meta.sessionId).catch(() => logger.debug('[AuthController] delSession on logout missed'));
+      // #1940 — without this the access token stays valid until it expires.
+      if (meta.sessionId) await tokenService.revokeSession(meta.sessionId);
     }
     await store.delToken(refreshToken).catch(() => logger.debug('[AuthController] delToken on logout missed'));
+  }
+
+  // #1940 — an access-only logout (no refresh cookie) still denies its session.
+  // Expired or invalid tokens need no entry: they are already dead.
+  const accessCookie = req.cookies?.[ACCESS_COOKIE];
+  if (accessCookie) {
+    try {
+      const decoded = tokenService.verify(accessCookie);
+      if (decoded.sid) await tokenService.revokeSession(decoded.sid);
+    } catch {
+      // nothing live to revoke
+    }
   }
 
   const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' };
@@ -591,6 +610,7 @@ async function handleRevokeSession(req, res) {
     await store.revokeFamily(sess.familyId, refreshTTL).catch(() => logger.debug('[AuthController] revokeFamily in handleRevokeSession missed'));
   }
   await store.delSession(sessionId).catch(() => logger.debug('[AuthController] delSession in handleRevokeSession missed'));
+  await tokenService.revokeSession(sessionId);
   await logAudit({
     schoolId: principal.schoolId || 'system',
     action: 'SESSION_REVOKED',

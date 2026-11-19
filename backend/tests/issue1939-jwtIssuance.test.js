@@ -9,6 +9,15 @@
  *   login → /auth/me → refresh → /auth/me
  */
 
+// Jest workers share process.env across test files; put back what this file changed.
+const ORIGINAL_ENV = { ...process.env };
+afterAll(() => {
+  for (const key of ['NODE_ENV', 'JWT_SECRET', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'REQUIRE_SESSION_ID']) {
+    if (ORIGINAL_ENV[key] === undefined) delete process.env[key];
+    else process.env[key] = ORIGINAL_ENV[key];
+  }
+});
+
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'j'.repeat(48);
 process.env.ADMIN_USERNAME = 'admin';

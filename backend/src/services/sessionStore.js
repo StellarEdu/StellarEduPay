@@ -210,13 +210,24 @@ function getStore() {
  */
 function revokeAllUserSessions(userId) {
   const store = getStore();
+  const key = userKey(userId);
+
+  // #1940 — every session id this user holds, from both the session map and the
+  // refresh tokens. Each one is also the sid of an access token that must stop working.
+  const sessionIds = new Set();
+  for (const entry of refreshTokens.values()) {
+    if (entry && userKey(entry.userId) === key && entry.sessionId) sessionIds.add(entry.sessionId);
+  }
+
   const revokedTokens = store.revokeAllUserTokens(userId, parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400));
 
   // Delete all sessions for the user.
-  const key = userKey(userId);
   const userSessions = sessions.get(key);
   const sessionCount = userSessions ? userSessions.size : 0;
+  if (userSessions) for (const sid of userSessions.keys()) sessionIds.add(sid);
   sessions.delete(key);
+
+  denyAccessTokens(sessionIds);
 
   // Best-effort: clear login lockout counters if the auth controller exposes
   // them. Wrapped in try/catch so a missing helper never breaks revocation.
@@ -231,6 +242,17 @@ function revokeAllUserSessions(userId) {
   }
 
   return { sessions: sessionCount, refreshTokens: revokedTokens };
+}
+
+// Deny the access tokens bound to these sessions. tokenService imports this module
+// (for parseTTL), so it is required lazily to avoid a cycle. revokeSession records the
+// denial in memory synchronously; the Redis write is best-effort and awaited separately.
+function denyAccessTokens(sessionIds) {
+  // eslint-disable-next-line global-require
+  const tokenService = require('./tokenService');
+  for (const sid of sessionIds) {
+    tokenService.revokeSession(sid).catch(() => {});
+  }
 }
 
 /** Test helper: wipe every in-memory session/token structure. */
