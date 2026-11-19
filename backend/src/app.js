@@ -1,6 +1,8 @@
 'use strict';
 
 require('dotenv').config();
+// #1829: resolve <SECRET>_FILE references before tracing/config/any module reads env.
+require('./config/secrets').resolveFileSecrets();
 // #1636: OpenTelemetry must start before express/mongoose/ioredis are required
 // so auto-instrumentation can patch them. No-op unless OTEL_TRACING_ENABLED=true.
 require('./tracing').initTracing();
@@ -57,7 +59,6 @@ const academicPeriodRoutes = require('./routes/academicPeriodRoutes');
 const anchorRoutes = require('./routes/anchorRoutes');
 const parentPortalRoutes = require('./routes/parentPortalRoutes');
 const publicConfigRoutes = require('./routes/publicConfigRoutes');
-const internalRoutes = require('./routes/internalRoutes');
 const retryQueueRoutes = require('./routes/retryQueueRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
@@ -279,7 +280,6 @@ app.use('/api/parent', parentPortalRoutes);
 // but the mounts were lost in a merge; restored as part of #1632 so every
 // route in docs/openapi.json is actually reachable.
 app.use('/api/public-config', publicConfigRoutes);
-app.use('/api/internal', internalRoutes);
 app.use('/api/retry-queue', retryQueueRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
 app.get('/health', healthCheck);
