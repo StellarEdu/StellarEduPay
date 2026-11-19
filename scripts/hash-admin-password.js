@@ -12,6 +12,7 @@
  */
 
 const bcrypt = require('bcryptjs');
+const { validatePasswordPolicy } = require('../backend/src/utils/passwordPolicy');
 const readline = require('readline');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -30,8 +31,11 @@ rl.question('Enter the admin password to hash: ', async (password) => {
   if (hidden) process.stdout.write('\n');
   rl.close();
 
-  if (!password || password.length < 12) {
-    console.error('Error: password must be at least 12 characters.');
+  // Same policy as every other password entrypoint (#1948). The admin account
+  // has no email/username context here, so only the generic rules apply.
+  const policy = validatePasswordPolicy(password);
+  if (!policy.valid) {
+    console.error(`Error: ${policy.message}`);
     process.exit(1);
   }
 

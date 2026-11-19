@@ -7,6 +7,7 @@ const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { maskEmail } = require('../utils/piiRedaction');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { logAudit } = require('../services/auditService');
 const { isAdminTotpConfigured, verifyAdminTotp } = require('../services/adminTotpService');
 const {
@@ -710,13 +711,6 @@ async function handleChangePassword(req, res) {
     });
   }
 
-  if (newPassword.length < 8) {
-    return res.status(400).json({
-      error: 'New password must be at least 8 characters.',
-      code: 'VALIDATION_ERROR',
-    });
-  }
-
   const userId = req.admin?.userId;
 
   // Super-admin (env-based) path
@@ -725,6 +719,13 @@ async function handleChangePassword(req, res) {
       error: 'Super-admin password must be changed via environment variables.',
       code: 'FORBIDDEN',
     });
+  }
+
+  // Cheap, identity-free policy checks run before any DB work or bcrypt, so
+  // oversized or trivially weak input is rejected without a hash computation.
+  const earlyPolicy = validatePasswordPolicy(newPassword);
+  if (!earlyPolicy.valid) {
+    return res.status(400).json({ error: earlyPolicy.message, code: earlyPolicy.code });
   }
 
   let user;
@@ -743,6 +744,18 @@ async function handleChangePassword(req, res) {
   const currentValid = Boolean(currentPassword) && await bcrypt.compare(currentPassword, user.passwordHash);
   if (!currentValid) {
     return res.status(401).json({ error: 'Current password is incorrect.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  // Identity-aware policy (email local part / username) and reuse check.
+  const policy = validatePasswordPolicy(newPassword, { email: user.email });
+  if (!policy.valid) {
+    return res.status(400).json({ error: policy.message, code: policy.code });
+  }
+  if (await bcrypt.compare(newPassword, user.passwordHash)) {
+    return res.status(400).json({
+      error: 'New password must be different from your current password.',
+      code: 'PASSWORD_REUSED',
+    });
   }
 
   const newHash = await bcrypt.hash(newPassword, 12);

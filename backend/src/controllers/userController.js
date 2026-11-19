@@ -10,16 +10,10 @@ const { logAudit } = require('../services/auditService');
 const { sendEmail } = require('../services/emailService');
 const { renderEmailTemplate } = require('../services/emailTemplateService');
 const { revokeAllUserSessions } = require('../services/sessionStore');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 
 // ── Password policy ────────────────────────────────────────────────────────────
-const MIN_PASSWORD_LENGTH = 12;
 
-function validatePassword(password) {
-  if (!password || password.length < MIN_PASSWORD_LENGTH) {
-    return { valid: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
-  return { valid: true };
-}
 
 // ── Body validation schemas ────────────────────────────────────────────────────
 const updateSchoolUserSchema = Joi.object({
@@ -539,9 +533,11 @@ async function setPassword(req, res) {
     });
   }
 
-  const validation = validatePassword(password);
-  if (!validation.valid) {
-    return res.status(400).json({ error: validation.error, code: 'WEAK_PASSWORD' });
+  // Identity-free checks first (cheap, no DB), then identity-aware once the
+  // invitation resolves to a user (#1948).
+  const earlyPolicy = validatePasswordPolicy(password);
+  if (!earlyPolicy.valid) {
+    return res.status(400).json({ error: earlyPolicy.message, code: earlyPolicy.code });
   }
 
   const tokenHash = hashToken(token);
@@ -555,6 +551,11 @@ async function setPassword(req, res) {
       error: 'Invalid or expired invitation token.',
       code: 'INVALID_TOKEN',
     });
+  }
+
+  const policy = validatePasswordPolicy(password, { email: user.email });
+  if (!policy.valid) {
+    return res.status(400).json({ error: policy.message, code: policy.code });
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -655,9 +656,9 @@ async function resetPassword(req, res) {
     });
   }
 
-  const validation = validatePassword(password);
-  if (!validation.valid) {
-    return res.status(400).json({ error: validation.error, code: 'WEAK_PASSWORD' });
+  const earlyPolicy = validatePasswordPolicy(password);
+  if (!earlyPolicy.valid) {
+    return res.status(400).json({ error: earlyPolicy.message, code: earlyPolicy.code });
   }
 
   const tokenHash = hashToken(token);
@@ -670,6 +671,17 @@ async function resetPassword(req, res) {
     return res.status(400).json({
       error: 'Invalid or expired reset token.',
       code: 'INVALID_TOKEN',
+    });
+  }
+
+  const policy = validatePasswordPolicy(password, { email: user.email });
+  if (!policy.valid) {
+    return res.status(400).json({ error: policy.message, code: policy.code });
+  }
+  if (await bcrypt.compare(password, user.passwordHash)) {
+    return res.status(400).json({
+      error: 'New password must be different from your previous password.',
+      code: 'PASSWORD_REUSED',
     });
   }
 
