@@ -185,6 +185,28 @@ async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
   return refreshToken;
 }
 
+// Audit a backup-code login and flag when few codes remain (#1943). The code
+// is already consumed at this point, so an audit failure is logged, not thrown.
+const LOW_BACKUP_CODE_THRESHOLD = 3;
+
+async function recordBackupCodeUse(user, updatedUser) {
+  const remaining = (updatedUser?.mfaBackupCodes || []).filter((c) => !c.used).length;
+  await logAudit({
+    schoolId: user.schoolId || 'system',
+    action: 'MFA_BACKUP_CODE_USED',
+    performedBy: user.email,
+    targetId: String(user._id),
+    targetType: 'user',
+    details: { remainingCodes: remaining },
+    result: 'success',
+    severity: 'high',
+  }).catch((err) => logger.error('[AuthController] Failed to audit backup code use', { error: err.message }));
+
+  if (remaining < LOW_BACKUP_CODE_THRESHOLD) {
+    logger.warn('[AuthController] MFA backup codes running low', { userId: String(user._id), remaining });
+  }
+}
+
 // ── Login handler ─────────────────────────────────────────────────────────────
 
 async function handleLogin(req, res) {
@@ -274,7 +296,7 @@ async function handleLogin(req, res) {
   // ── MFA check ──────────────────────────────────────────────────────────────
   let mfaSchool = null;
   {
-    const { verifyTotpCode, verifyBackupCode } = require('./mfaController');
+    const { verifyTotpCode, consumeUserBackupCode } = require('./mfaController');
 
     if (user.mfaEnabled && user.mfaSecret) {
       if (!mfaCode) {
@@ -282,13 +304,25 @@ async function handleLogin(req, res) {
       }
       const totpValid = verifyTotpCode(user.mfaSecret, mfaCode);
       if (!totpValid) {
-        const bcIdx = verifyBackupCode(user.mfaBackupCodes || [], mfaCode);
-        if (bcIdx === -1) {
+        // #1943 — Backup codes are single-use. consumeUserBackupCode marks the
+        // code used with a conditional write that matches only while the code is
+        // still unused, so two concurrent logins with the same code cannot both
+        // succeed. The write is awaited: if it fails, the login fails.
+        let consumed;
+        try {
+          consumed = await consumeUserBackupCode(user._id, mfaCode);
+        } catch (err) {
+          logger.error('[AuthController] Backup code consumption failed', { error: err.message });
+          return res.status(503).json({ error: 'Authentication service unavailable.', code: 'AUTH_DB_ERROR' });
+        }
+        if (consumed.status === 'rate_limited') {
+          return res.status(429).json({ error: 'Too many backup code attempts. Try again later.', code: 'MFA_RATE_LIMITED' });
+        }
+        if (consumed.status !== 'ok') {
           recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid MFA)'));
           return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
         }
-        const User = require('../models/userModel');
-        User.findByIdAndUpdate(user._id, { $set: { [`mfaBackupCodes.${bcIdx}.used`]: true } }).catch(() => logger.debug('[AuthController] mark user backup code used missed'));
+        await recordBackupCodeUse(user, consumed.user);
       }
     } else if (user.schoolId) {
       // #1553 — The old shared-secret path (school.mfaSecret) is removed.
