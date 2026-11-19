@@ -30,11 +30,12 @@ if (process.env.NODE_ENV !== 'production') {
   mongoose.set('debug', false);
 }
 
-// Issue #1524: Enable filter sanitization globally as defence in depth
-// against operator injection like {class: {$ne: 'x'}}, even though the
-// query parser is set to 'simple' above. sanitizeFilter masks all values
-// matching the pattern of a MongoDB operator key (starting with $).
-mongoose.set('sanitizeFilter', true);
+// NOTE (#1954): do NOT enable mongoose.set('sanitizeFilter', true) globally.
+// It rewrites every internal operator filter ($ne/$in/$gte/$lt/$exists) into a
+// literal $eq wrapper at exec() time, which throws CastError (or silently
+// matches nothing) for the queries this app writes itself. Operator injection
+// is instead blocked by the sanitizeInput middleware mounted below, which
+// rejects $-prefixed or dotted keys in req.body/req.query/req.params.
 
 const studentRoutes = require('./routes/studentRoutes');
 const payLinkRoutes = require('./routes/payLinkRoutes');
@@ -96,6 +97,7 @@ const { requestLogger } = require('./middleware/requestLogger');
 const { createConcurrentRequestMiddleware } = require('./middleware/concurrentRequestHandler');
 const { requireAdminAuth } = require('./middleware/auth');
 const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
+const { sanitizeInput } = require('./middleware/sanitizeInput');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
 const { healthCheck, healthLive, healthReady, version: versionInfo } = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
@@ -222,6 +224,11 @@ app.use((req, res, next) => {
 // ── JSON depth / array-bomb guard + query-param de-pollution ──────────────────
 app.use(jsonDepthGuard);
 app.use(deduplicateQueryParams);
+
+// ── Operator-injection guard (#1954, replaces global sanitizeFilter) ──────────
+// Rejects $-prefixed or dotted keys in req.body, req.query and req.params with
+// a 400 before any router sees them. Mounted globally so every route is covered.
+app.use(sanitizeInput);
 
 const concurrentMiddleware = createConcurrentRequestMiddleware({
   circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 30000, halfOpenSuccessThreshold: 2 },

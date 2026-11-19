@@ -145,13 +145,19 @@ const idempotency = idempotencyMiddleware({ criticalPaymentEndpoints: true });
 
 /**
  * @swagger
- * /api/payments/receipts/{receiptId}/verify:
+ * /api/payments/receipts/{schoolId}/{receiptId}/verify:
  *   get:
  *     summary: Verify the authenticity of a payment receipt
  *     operationId: verifyReceipt
  *     tags:
  *       - Payments
  *     parameters:
+ *       - in: path
+ *         name: schoolId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: School ID embedded in the printed/emailed receipt
  *       - in: path
  *         name: receiptId
  *         required: true
@@ -161,6 +167,8 @@ const idempotency = idempotencyMiddleware({ criticalPaymentEndpoints: true });
  *     responses:
  *       200:
  *         description: Receipt verification result
+ *       400:
+ *         description: Malformed school or receipt ID
  *       404:
  *         description: Receipt not found
  */
@@ -187,6 +195,13 @@ router.get("/verify/:txHash", validateTxHashParam, verifyLimiter, verifyTransact
 
 // Receipt verification lives on a distinct path so it is not shadowed by
 // "/verify/:txHash" above (which rejects non-hash params with 400).
+// It is self-contained: the schoolId is carried in the URL so verification
+// does not depend on resolveSchool / req.schoolId (#1956).
+router.get("/receipts/:schoolId/:receiptId/verify", verifyReceipt);
+
+// Deprecated alias for receipts printed before the schoolId was embedded in
+// the verify URL. Kept for backwards compatibility; it cannot resolve the
+// school and therefore always reports the receipt as not found.
 router.get("/receipts/:receiptId/verify", verifyReceipt);
 
 // Validation runs BEFORE resolveSchool so missing-school requests still get

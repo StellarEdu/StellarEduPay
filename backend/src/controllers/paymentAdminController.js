@@ -4,8 +4,11 @@
  * paymentAdminController — admin-only payment operations, all school-scoped.
  */
 
+const mongoose = require('mongoose');
 const Payment = require('../models/paymentModel');
 const Receipt = require('../models/receiptModel');
+const School = require('../models/schoolModel');
+const Student = require('../models/studentModel');
 const Refund = require('../models/refundModel');
 const ReconciliationReport = require('../models/reconciliationReportModel');
 const { createReceipt, verifyReceiptSignature } = require('../services/receiptService');
@@ -867,25 +870,75 @@ async function getSchoolRefunds(req, res, next) {
   }
 }
 
+/**
+ * Masks a student's name for the public verification response: first name plus
+ * the initial of the last name (e.g. "Ada Lovelace" → "Ada L."). Never exposes
+ * the full name to an unauthenticated verifier.
+ * @param {string} name
+ * @returns {string|null}
+ */
+function maskStudentName(name) {
+  if (!name || typeof name !== 'string') return null;
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
+}
+
+/**
+ * GET /api/payments/receipts/:schoolId/:receiptId/verify
+ *
+ * Public receipt verification. Self-contained: the schoolId travels in the URL
+ * so this route does not depend on resolveSchool (it is registered before it).
+ * Returns the issuing school, a masked student name, and the payment details so
+ * a verifier can tell which school issued the receipt.
+ */
 async function verifyReceipt(req, res, next) {
   try {
-    const { receiptId } = req.params;
+    const { schoolId, receiptId } = req.params;
 
-    const receipt = await Receipt.findOne({ _id: receiptId, schoolId: req.schoolId }).lean();
+    if (!mongoose.isValidObjectId(receiptId)) {
+      return res.status(400).json({ error: 'Invalid receipt ID', code: 'VALIDATION_ERROR' });
+    }
+    if (!mongoose.isValidObjectId(schoolId)) {
+      return res.status(400).json({ error: 'Invalid school ID', code: 'VALIDATION_ERROR' });
+    }
+
+    const receipt = await Receipt.findOne({ _id: receiptId, schoolId }).lean();
     if (!receipt) return res.status(404).json({ error: 'Receipt not found', code: 'NOT_FOUND' });
 
+    const [school, student] = await Promise.all([
+      School.findById(receipt.schoolId).select('name').lean(),
+      receipt.studentId
+        ? Student.findById(receipt.studentId).select('name').lean()
+        : Promise.resolve(null),
+    ]);
+
+    const base = {
+      receiptId,
+      school: {
+        name: school ? school.name : null,
+        schoolId: String(receipt.schoolId),
+      },
+      studentMaskedName: maskStudentName(student && student.name),
+      amount: receipt.amount,
+      assetCode: receipt.assetCode || 'XLM',
+      txHash: receipt.txHash,
+      confirmedAt: receipt.confirmedAt,
+    };
+
+    let isValid = false;
     try {
-      const isValid = verifyReceiptSignature(receipt);
-      res.json({
-        receiptId,
-        valid: isValid,
-        txHash: receipt.txHash,
-        amount: receipt.amount,
-        confirmedAt: receipt.confirmedAt,
-      });
+      isValid = verifyReceiptSignature(receipt);
     } catch (err) {
-      res.json({ receiptId, valid: false, error: 'Signature verification failed' });
+      return res.json({ ...base, valid: false, reason: 'Signature verification failed' });
     }
+
+    if (!isValid) {
+      return res.json({ ...base, valid: false, reason: 'Receipt signature is invalid' });
+    }
+
+    res.json({ ...base, valid: true });
   } catch (err) {
     next(err);
   }
