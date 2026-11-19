@@ -9,6 +9,7 @@ const { verifyStellarAccountFunding } = require('../services/stellarAccountVerif
 const { validateWebhookUrl } = require('../utils/validateWebhookUrl');
 const schoolCache = require('../services/schoolCacheInvalidator');
 const { buildWalletRotation } = require('../services/walletRotationService');
+const { isAdminTotpConfigured, verifyAdminTotp } = require('../services/adminTotpService');
 const {
   parseOverlapSeconds,
   applySecretRotation,
@@ -117,9 +118,11 @@ async function verifyStepUp(req, { password, mfaCode } = {}) {
   }
 
   // --- MFA verification -------------------------------------------------
+  // The env super-admin's second factor is ADMIN_TOTP_SECRET (#1947). School
+  // documents no longer carry an MFA secret (#1946).
   const mfaEnabled = isDbUser
     ? !!user.mfaEnabled
-    : !!(req.school && req.school.mfaEnabled);
+    : isAdminTotpConfigured();
 
   if (mfaEnabled) {
     if (!mfaCode || typeof mfaCode !== 'string') {
@@ -127,12 +130,15 @@ async function verifyStepUp(req, { password, mfaCode } = {}) {
     }
     let mfaOk = false;
     try {
-      const mfaService = require('../services/mfaService');
-      const secret = isDbUser ? user.mfaSecret : (req.school && req.school.mfaSecret);
-      if (typeof mfaService.verifyToken === 'function') {
-        mfaOk = await mfaService.verifyToken(secret, mfaCode);
-      } else if (typeof mfaService.verifyTotp === 'function') {
-        mfaOk = await mfaService.verifyTotp(secret, mfaCode);
+      if (isDbUser) {
+        const mfaService = require('../services/mfaService');
+        if (typeof mfaService.verifyToken === 'function') {
+          mfaOk = await mfaService.verifyToken(user.mfaSecret, mfaCode);
+        } else if (typeof mfaService.verifyTotp === 'function') {
+          mfaOk = await mfaService.verifyTotp(user.mfaSecret, mfaCode);
+        }
+      } else {
+        mfaOk = (await verifyAdminTotp(mfaCode)).ok;
       }
     } catch {
       mfaOk = false;

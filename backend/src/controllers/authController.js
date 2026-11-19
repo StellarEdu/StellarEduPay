@@ -8,6 +8,7 @@ const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
 const { maskEmail } = require('../utils/piiRedaction');
 const { logAudit } = require('../services/auditService');
+const { isAdminTotpConfigured, verifyAdminTotp } = require('../services/adminTotpService');
 const {
   getStore,
   revokeAllUserSessions,
@@ -207,6 +208,113 @@ async function auditMfaFailure(req, { userId, email, schoolId, reason }) {
   }
 }
 
+// ── Env super-admin login (#1947) ─────────────────────────────────────────────
+
+async function handleEnvAdminLogin(req, res, { username, password, mfaCode }) {
+  if (process.env.ADMIN_LOGIN_DISABLED === 'true') {
+    return res.status(403).json({
+      error: 'Environment super-admin login is disabled. Use a database super-admin account.',
+      code: 'ADMIN_LOGIN_DISABLED',
+    });
+  }
+
+  const envUsername     = process.env.ADMIN_USERNAME;
+  const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
+  const envPassword     = process.env.ADMIN_PASSWORD;
+
+  if (!envUsername || (!envPassword && !envPasswordHash)) {
+    return res.status(500).json({
+      error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
+      code: 'AUTH_MISCONFIGURED',
+    });
+  }
+
+  const adminTotpConfigured = isAdminTotpConfigured();
+  if (process.env.NODE_ENV === 'production' && !adminTotpConfigured) {
+    // Refuse the break-glass login rather than let one factor guard every tenant.
+    logger.error('[AuthController] ADMIN_TOTP_SECRET is required for env super-admin login in production');
+    return res.status(500).json({
+      error: 'Server misconfiguration: ADMIN_TOTP_SECRET is required in production.',
+      code: 'AUTH_MISCONFIGURED',
+    });
+  }
+
+  const loginId = String(username).trim().toLowerCase();
+  const usernameMatch = safeEqual(loginId, envUsername);
+  let credValid = false;
+
+  if (envPasswordHash) {
+    credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
+  } else {
+    credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
+  }
+
+  if (!credValid) {
+    // Only failures against the real admin username count towards its lockout.
+    if (usernameMatch) {
+      recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (env admin invalid credentials)'));
+    }
+    return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  if (adminTotpConfigured) {
+    if (!mfaCode) {
+      return res.status(200).json({ requiresMfa: true });
+    }
+    const totp = await verifyAdminTotp(mfaCode);
+    if (!totp.ok) {
+      await recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (env admin invalid MFA)'));
+      await auditMfaFailure(req, { userId: 'super_admin', email: null, schoolId: 'system', reason: totp.reason });
+      return res.status(401).json({ error: 'Invalid MFA code.', code: 'INVALID_MFA_CODE' });
+    }
+  }
+
+  clearLoginFailures(loginId);
+
+  const jwt = require('jsonwebtoken');
+  const secret    = process.env.JWT_SECRET;
+  const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
+  const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+
+  const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
+  const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+
+  const store = getStore();
+  let refreshToken;
+  try {
+    refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
+  } catch (err) {
+    logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
+    return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
+  }
+
+  // #1947 — every break-glass login is high-severity and alerts an admin.
+  try {
+    await logAudit({
+      schoolId: 'system',
+      action: 'SUPER_ADMIN_LOGIN',
+      performedBy: 'env-super-admin',
+      targetId: 'super_admin',
+      targetType: 'user',
+      details: { mfaVerified: adminTotpConfigured },
+      result: 'success',
+      severity: 'high',
+      ipAddress: req.ip || null,
+      userAgent: req.headers?.['user-agent'] || null,
+    });
+  } catch (err) {
+    logger.warn('[AuthController] Failed to write SUPER_ADMIN_LOGIN audit row', { error: err.message });
+  }
+  sendAdminAlert('Environment super-admin login', { ip: req.ip || 'unknown', mfaVerified: adminTotpConfigured })
+    .catch(() => logger.debug('[AuthController] super-admin login alert missed'));
+
+  // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
+  res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
+  res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
+
+  return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
+}
+
 // ── Login handler ─────────────────────────────────────────────────────────────
 
 async function handleLogin(req, res) {
@@ -220,57 +328,16 @@ async function handleLogin(req, res) {
     });
   }
 
-  // ── ENV super-admin path ───────────────────────────────────────────────────
+  // ── ENV super-admin path (#1947) ──────────────────────────────────────────
+  // The path is chosen explicitly: a request with a username and no email is
+  // the break-glass login. Every DB user signs in with an email, so their
+  // failures are never recorded against the env account's identity.
+  if (!email && username) {
+    return handleEnvAdminLogin(req, res, { username, password, mfaCode });
+  }
+
   if (!email) {
-    const envUsername     = process.env.ADMIN_USERNAME;
-    const envPasswordHash = process.env.ADMIN_PASSWORD_HASH;
-    const envPassword     = process.env.ADMIN_PASSWORD;
-
-    if (!envUsername || (!envPassword && !envPasswordHash)) {
-      return res.status(500).json({
-        error: 'Server misconfiguration: ADMIN_USERNAME or ADMIN_PASSWORD is not set.',
-        code: 'AUTH_MISCONFIGURED',
-      });
-    }
-
-    const usernameMatch = loginId ? safeEqual(loginId, envUsername) : false;
-    let credValid = false;
-
-    if (envPasswordHash) {
-      credValid = usernameMatch && Boolean(password) && await bcrypt.compare(password, envPasswordHash);
-    } else {
-      credValid = usernameMatch && Boolean(password) && safeEqual(password, envPassword);
-    }
-
-    if (!credValid) {
-      recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid credentials)'));
-      return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
-    }
-
-    clearLoginFailures(loginId);
-
-    const jwt = require('jsonwebtoken');
-    const secret    = process.env.JWT_SECRET;
-    const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
-    const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
-
-    const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
-    const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
-
-    const store = getStore();
-    let refreshToken;
-    try {
-      refreshToken = await issueRefreshToken(store, jwtPayload, refreshTTL, req);
-    } catch (err) {
-      logger.error('[AuthController] Failed to persist refresh token during login', { error: err.message });
-      return res.status(500).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_ERROR' });
-    }
-
-    // Deliver tokens via httpOnly cookies only — no tokens in response body (#821)
-    res.cookie(ACCESS_COOKIE, token, accessCookieOptions(accessTTL));
-    res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(refreshTTL));
-
-    return res.json({ isAdmin: true, expiresIn: accessTTL, refreshExpiresIn: refreshTTL });
+    return res.status(400).json({ error: 'email or username is required.', code: 'VALIDATION_ERROR' });
   }
 
   // ── DB user path ───────────────────────────────────────────────────────────
