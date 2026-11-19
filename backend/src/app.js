@@ -57,7 +57,6 @@ const academicPeriodRoutes = require('./routes/academicPeriodRoutes');
 const anchorRoutes = require('./routes/anchorRoutes');
 const parentPortalRoutes = require('./routes/parentPortalRoutes');
 const publicConfigRoutes = require('./routes/publicConfigRoutes');
-const internalRoutes = require('./routes/internalRoutes');
 const retryQueueRoutes = require('./routes/retryQueueRoutes');
 
 const { registerPaymentSavedSubscribers } = require('./services/paymentSavedSubscribers');
