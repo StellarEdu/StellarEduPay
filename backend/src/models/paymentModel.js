@@ -316,7 +316,10 @@ const paymentSchema = new mongoose.Schema(
     },
 
     // Audit trail
-    transactionHash: { type: String, default: null, index: true },
+    // #1967 — `txHash` is the ONLY hash field. The legacy `transactionHash`
+    // field is kept as a non-persisted alias (see the virtual below) so any
+    // remaining writer that assigns `transactionHash` transparently writes
+    // `txHash` and cannot bypass its `required: true` validation.
     startedAt: { type: Date, default: null },
     submittedAt: { type: Date, default: null },
     confirmedAt: { type: Date, default: null, index: true },

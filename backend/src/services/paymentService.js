@@ -1,6 +1,7 @@
 const StellarSdk = require('@stellar/stellar-sdk');
 const Payment = require('../models/paymentModel');
 const Student = require('../models/studentModel');
+const PaymentIntent = require('../models/paymentIntentModel');
 const { server, getSchoolWallet } = require('../config/stellar');
 const logger = require('../utils/logger');
 
@@ -29,6 +30,32 @@ function getOperationAsset(op) {
 }
 
 /**
+ * Resolve a transaction memo to the student it should be credited to.
+ *
+ * A memo can be either:
+ *   - a payment-intent code (random 8-hex string created by
+ *     `createPaymentIntent`), or
+ *   - a plain student ID.
+ *
+ * This is the single source of truth used by submit, verify, sync and the
+ * poller so every path resolves the memo the same way. It returns
+ * `{ student, intent }` where `student` may be null (unmatched) and `intent`
+ * is the matching PaymentIntent document when the memo was an intent code.
+ */
+async function resolvePaymentReference(schoolId, memo) {
+  if (!memo) return { student: null, intent: null };
+
+  const intent = await PaymentIntent.findOne({ schoolId, memo });
+  if (intent) {
+    const student = await Student.findOne({ schoolId, studentId: intent.studentId });
+    return { student: student || null, intent };
+  }
+
+  const student = await Student.findOne({ schoolId, studentId: memo });
+  return { student: student || null, intent: null };
+}
+
+/**
  * Resolve the student a payment operation should be credited to.
  *
  * A transaction carries a single memo, so when several payment operations
@@ -43,7 +70,7 @@ async function resolveStudentForOperation(op, txMemo, schoolId) {
   const memo = op.memo || txMemo;
   if (!memo) return null;
 
-  const student = await Student.findOne({ schoolId, studentId: memo });
+  const { student } = await resolvePaymentReference(schoolId, memo);
   return student || null;
 }
 
@@ -190,4 +217,6 @@ module.exports = {
   fetchAllOperations,
   getOperationAmount,
   getOperationAsset,
+  resolvePaymentReference,
+  resolveStudentForOperation,
 };

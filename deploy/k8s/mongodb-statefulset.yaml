@@ -7,6 +7,10 @@ metadata:
 spec:
   serviceName: mongodb
   replicas: 3
+  # Parallel: all three pods are created at once. With the default
+  # OrderedReady, mongodb-1 is not created until mongodb-0 is Ready, but
+  # mongodb-0 cannot become primary until mongodb-1/2 exist — a deadlock.
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: mongodb
@@ -30,24 +34,10 @@ spec:
             - --replSet
             - rs0
             - --bind_ip_all
-          # rs.initiate() can only run once mongod is up, so it happens in the
-          # postStart hook with retries. The pod is not READY (see readiness
-          # probe) until rs0 has elected this member PRIMARY.
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                  - /bin/bash
-                  - -ec
-                  - |
-                    for i in $(seq 1 60); do
-                      if mongosh --quiet --eval 'try { if (rs.status().ok === 1 && db.hello().isWritablePrimary) { process.exit(0); } } catch (e) {} process.exit(1);'; then
-                        exit 0
-                      fi
-                      mongosh --quiet --eval 'try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb-0.mongodb:27017" }, { _id: 1, host: "mongodb-1.mongodb:27017" }, { _id: 2, host: "mongodb-2.mongodb:27017" }] }); } catch (e) {}' >/dev/null 2>&1 || true
-                      sleep 2
-                    done
-                    exit 1
+          # rs.initiate() is NOT run here: a per-pod postStart hook fires
+          # before the peer pods' DNS records exist, so initiation fails and
+          # the hook loops/aborts. The replica set is initiated once by the
+          # mongodb-init Job below, after all three members resolve.
           ports:
             - containerPort: 27017
           env:
@@ -56,17 +46,23 @@ spec:
           volumeMounts:
             - name: mongodb-data
               mountPath: /data/db
-          # READY means rs0 initiated AND this member is its writable primary —
-          # a plain ping passes even before initiation, which would let the
-          # backend route transactional writes to a node that must reject them.
+          # READY means mongod answers ping AND is a replica-set member in
+          # state PRIMARY (1) or SECONDARY (2). Requiring PRIMARY would keep
+          # secondaries permanently NotReady, which blocks rolling updates
+          # and keeps them out of Service endpoints.
           readinessProbe:
             exec:
               command:
                 - mongosh
                 - --quiet
                 - --eval
-                - 'if (!db.hello().isWritablePrimary) { throw new Error("not primary"); }'
-            initialDelaySeconds: 20
+                - |
+                  db.adminCommand({ ping: 1 });
+                  const state = rs.status().myState;
+                  if (state !== 1 && state !== 2) {
+                    throw new Error("replica set member not PRIMARY/SECONDARY: " + state);
+                  }
+            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -74,11 +70,12 @@ spec:
             exec:
               command:
                 - mongosh
+                - --quiet
                 - --eval
                 - "db.adminCommand({ping:1})"
             initialDelaySeconds: 60
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 10
             failureThreshold: 3
           resources:
             requests:
@@ -122,3 +119,84 @@ spec:
     - port: 27017
       targetPort: 27017
       protocol: TCP
+---
+# One-shot replica-set initiation. Waits until all three members' DNS records
+# resolve, then calls rs.initiate() idempotently (AlreadyInitialized is
+# treated as success). Safe to re-run; the Job is deleted/recreated by
+# `kubectl apply -k` only when its spec changes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-init
+  labels:
+    app: mongodb
+    app.kubernetes.io/component: replica-set-init
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: mongodb
+        app.kubernetes.io/component: replica-set-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: mongo:7
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              # Wait for every member's DNS record to resolve.
+              for host in mongodb-0.mongodb mongodb-1.mongodb mongodb-2.mongodb; do
+                for i in $(seq 1 60); do
+                  if getent hosts "$host" >/dev/null 2>&1; then
+                    break
+                  fi
+                  if [ "$i" -eq 60 ]; then
+                    echo "timed out waiting for DNS: $host" >&2
+                    exit 1
+                  fi
+                  sleep 2
+                done
+              done
+
+              # Wait for mongodb-0 to accept connections.
+              for i in $(seq 1 60); do
+                if mongosh --quiet --host mongodb-0.mongodb --eval 'db.adminCommand({ ping: 1 })' >/dev/null 2>&1; then
+                  break
+                fi
+                if [ "$i" -eq 60 ]; then
+                  echo "timed out waiting for mongodb-0" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+
+              # Initiate idempotently; AlreadyInitialized is success.
+              mongosh --quiet --host mongodb-0.mongodb --eval '
+                try {
+                  rs.initiate({
+                    _id: "rs0",
+                    members: [
+                      { _id: 0, host: "mongodb-0.mongodb:27017" },
+                      { _id: 1, host: "mongodb-1.mongodb:27017" },
+                      { _id: 2, host: "mongodb-2.mongodb:27017" }
+                    ]
+                  });
+                } catch (e) {
+                  if (e.codeName === "AlreadyInitialized" || /already initialized/i.test(e.message)) {
+                    print("replica set already initialized");
+                  } else {
+                    throw e;
+                  }
+                }
+              '
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"

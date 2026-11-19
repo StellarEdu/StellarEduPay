@@ -88,34 +88,41 @@ const MAX_CONCURRENT_SCHOOL_POLLS = Math.max(1, parseInt(
   process.env.SYNC_MAX_CONCURRENT_SCHOOLS || '4', 10));
 
 /**
- * Process a single transaction for a school
+ * Record one creditable operation of a validated transaction as a Payment row.
+ *
+ * Shared by the poller, the Horizon stream and syncPaymentsForSchool so all
+ * three paths record identically: one row per operation, keyed by
+ * { schoolId, txHash, opIndex } (the unique index is the authoritative dedup
+ * guard; the pre-check below is only a cheap optimisation).
+ *
+ * @param {object} tx        Horizon transaction record
+ * @param {object} school    school document (or scope with stellarAddress)
+ * @param {object} operation { payOp, opIndex, amount, asset } from extractValidPayment
+ * @param {object} meta      { memo, memoType, correlationId, fencingToken }
+ * @returns {Promise<{processed: boolean, reason?: string, payment?: object}>}
  */
-async function processTransaction(tx, school, fencingToken) {
-  const { schoolId, stellarAddress } = school;
-  const correlationId = deriveCorrelationId(tx.hash);
+async function recordIncomingTransaction(tx, school, operation, meta = {}) {
+  const { schoolId } = school;
+  const { payOp, opIndex, amount, asset } = operation;
+  const { memo, memoType, correlationId = deriveCorrelationId(tx.hash), fencingToken } = meta;
 
-  // Cheap optimisation only: skip work for transactions we've clearly already
+  // Cheap optimisation only: skip work for operations we've clearly already
   // recorded. This is NOT the dedup guarantee — it is a read-then-write race
   // (two workers can both miss the row). The authoritative guard is the unique
-  // index on Payment { schoolId, txHash }, which makes the insert below fail
-  // atomically with code 11000 if a concurrent worker won the race.
-  const existing = await Payment.findOne({ schoolId, txHash: tx.hash, deletedAt: null });
+  // index on Payment { schoolId, txHash, opIndex }, which makes the insert
+  // below fail atomically with code 11000 if a concurrent worker won the race.
+  const existing = await Payment.findOne({
+    schoolId,
+    txHash: tx.hash,
+    opIndex: opIndex ?? 0,
+    deletedAt: null,
+  });
   if (existing) {
     return { processed: false, reason: 'duplicate' };
   }
 
-  // Funnel: transaction received by the poller
-  _incFunnel('received', schoolId);
-
-  // Extract and validate payment
-  const valid = await extractValidPayment(tx, stellarAddress);
-  if (!valid) {
-    return { processed: false, reason: 'invalid_payment' };
-  }
-
-  const { payOp, memo, asset } = valid;
   // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
-  const paymentAmount = normalizeToNumber(payOp.amount);
+  const paymentAmount = normalizeToNumber(amount ?? payOp.amount);
 
   // Validate payment amount is within configured limits
   const limitValidation = await validatePaymentAmount(paymentAmount, {
@@ -141,7 +148,7 @@ async function processTransaction(tx, school, fencingToken) {
   if (!student) {
     logger.warn('Student not found for memo', { txHash: tx.hash, correlationId, schoolId, memo });
     // Issue #1798 — keep the funds visible for review instead of only logging them.
-    await recordUnmatchedPayment({ schoolId, tx, payOp, memo, memoType: valid.memoType, asset, reason: 'student_not_found' });
+    await recordUnmatchedPayment({ schoolId, tx, payOp, memo, memoType, asset, reason: 'student_not_found' });
     return { processed: false, reason: 'student_not_found' };
   }
 
@@ -149,15 +156,17 @@ async function processTransaction(tx, school, fencingToken) {
   _incFunnel('matched', schoolId);
 
   // Check fencing token - reject if stale (another worker has newer lock)
-  const currentFence = await lock.getCurrentFence(`sync:lock:${schoolId}`);
-  if (currentFence !== null && currentFence !== fencingToken) {
-    logger.warn('Stale fencing token - another worker acquired lock', {
-      schoolId,
-      expectedFence: fencingToken,
-      currentFence,
-      txHash: tx.hash,
-    });
-    return { processed: false, reason: 'stale_lock' };
+  if (fencingToken !== undefined) {
+    const currentFence = await lock.getCurrentFence(`sync:lock:${schoolId}`);
+    if (currentFence !== null && currentFence !== fencingToken) {
+      logger.warn('Stale fencing token - another worker acquired lock', {
+        schoolId,
+        expectedFence: fencingToken,
+        currentFence,
+        txHash: tx.hash,
+      });
+      return { processed: false, reason: 'stale_lock' };
+    }
   }
 
   const senderAddress = payOp.from || null;
@@ -225,6 +234,7 @@ async function processTransaction(tx, school, fencingToken) {
     studentId: memo,
     txHash: tx.hash,
     transactionHash: tx.hash,
+    opIndex: opIndex ?? 0,
     correlationId,
     amount: paymentAmount,
     feeAmount: student.feeAmount,
@@ -281,6 +291,7 @@ async function processTransaction(tx, school, fencingToken) {
       correlationId,
       schoolId,
       studentId: memo,
+      opIndex: paymentData.opIndex,
       amount: paymentAmount,
       feeValidationStatus: cumulativeStatus,
       isSuspicious,
@@ -297,6 +308,65 @@ async function processTransaction(tx, school, fencingToken) {
   } finally {
     await session.endSession();
   }
+}
+
+/**
+ * Process a single transaction for a school.
+ *
+ * extractValidPayment returns { operations, memo, memoType, innerHash } where
+ * each operation is { payOp, opIndex, amount, asset }. We record one payment
+ * row per creditable operation, exactly as syncPaymentsForSchool does.
+ *
+ * Errors are re-thrown so the caller (poller / stream) can decide not to
+ * advance its cursor past a transaction that was not fully recorded.
+ */
+async function processTransaction(tx, school, fencingToken) {
+  const { schoolId, stellarAddress } = school;
+  const correlationId = deriveCorrelationId(tx.hash);
+
+  // Funnel: transaction received by the poller
+  _incFunnel('received', schoolId);
+
+  // Extract and validate payment
+  const valid = await extractValidPayment(tx, stellarAddress);
+  if (!valid) {
+    return { processed: false, reason: 'invalid_payment' };
+  }
+
+  const { operations, memo, memoType } = valid;
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return { processed: false, reason: 'invalid_payment' };
+  }
+
+  const recorded = [];
+  let skipped = 0;
+  let lastReason = null;
+
+  for (const operation of operations) {
+    const result = await recordIncomingTransaction(tx, school, operation, {
+      memo,
+      memoType,
+      correlationId,
+      fencingToken,
+    });
+    if (result.processed) {
+      recorded.push(result.payment);
+    } else {
+      skipped++;
+      lastReason = result.reason;
+    }
+  }
+
+  if (recorded.length === 0) {
+    return { processed: false, reason: lastReason || 'invalid_payment' };
+  }
+
+  return {
+    processed: true,
+    payment: recorded[0],
+    payments: recorded,
+    skipped,
+  };
 }
 
 /**
@@ -454,7 +524,19 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
           if (tx.paging_token) cursor = tx.paging_token;
           continue;
         }
-        const result = await processTransaction(tx, scope, fencingToken);
+        let result;
+        try {
+          result = await processTransaction(tx, scope, fencingToken);
+        } catch (error) {
+          // Do NOT advance the cursor past a transaction we failed to record:
+          // the next cycle resumes from the last persisted token and retries it.
+          logger.error('Failed to process transaction — cursor not advanced', {
+            schoolId: school.schoolId,
+            txHash: tx.hash,
+            error: error.message,
+          });
+          throw error;
+        }
         if (result.processed) {
           processedCount++;
           if (retired) {
@@ -883,6 +965,7 @@ module.exports = {
   pollSchoolTransactions,
   pollSchoolWithDrainingAddresses,
   processTransaction,
+  recordIncomingTransaction,
   isBeforeIngestStart,
   // Exposed for testing
   _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
