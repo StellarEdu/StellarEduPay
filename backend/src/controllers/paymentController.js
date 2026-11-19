@@ -112,6 +112,47 @@ function wrapStellarError(err) {
 }
 
 // ====================== PAYMENT INSTRUCTIONS ======================
+
+/**
+ * Mask a student's name for anonymous payers (#1962). Only the first letter of
+ * each name part is kept so a parent can confirm they are paying for the right
+ * child without exposing the full name to anyone who guesses a student ID.
+ */
+function maskStudentName(student) {
+  const raw = student?.name || [student?.firstName, student?.lastName].filter(Boolean).join(' ');
+  if (!raw || typeof raw !== 'string') return null;
+  return raw
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${'*'.repeat(Math.max(part.length - 1, 0))}`)
+    .join(' ');
+}
+
+/**
+ * Whether the caller is allowed to see the per-category fee breakdown
+ * (paid / totalPaid / remainingBalance). Only authenticated users or callers
+ * presenting a valid pay-link token qualify; anonymous callers get the amount
+ * due only (#1962).
+ */
+async function canSeeFeeBreakdown(req) {
+  if (req.user || req.auth || req.isAuthenticated?.()) return true;
+  const token = req.query?.token || req.params?.token || req.headers?.['x-pay-link-token'];
+  if (!token) return false;
+  try {
+    const { verifyPayLinkToken } = require('../services/payLinkService');
+    if (typeof verifyPayLinkToken !== 'function') return false;
+    const result = await verifyPayLinkToken(token, {
+      schoolId: req.schoolId,
+      studentId: req.params.studentId,
+    });
+    return Boolean(result && (result.valid === undefined || result.valid));
+  } catch (err) {
+    logger.debug('[PaymentController] pay-link token rejected', { error: err.message });
+    return false;
+  }
+}
+
 async function getPaymentInstructions(req, res, next) {
   try {
     const targetCurrency = req.school.localCurrency || 'USD';
@@ -125,19 +166,31 @@ async function getPaymentInstructions(req, res, next) {
       }
     }
 
+    // Resolve the student first: an unknown, soft-deleted or cross-school ID
+    // must never receive a wallet address or memo (#1962). The soft-delete
+    // plugin already filters deletedAt, but the explicit filter keeps the
+    // intent obvious and survives plugin changes.
+    const student = await Student.findOne({
+      schoolId: req.schoolId,
+      studentId: req.params.studentId,
+      deletedAt: null,
+    });
+
+    if (!student) {
+      return res.status(404).json({ error: 'Student not found', code: 'STUDENT_NOT_FOUND' });
+    }
+
     // Resolved after the asset is known so per-asset limits apply (#1117).
     const limits = await getPaymentLimits({
       schoolId: req.schoolId,
       asset: asset ? asset.split(':')[0] : undefined,
     });
 
-    const student = await Student.findOne({ schoolId: req.schoolId, studentId: req.params.studentId });
-
-    let feeAmount = student ? student.feeAmount : null;
+    let feeAmount = student.feeAmount;
     let feeConversion = null;
     let categoryInfo = null;
 
-    if (feeCategory && student?.fees?.length > 0) {
+    if (feeCategory && student.fees?.length > 0) {
       const fee = student.fees.find((f) => f.category === feeCategory);
       if (fee) {
         feeAmount = fee.amount;
@@ -149,21 +202,23 @@ async function getPaymentInstructions(req, res, next) {
       feeConversion = await convertToLocalCurrency(feeAmount, 'XLM', targetCurrency);
     }
 
-    const fees = student?.fees?.length > 0
+    const includeBreakdown = await canSeeFeeBreakdown(req);
+
+    const fees = includeBreakdown && student.fees?.length > 0
       ? student.fees.map((f) => ({ category: f.category, amount: f.amount, paid: f.paid, totalPaid: f.totalPaid || 0, remainingBalance: computeRemainingBalance(f) }))
       : [];
 
-    res.json({
+    const response = {
       walletAddress: req.school.stellarAddress,
-      memo: req.params.studentId,
+      memo: student.studentId || req.params.studentId,
+      maskedName: maskStudentName(student),
       acceptedAssets: Object.values(ACCEPTED_ASSETS).map((a) => ({ code: a.code, type: a.type, displayName: a.displayName, issuer: a.issuer ?? null })),
       paymentLimits: { min: limits.min, max: limits.max },
       minAmount: limits.min,
       maxAmount: limits.max,
+      amountDue: feeAmount,
       feeAmount,
       feeCategory: feeCategory || null,
-      categoryInfo,
-      fees,
       feeLocalEquivalent: feeConversion?.available
         ? { amount: feeConversion.localAmount, currency: feeConversion.currency, rate: feeConversion.rate, rateTimestamp: feeConversion.rateTimestamp }
         : null,
@@ -173,7 +228,16 @@ async function getPaymentInstructions(req, res, next) {
       // directly. New clients should read `supportedMemoTypes` (#1118).
       memoType: 'text',
       supportedMemoTypes: SUPPORTED_MEMO_TYPES,
-    });
+    };
+
+    // Per-category breakdown (paid / totalPaid / remainingBalance) is only
+    // disclosed to authenticated or pay-link callers (#1962).
+    if (includeBreakdown) {
+      response.categoryInfo = categoryInfo;
+      response.fees = fees;
+    }
+
+    res.json(response);
   } catch (err) {
     next(err);
   }

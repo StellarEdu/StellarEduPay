@@ -14,6 +14,11 @@ data:
   # ── Redis ────────────────────────────────────────────────────────────────
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
+  # Authentication is mandatory: the password is injected from the
+  # `stellaredupay-secrets` Secret (key REDIS_PASSWORD) via secretKeyRef in
+  # redis.yaml and backend-deployment.yaml. Never put it in this ConfigMap.
+  # The server-side settings (maxmemory, maxmemory-policy, appendonly) live in
+  # the dedicated `redis-config` ConfigMap below and are mounted as redis.conf.
 
   # ── Background jobs ──────────────────────────────────────────────────────
   POLL_INTERVAL_MS: "30000"
@@ -44,3 +49,31 @@ data:
   # Required in production. Used for unsubscribe links and emails.
   # Must be overridden in your overlay or via a patch.
   APP_URL: "https://YOUR_DOMAIN_HERE"
+---
+# Redis server configuration, mounted at /usr/local/etc/redis/redis.conf and
+# passed to `redis-server` as its config file.
+#
+# - `maxmemory-policy noeviction` is required by BullMQ: with any eviction
+#   policy, job keys can silently disappear. With noeviction, writes fail with
+#   OOM errors once maxmemory is reached instead of losing queue state.
+# - `maxmemory 100mb` keeps Redis below the 128Mi container limit so the kernel
+#   OOM killer does not drop every in-flight lock and queue entry. Alert on
+#   redis_memory_used_bytes / redis_memory_max_bytes > 0.8.
+# - `appendonly yes` gives AOF durability for locks, queues and revocations.
+#
+# `requirepass` is intentionally NOT set here: it is injected from the
+# `stellaredupay-secrets` Secret (key REDIS_PASSWORD) via the
+# REDIS_PASSWORD environment variable and `--requirepass` on the command line,
+# so the credential never lands in a ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+data:
+  redis.conf: |
+    appendonly yes
+    maxmemory 100mb
+    maxmemory-policy noeviction
+    # TLS is not enabled: traffic is plaintext inside the cluster and is
+    # protected by the NetworkPolicy restricting access to the backend and
+    # worker pods. Revisit if Redis is ever reached across namespaces.

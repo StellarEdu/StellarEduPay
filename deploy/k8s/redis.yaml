@@ -19,22 +19,45 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          command: ["redis-server", "--appendonly", "yes"]
+          # Start from the mounted redis.conf (appendonly, maxmemory,
+          # maxmemory-policy noeviction) and inject the password from the
+          # Secret at runtime so it never lives in the ConfigMap.
+          command:
+            - sh
+            - -c
+            - >-
+              exec redis-server /etc/redis/redis.conf
+              --requirepass "$REDIS_PASSWORD"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
           ports:
             - containerPort: 6379
           volumeMounts:
             - name: redis-data
               mountPath: /data
+            - name: redis-config
+              mountPath: /etc/redis
+              readOnly: true
           readinessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 3
@@ -50,6 +73,35 @@ spec:
         - name: redis-data
           persistentVolumeClaim:
             claimName: redis-data
+        - name: redis-config
+          configMap:
+            name: redis-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  labels:
+    app: redis
+data:
+  redis.conf: |
+    # Persistence: append-only file.
+    appendonly yes
+    appendfsync everysec
+    dir /data
+
+    # Memory: BullMQ requires noeviction so job keys are never silently
+    # evicted. Cap memory below the container limit so Redis returns OOM
+    # errors instead of being OOM-killed by the kernel.
+    maxmemory 100mb
+    maxmemory-policy noeviction
+
+    # Authentication is supplied via --requirepass from the Secret.
+    protected-mode yes
+
+    # TLS is intentionally not enabled: traffic is confined to the cluster
+    # network by NetworkPolicy. See docs for the security decision.
+    port 6379
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -8,6 +8,14 @@ const money = require('../utils/money');
 
 const MAX_INSTALLMENTS = 24;
 
+const installmentIndexSchema = Joi.number().integer().min(0).required();
+
+const updateInstallmentStatusSchema = Joi.object({
+  paid: Joi.boolean().required(),
+  paidAmount: Joi.number().positive().precision(7).optional(),
+  reference: Joi.string().trim().min(1).required(),
+});
+
 const createPaymentPlanSchema = Joi.object({
   installments: Joi.array()
     .min(1)
@@ -201,19 +209,37 @@ async function allocatePaymentToPlan(schoolId, studentId, amount, txHash) {
 async function updateInstallmentStatus(req, res, next) {
   try {
     const { schoolId } = req;
-    const { studentId, installmentIndex } = req.params;
-    const { paid, paidAmount, reference } = req.body;
+    const { studentId } = req.params;
 
-    if (!reference) {
-      return res.status(400).json({ error: 'A reference is required for manual settlements', code: 'VALIDATION_ERROR' });
+    const indexResult = installmentIndexSchema.validate(req.params.installmentIndex);
+    if (indexResult.error) {
+      return res.status(400).json({
+        error: 'Invalid installment index',
+        code: 'VALIDATION_ERROR',
+        details: formatValidationErrors(indexResult.error),
+      });
     }
+    const installmentIndex = indexResult.value;
+
+    const { error, value } = updateInstallmentStatusSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        error: 'Invalid installment update',
+        code: 'VALIDATION_ERROR',
+        details: formatValidationErrors(error),
+      });
+    }
+    const { paid, reference } = value;
 
     const plan = await PaymentPlan.findOne({ schoolId, studentId, deletedAt: null });
     if (!plan) {
       return res.status(404).json({ error: 'Payment plan not found', code: 'NOT_FOUND' });
     }
 
-    if (installmentIndex < 0 || installmentIndex >= plan.installments.length) {
+    if (installmentIndex >= plan.installments.length) {
       return res.status(400).json({ error: 'Invalid installment index', code: 'VALIDATION_ERROR' });
     }
 
