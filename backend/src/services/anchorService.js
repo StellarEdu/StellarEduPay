@@ -38,7 +38,7 @@
 const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const { processTransaction } = require('./transactionPollingService');
-const { server: horizonServer } = require('../config/stellarConfig');
+const { server: horizonServer, networkPassphrase: NETWORK_PASSPHRASE } = require('../config/stellarConfig');
 const logger = require('../utils/logger').child('AnchorService');
 
 // ── Global anchor registry (fallback for schools without per-school config) ───
@@ -67,49 +67,97 @@ function _stellar() {
 
 // ── SEP-10 Web Auth helpers ───────────────────────────────────────────────────
 
+// Stellar public key (G...) as used for SIGNING_KEY in stellar.toml.
+const STELLAR_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
+
 /**
- * Discover the SEP-10 and SEP-24 endpoint URLs from an anchor's stellar.toml.
+ * Read a top-level string value from a stellar.toml document.
+ *
+ * SEP-1 defines WEB_AUTH_ENDPOINT, SIGNING_KEY and friends as top-level keys.
+ * Only lines before the first [table] header are read, so a key with the same
+ * name inside a [[CURRENCIES]] or [DOCUMENTATION] table is never mistaken for
+ * the anchor's own value. Full TOML parsing is not needed for these keys.
+ *
+ * @param {string} text  stellar.toml contents
+ * @param {string} key   top-level key name
+ * @returns {string|null}
+ */
+function readTopLevelTomlString(text, key) {
+  for (const rawLine of String(text).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    if (line.startsWith('[')) break;
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"\\]*)"\s*(?:#.*)?$/);
+    if (match && match[1] === key) return match[2];
+  }
+  return null;
+}
+
+/**
+ * Discover the SEP-10 and SEP-24 endpoint URLs, and the anchor's SIGNING_KEY,
+ * from an anchor's stellar.toml.
+ *
+ * signingKey is null when the toml has no valid SIGNING_KEY. sep10Authenticate
+ * refuses to run without one, so this never leads to signing unverified input.
+ *
  * @param {string} homeDomain  e.g. 'anchor.example.com'
- * @returns {Promise<{ sep10Url: string, sep24Url: string }>}
+ * @returns {Promise<{ sep10Url: string, sep24Url: string, signingKey: string|null, webAuthDomain: string|null }>}
  */
 async function discoverAnchorEndpoints(homeDomain) {
   const tomlUrl = `https://${homeDomain}/.well-known/stellar.toml`;
   const response = await _axios().get(tomlUrl, { timeout: 10_000 });
   const text = response.data;
 
-  const sep10Match = text.match(/WEB_AUTH_ENDPOINT\s*=\s*"([^"]+)"/);
-  const sep24Match = text.match(/TRANSFER_SERVER_SEP0024\s*=\s*"([^"]+)"/);
+  const sep10Url = readTopLevelTomlString(text, 'WEB_AUTH_ENDPOINT');
+  const sep24Url = readTopLevelTomlString(text, 'TRANSFER_SERVER_SEP0024');
+  const signingKeyRaw = readTopLevelTomlString(text, 'SIGNING_KEY');
+  const webAuthDomain = readTopLevelTomlString(text, 'WEB_AUTH_DOMAIN');
 
-  if (!sep10Match) {
+  if (!sep10Url) {
     throw new Error(
       `SEP-10 WEB_AUTH_ENDPOINT not found in ${homeDomain}/.well-known/stellar.toml`
     );
   }
-  if (!sep24Match) {
+  if (!sep24Url) {
     throw new Error(
       `SEP-24 TRANSFER_SERVER_SEP0024 not found in ${homeDomain}/.well-known/stellar.toml`
     );
   }
 
-  return { sep10Url: sep10Match[1], sep24Url: sep24Match[1] };
+  const signingKey = signingKeyRaw && STELLAR_PUBLIC_KEY_PATTERN.test(signingKeyRaw) ? signingKeyRaw : null;
+
+  return { sep10Url, sep24Url, signingKey, webAuthDomain };
 }
 
 /**
  * Perform SEP-10 Web Authentication and return an anchor JWT.
  *
  * Steps:
- *  1. GET {sep10Url}?account={account}  — receive challenge transaction
- *  2. Sign with the platform keypair (ANCHOR_PLATFORM_KEYPAIR).
- *  3. POST {sep10Url} with signed transaction — receive JWT.
+ *  1. GET {sep10Url}?account={account}  — receive challenge transaction.
+ *  2. Validate the challenge against the anchor's stellar.toml SIGNING_KEY,
+ *     our own network passphrase and the expected home domain. Refuse to sign
+ *     anything that does not pass (#1952). The network passphrase in the
+ *     anchor's response is ignored.
+ *  3. Sign with the platform keypair (ANCHOR_PLATFORM_KEYPAIR).
+ *  4. POST {sep10Url} with the signed transaction — receive JWT.
  *
  * NOTE: ANCHOR_PLATFORM_KEYPAIR should be a dedicated operational account,
  * NOT the school's receiving wallet.
  *
  * @param {string} sep10Url
  * @param {string} account  Stellar public key of the depositing account
+ * @param {{ homeDomain: string, signingKey: string, webAuthDomain?: string|null }} anchor
+ *        Values from discoverAnchorEndpoints().
  * @returns {Promise<string>} JWT token
  */
-async function sep10Authenticate(sep10Url, account) {
+async function sep10Authenticate(sep10Url, account, { homeDomain, signingKey, webAuthDomain } = {}) {
+  if (!homeDomain || !signingKey) {
+    throw Object.assign(
+      new Error('SEP-10 needs the anchor home domain and a valid SIGNING_KEY from stellar.toml; refusing to sign.'),
+      { code: 'SEP10_CHALLENGE_INVALID' }
+    );
+  }
+
   const StellarSdk = _stellar();
   const ax = _axios();
 
@@ -118,10 +166,50 @@ async function sep10Authenticate(sep10Url, account) {
     `${sep10Url}?account=${encodeURIComponent(account)}`,
     { timeout: 10_000 }
   );
-  const challengeTx = challengeResp.data.transaction;
-  const networkPassphrase = challengeResp.data.network_passphrase;
+  const challengeTx = challengeResp.data?.transaction;
+  if (typeof challengeTx !== 'string' || !challengeTx) {
+    throw Object.assign(new Error('SEP-10 challenge response has no transaction'), { code: 'SEP10_CHALLENGE_INVALID' });
+  }
+  // An anchor that advertises another network is misconfigured or spoofing us.
+  // Refuse rather than sign. Our own passphrase is what the challenge is checked against.
+  const advertisedPassphrase = challengeResp.data?.network_passphrase;
+  if (advertisedPassphrase !== undefined && advertisedPassphrase !== NETWORK_PASSPHRASE) {
+    throw Object.assign(
+      new Error('SEP-10 challenge advertises a different network passphrase; refusing to sign.'),
+      { code: 'SEP10_CHALLENGE_INVALID' }
+    );
+  }
 
-  // 2. Sign the challenge
+  // 2. Validate the challenge before anything is signed.
+  //    readChallengeTx checks: sequence 0, source is the anchor's SIGNING_KEY, only
+  //    manageData operations, the first op carries "<homeDomain> auth" with a
+  //    random nonce, non-expired time bounds, web_auth_domain (if present), and a
+  //    valid signature from the anchor. Using our passphrase means a challenge
+  //    for another network cannot be accepted.
+  let verified;
+  try {
+    verified = StellarSdk.WebAuth.readChallengeTx(
+      challengeTx,
+      signingKey,
+      NETWORK_PASSPHRASE,
+      homeDomain,
+      webAuthDomain || new URL(sep10Url).host
+    );
+  } catch (err) {
+    logger.warn('Refusing to sign invalid SEP-10 challenge', { homeDomain, error: err.message });
+    throw Object.assign(
+      new Error(`Refusing to sign SEP-10 challenge: ${err.message}`),
+      { code: 'SEP10_CHALLENGE_INVALID' }
+    );
+  }
+  if (verified.clientAccountID !== account) {
+    throw Object.assign(
+      new Error('SEP-10 challenge was issued for a different account; refusing to sign.'),
+      { code: 'SEP10_CHALLENGE_INVALID' }
+    );
+  }
+
+  // 3. Sign the validated challenge
   const keypairSecret = process.env.ANCHOR_PLATFORM_KEYPAIR;
   if (!keypairSecret) {
     throw new Error(
@@ -131,11 +219,11 @@ async function sep10Authenticate(sep10Url, account) {
   }
 
   const keypair = StellarSdk.Keypair.fromSecret(keypairSecret);
-  const tx = new StellarSdk.Transaction(challengeTx, networkPassphrase);
+  const tx = new StellarSdk.Transaction(challengeTx, NETWORK_PASSPHRASE);
   tx.sign(keypair);
   const signedTx = tx.toEnvelope().toXDR('base64');
 
-  // 3. Submit signed transaction for JWT
+  // 4. Submit signed transaction for JWT
   const jwtResp = await ax.post(
     sep10Url,
     { transaction: signedTx },
@@ -227,8 +315,8 @@ async function initiateAnchorDeposit({ schoolId, studentId, anchorId }) {
   const anchor = await resolveAnchorConfig(schoolId, anchorId);
   const { homeDomain, assetCode, assetIssuer } = anchor;
 
-  // 3. Discover anchor endpoints from stellar.toml.
-  const { sep10Url, sep24Url } = await discoverAnchorEndpoints(homeDomain);
+  // 3. Discover anchor endpoints and signing key from stellar.toml.
+  const { sep10Url, sep24Url, signingKey, webAuthDomain } = await discoverAnchorEndpoints(homeDomain);
 
   // 4. Platform deposit account.
   const keypairSecret = process.env.ANCHOR_PLATFORM_KEYPAIR;
@@ -238,7 +326,7 @@ async function initiateAnchorDeposit({ schoolId, studentId, anchorId }) {
   const platformPublicKey = StellarSdk.Keypair.fromSecret(keypairSecret).publicKey();
 
   // 5. SEP-10 authentication.
-  const jwt = await sep10Authenticate(sep10Url, platformPublicKey);
+  const jwt = await sep10Authenticate(sep10Url, platformPublicKey, { homeDomain, signingKey, webAuthDomain });
 
   // 6. School receiving wallet.
   const school = await School.findOne({ schoolId }).lean();

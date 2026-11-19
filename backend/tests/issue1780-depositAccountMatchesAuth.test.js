@@ -10,6 +10,7 @@ const StellarSdk = require('@stellar/stellar-sdk');
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+const crypto = require('crypto');
 const axios = require('axios').default;
 const mockAxiosGet = jest.spyOn(axios, 'get');
 const mockAxiosPost = jest.spyOn(axios, 'post');
@@ -59,7 +60,8 @@ function buildChallenge(clientAccount) {
   })
     .addOperation(StellarSdk.Operation.manageData({
       name: `${HOME_DOMAIN} auth`,
-      value: Buffer.from('nonce-value-1234567890123456789012').toString('base64'),
+      // SEP-10 requires a 48-byte random nonce.
+      value: crypto.randomBytes(48).toString('base64'),
       source: clientAccount,
     }))
     .build();
@@ -69,6 +71,7 @@ function buildChallenge(clientAccount) {
 
 const TOML = [
   `WEB_AUTH_ENDPOINT = "${SEP10_URL}"`,
+  `SIGNING_KEY = "${serverKp.publicKey()}"`,
   `TRANSFER_SERVER_SEP0024 = "${SEP24_URL}"`,
 ].join('\n');
 

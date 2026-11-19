@@ -39,6 +39,7 @@ jest.mock('../src/services/transactionPollingService', () => ({
 }));
 
 jest.mock('../src/config/stellarConfig', () => ({
+  networkPassphrase: 'Test SDF Network ; September 2015',
   server: {
     transactions: jest.fn().mockReturnValue({
       transaction: jest.fn().mockReturnThis(),
@@ -58,6 +59,11 @@ jest.mock('@stellar/stellar-sdk', () => {
       sign:       jest.fn(),
       toEnvelope: () => ({ toXDR: () => 'signed-tx-base64' }),
     })),
+    WebAuth: {
+      readChallengeTx: jest.fn(() => ({
+        clientAccountID: 'GPLATFORM000000000000000000000000000000000000000000000001',
+      })),
+    },
   };
 }, { virtual: true });
 
@@ -76,12 +82,14 @@ const SCHOOL_ID       = 'SCH-001';
 const STUDENT_ID      = 'STU-001';
 const ANCHOR_ID       = 'anchor-test';
 const HOME_DOMAIN     = 'anchor.example.com';
+const ANCHOR_SIGNING_KEY = 'GANMDO5MIAEGJ5ITJ2QNWRQCVURHJRKG723VHMJ5OKP3AWCDHI4KYU4H';
 const ANCHOR_TX_ID    = 'anc-tx-id-001';
 const INTERACTIVE_URL = 'https://anchor.example.com/interactive?token=xyz';
 
 const TOML_CONTENT = `
 WEB_AUTH_ENDPOINT = "https://anchor.example.com/auth"
 TRANSFER_SERVER_SEP0024 = "https://anchor.example.com/sep24"
+SIGNING_KEY = "${ANCHOR_SIGNING_KEY}"
 `;
 
 function makeSchool(anchorOverrides = {}) {
@@ -142,9 +150,10 @@ describe('discoverAnchorEndpoints', () => {
   test('parses SEP-10 and SEP-24 URLs from stellar.toml', async () => {
     mockAxiosGet.mockResolvedValue({ data: TOML_CONTENT });
 
-    const { sep10Url, sep24Url } = await discoverAnchorEndpoints(HOME_DOMAIN);
+    const { sep10Url, sep24Url, signingKey } = await discoverAnchorEndpoints(HOME_DOMAIN);
     expect(sep10Url).toBe('https://anchor.example.com/auth');
     expect(sep24Url).toBe('https://anchor.example.com/sep24');
+    expect(signingKey).toBe(ANCHOR_SIGNING_KEY);
     expect(mockAxiosGet).toHaveBeenCalledWith(
       `https://${HOME_DOMAIN}/.well-known/stellar.toml`,
       expect.any(Object)
@@ -236,6 +245,7 @@ describe('sep10Authenticate', () => {
   const CHALLENGE = 'AAAAAQAAAAAB...challenge-xdr';
   const NET_PASS  = 'Test SDF Network ; September 2015';
   const TOKEN     = 'jwt.anchor.token.here';
+  const ANCHOR    = { homeDomain: 'anchor.example.com', signingKey: 'GANMDO5MIAEGJ5ITJ2QNWRQCVURHJRKG723VHMJ5OKP3AWCDHI4KYU4H' };
 
   test('exchanges challenge for JWT token', async () => {
     mockAxiosGet.mockResolvedValue({
@@ -243,7 +253,7 @@ describe('sep10Authenticate', () => {
     });
     mockAxiosPost.mockResolvedValue({ data: { token: TOKEN } });
 
-    const jwt = await sep10Authenticate(SEP10_URL, ACCOUNT);
+    const jwt = await sep10Authenticate(SEP10_URL, ACCOUNT, ANCHOR);
 
     expect(jwt).toBe(TOKEN);
     expect(mockAxiosGet).toHaveBeenCalledWith(
@@ -262,7 +272,34 @@ describe('sep10Authenticate', () => {
     mockAxiosGet.mockResolvedValue({
       data: { transaction: CHALLENGE, network_passphrase: NET_PASS },
     });
-    await expect(sep10Authenticate(SEP10_URL, ACCOUNT)).rejects.toThrow('ANCHOR_PLATFORM_KEYPAIR');
+    await expect(sep10Authenticate(SEP10_URL, ACCOUNT, ANCHOR)).rejects.toThrow('ANCHOR_PLATFORM_KEYPAIR');
+  });
+
+  test('refuses to sign a challenge that fails SEP-10 validation (#1952)', async () => {
+    const { WebAuth } = require('@stellar/stellar-sdk');
+    mockAxiosGet.mockResolvedValue({
+      data: { transaction: CHALLENGE, network_passphrase: NET_PASS },
+    });
+    WebAuth.readChallengeTx.mockImplementationOnce(() => {
+      throw new Error("The transaction's operation type should be 'manageData'");
+    });
+
+    await expect(sep10Authenticate(SEP10_URL, ACCOUNT, ANCHOR)).rejects.toThrow(/Refusing to sign/);
+    expect(mockAxiosPost).not.toHaveBeenCalled();
+  });
+
+  test('refuses when the anchor advertises a different network passphrase (#1952)', async () => {
+    mockAxiosGet.mockResolvedValue({
+      data: { transaction: CHALLENGE, network_passphrase: 'Public Global Stellar Network ; September 2015' },
+    });
+
+    await expect(sep10Authenticate(SEP10_URL, ACCOUNT, ANCHOR)).rejects.toThrow(/different network passphrase/);
+    expect(mockAxiosPost).not.toHaveBeenCalled();
+  });
+
+  test('refuses without a SIGNING_KEY from stellar.toml (#1952)', async () => {
+    await expect(sep10Authenticate(SEP10_URL, ACCOUNT, { homeDomain: 'anchor.example.com' })).rejects.toThrow(/SIGNING_KEY/);
+    expect(mockAxiosGet).not.toHaveBeenCalled();
   });
 
   test('throws when anchor does not return a token', async () => {
@@ -270,7 +307,7 @@ describe('sep10Authenticate', () => {
       data: { transaction: CHALLENGE, network_passphrase: NET_PASS },
     });
     mockAxiosPost.mockResolvedValue({ data: {} }); // no token field
-    await expect(sep10Authenticate(SEP10_URL, ACCOUNT)).rejects.toThrow(/token/i);
+    await expect(sep10Authenticate(SEP10_URL, ACCOUNT, ANCHOR)).rejects.toThrow(/token/i);
   });
 });
 
@@ -311,7 +348,7 @@ describe('initiateAnchorDeposit', () => {
     mockAxiosGet
       .mockResolvedValueOnce({ data: TOML_CONTENT })
       .mockResolvedValueOnce({
-        data: { transaction: 'CHALLENGE_XDR', network_passphrase: 'Test SDF Network' },
+        data: { transaction: 'CHALLENGE_XDR', network_passphrase: 'Test SDF Network ; September 2015' },
       });
     mockAxiosPost
       .mockResolvedValueOnce({ data: { token: 'sep10-jwt' } })
@@ -374,7 +411,7 @@ describe('initiateAnchorDeposit', () => {
     mockStudentFindOne = jest.fn().mockReturnValue({ lean: () => Promise.resolve(makeStudent()) });
     mockAxiosGet
       .mockResolvedValueOnce({ data: TOML_CONTENT })
-      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Net' } });
+      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Test SDF Network ; September 2015' } });
     mockAxiosPost
       .mockResolvedValueOnce({ data: { token: 'jwt' } })
       .mockResolvedValueOnce({ data: {} }); // missing url and id
@@ -429,7 +466,7 @@ describe('anchor background polling', () => {
     // Call sequence: toml → sep10 challenge → sep10 jwt → sep24 deposit → poll pending → poll completed
     mockAxiosGet
       .mockResolvedValueOnce({ data: TOML_CONTENT })
-      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Net' } })
+      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Test SDF Network ; September 2015' } })
       .mockResolvedValueOnce({ data: { transaction: { status: 'pending_user_transfer' } } })
       .mockResolvedValueOnce({
         data: { transaction: { status: 'completed', stellar_transaction_id: STELLAR_HASH } },
@@ -455,7 +492,7 @@ describe('anchor background polling', () => {
     setupInitiate();
     mockAxiosGet
       .mockResolvedValueOnce({ data: TOML_CONTENT })
-      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Net' } })
+      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Test SDF Network ; September 2015' } })
       .mockResolvedValueOnce({ data: { transaction: { status: 'error' } } });
     mockAxiosPost
       .mockResolvedValueOnce({ data: { token: 'sep10-jwt' } })
@@ -472,7 +509,7 @@ describe('anchor background polling', () => {
     setupInitiate();
     mockAxiosGet
       .mockResolvedValueOnce({ data: TOML_CONTENT })
-      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Net' } })
+      .mockResolvedValueOnce({ data: { transaction: 'CHALLENGE', network_passphrase: 'Test SDF Network ; September 2015' } })
       .mockResolvedValueOnce({ data: { transaction: { status: 'refunded' } } });
     mockAxiosPost
       .mockResolvedValueOnce({ data: { token: 'sep10-jwt' } })
