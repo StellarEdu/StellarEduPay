@@ -11,6 +11,13 @@ const schema = Joi.object({
   JWT_SECRET: Joi.string().min(32).required().meta({ sensitive: true }),
   RECEIPT_SIGNATURE_SECRET: Joi.string().required().meta({ sensitive: true }),
 
+  // ── Signed pay links (#1937) ────────────────────────────────────────────────
+  // Dedicated HMAC key for per-student pay-link tokens. Kept separate from
+  // JWT_SECRET so a leaked link key cannot forge admin access tokens. When unset
+  // the pay-link endpoints return 503 PAY_LINK_NOT_CONFIGURED.
+  PAY_LINK_SECRET: Joi.string().min(32).optional().meta({ sensitive: true }),
+  PAY_LINK_EMAIL_LINKS: Joi.boolean().default(false),
+
   // ── Server ──────────────────────────────────────────────────────────────────
   PORT: Joi.number().integer().min(0).max(65535).default(5000),
   MAX_BODY_SIZE: Joi.string().default("10kb"),
@@ -193,6 +200,8 @@ const { value: env } = schema.validate(process.env, {
 const PORT = env.PORT;
 const MONGO_URI = env.MONGO_URI;
 const RECEIPT_SIGNATURE_SECRET = env.RECEIPT_SIGNATURE_SECRET;
+const PAY_LINK_SECRET = env.PAY_LINK_SECRET || null;
+const PAY_LINK_EMAIL_LINKS = env.PAY_LINK_EMAIL_LINKS === true;
 
 const STELLAR_NETWORK = env.STELLAR_NETWORK;
 const IS_TESTNET = STELLAR_NETWORK === "testnet";
@@ -432,6 +441,8 @@ const config = {
   jwtSecret: JWT_SECRET,
   jwtExpiresIn: JWT_EXPIRES_IN,
   receiptSignatureSecret: RECEIPT_SIGNATURE_SECRET,
+  payLinkSecret: PAY_LINK_SECRET,
+  payLinkEmailLinks: PAY_LINK_EMAIL_LINKS,
   logLevel: process.env.LOG_LEVEL || 'info',
   corsOrigin: process.env.CORS_ORIGIN || '*',
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,

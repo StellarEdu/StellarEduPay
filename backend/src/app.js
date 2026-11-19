@@ -29,6 +29,7 @@ if (process.env.NODE_ENV !== 'production') {
 mongoose.set('sanitizeFilter', true);
 
 const studentRoutes = require('./routes/studentRoutes');
+const payLinkRoutes = require('./routes/payLinkRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const feeRoutes = require('./routes/feeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
@@ -241,6 +242,8 @@ app.use(maintenanceMode);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/schools', schoolRoutes);
 app.use('/api/students', studentRoutes);
+// #1937 — signed pay links: POST /api/students/:id/pay-link[/revoke] and public GET /api/pay/:token
+app.use('/api', payLinkRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/fees', feeRoutes);
 app.use('/api/reports', reportRoutes);

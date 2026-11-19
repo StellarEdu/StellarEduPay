@@ -277,9 +277,19 @@ const publicStudentLimiter = rl(
   },
 );
 
+// #1937 — public pay-link lookups. Keyed by IP only: the link itself carries
+// the school, so no X-School-ID header is needed and parents can refresh freely.
+const payLinkLookupLimiter = rl(
+  60 * 1000,
+  30,
+  { error: 'Too many pay link lookups. Please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
+  { name: 'rl:paylink' },
+);
+
 module.exports = {
   rl,
   RL_MSG,
+  payLinkLookupLimiter,
   generalLimiter,
   strictLimiter,
   syncLimiter,

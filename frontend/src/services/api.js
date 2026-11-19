@@ -126,6 +126,10 @@ export const updateStudent = (studentId, data) => api.patch(`/students/${encodeU
 export const getPaymentSummary = () => api.get("/payments/summary");
 export const getPaymentInstructions = (studentId, { signal } = {}) => api.get(`/payments/instructions/${studentId}`, { signal });
 export const getStudentPayments = (studentId, { signal } = {}) => api.get(`/payments/${studentId}`, { signal });
+// #1937 — signed pay links. The public lookup is authorised by the token alone.
+export const getPayLinkInstructions = (token, { signal } = {}) => api.get(`/pay/${encodeURIComponent(token)}`, { signal });
+export const issuePayLink = (studentId, data = {}) => api.post(`/students/${encodeURIComponent(studentId)}/pay-link`, data);
+export const revokePayLinks = (studentId) => api.post(`/students/${encodeURIComponent(studentId)}/pay-link/revoke`);
 export const getStudentBalance  = (studentId, { signal } = {}) => api.get(`/payments/balance/${studentId}`, { signal });
 // Issue #1762: /payments/verify is protected by the idempotency middleware.
 // Use a deterministic key derived from the txHash so retrying the same
