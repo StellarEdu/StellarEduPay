@@ -121,6 +121,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: node scripts/check-error-response-shape.js
 
+  error-catalog:
+    name: Shared error-code catalog covers backend codes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: node scripts/check-error-catalog.js
+
   k8s-ingress-tls:
     name: Verify Kubernetes ingress has TLS configuration
     runs-on: ubuntu-latest

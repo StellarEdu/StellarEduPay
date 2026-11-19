@@ -4,6 +4,7 @@
   "scripts": {
     "check:syntax": "node ./scripts/check-syntax.js",
     "check:i18n": "node ./scripts/check-i18n-coverage.js",
+    "check:error-catalog": "node ./scripts/check-error-catalog.js",
     "test": "jest --testPathPattern=tests/ --forceExit",
     "coverage": "jest --testPathPattern=tests/ --forceExit --coverage",
     "coverage:frontend": "cd frontend && npm run coverage",
