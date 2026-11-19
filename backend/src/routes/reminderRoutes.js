@@ -2,7 +2,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { resolveSchool } = require('../middleware/schoolContext');
 const { reminderTriggerLimiter } = require('../middleware/rateLimiter');
 const {
