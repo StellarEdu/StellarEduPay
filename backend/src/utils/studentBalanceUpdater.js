@@ -82,18 +82,33 @@ function canonicalPaidMatch(schoolId, studentId, feeCategory) {
  * exact Decimal128 space. This is the shared reader used by reminders and any
  * other consumer that must not recompute with a divergent filter.
  *
+ * Issue #1974: payments can be made in different assets (XLM, USDC, ...), so
+ * raw `amount` values are NOT comparable across assets. We only sum
+ * `creditedAmount`, which is the payment amount converted into the fee
+ * currency at the rate snapshot recorded when the payment was verified. Rows
+ * without a `creditedAmount` (legacy or unconverted payments) are excluded so
+ * a 100 XLM payment can never be counted as "100" against a 100 USDC fee.
+ *
  * @param {string} schoolId
  * @param {string} studentId
  * @param {Object} [options]
  * @param {Object} [options.session]
  * @param {string} [options.feeCategory]
+ * @param {string} [options.feeCurrency] - When provided, only payments credited
+ *   in this currency are summed (guards against mixed-unit aggregation).
  * @returns {Promise<Object>} Decimal total of qualifying payments
  */
 async function sumCanonicalPayments(schoolId, studentId, options = {}) {
-  const { session = null, feeCategory } = options;
+  const { session = null, feeCategory, feeCurrency } = options;
+  const match = canonicalPaidMatch(schoolId, studentId, feeCategory);
+  // Only rows that were converted into the fee currency count toward the fee.
+  match.creditedAmount = { $ne: null };
+  if (feeCurrency !== undefined && feeCurrency !== null) {
+    match.feeCurrency = feeCurrency;
+  }
   const agg = await Payment.aggregate([
-    { $match: canonicalPaidMatch(schoolId, studentId, feeCategory) },
-    { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
+    { $match: match },
+    { $group: { _id: null, total: { $sum: { $toDecimal: '$creditedAmount' } } } },
   ]).session(session);
   return agg.length ? decimalFromMongo(agg[0].total) : toMoney(0);
 }
@@ -116,7 +131,10 @@ async function computeStudentBalance(schoolId, studentId, options = {}) {
     return null;
   }
 
-  const paymentTotal = await sumCanonicalPayments(schoolId, studentId, { session });
+  const paymentTotal = await sumCanonicalPayments(schoolId, studentId, {
+    session,
+    feeCurrency: student.feeCurrency,
+  });
   const creditAdjustments = toMoney(student.creditAdjustments || 0);
   const cumulativeTotal = toMoney(paymentTotal.plus(creditAdjustments));
   const classification = classifyFeePayment(cumulativeTotal, student.feeAmount);
@@ -162,7 +180,10 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
   // Summed via $toDecimal (#1123 money-representation fix) so MongoDB adds
   // the amounts in exact Decimal128 space instead of accumulating float
   // error across every installment for the life of the account.
-  const paymentTotal = await sumCanonicalPayments(schoolId, studentId, { session });
+  const paymentTotal = await sumCanonicalPayments(schoolId, studentId, {
+    session,
+    feeCurrency: student.feeCurrency,
+  });
 
   // Include creditAdjustments in the cumulative total (Issue #1473).
   // creditAdjustments represent manual partial-credit overrides applied by admins
@@ -189,6 +210,7 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
       const categoryTotalDecimal = await sumCanonicalPayments(schoolId, studentId, {
         session,
         feeCategory: category,
+        feeCurrency: feesUpdated[i].feeCurrency || student.feeCurrency,
       });
       const categoryClassification = classifyFeePayment(categoryTotalDecimal, feesUpdated[i].amount);
 
@@ -226,18 +248,23 @@ async function syncCurrentPeriodFee(schoolId, studentId, session) {
   const periodFee = await StudentPeriodFee.findOne({ schoolId, studentId, periodId: period._id }).session(session);
   if (!periodFee) return;
 
+  // Issue #1974: sum creditedAmount (fee-currency equivalent) rather than the
+  // raw payment amount so mixed-asset payments are never added together.
+  const periodMatch = {
+    schoolId,
+    studentId,
+    deletedAt: null,
+    status: 'SUCCESS',
+    isSuspicious: false,
+    createdAt: { $gte: period.startsAt },
+    creditedAmount: { $ne: null },
+  };
+  if (periodFee.feeCurrency) {
+    periodMatch.feeCurrency = periodFee.feeCurrency;
+  }
   const paidAgg = await Payment.aggregate([
-    {
-      $match: {
-        schoolId,
-        studentId,
-        deletedAt: null,
-        status: 'SUCCESS',
-        isSuspicious: false,
-        createdAt: { $gte: period.startsAt },
-      },
-    },
-    { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
+    { $match: periodMatch },
+    { $group: { _id: null, total: { $sum: { $toDecimal: '$creditedAmount' } } } },
   ]).session(session);
 
   const paymentTotal = paidAgg.length ? decimalFromMongo(paidAgg[0].total) : toMoney(0);

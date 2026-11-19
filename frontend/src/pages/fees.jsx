@@ -16,9 +16,15 @@ import DeleteConfirmModal from "../components/DeleteConfirmModal";
 const EMPTY_FORM = {
   className: "",
   feeAmount: "",
+  feeCurrency: "",
   academicYear: new Date().getUTCFullYear().toString(),
   description: "",
 };
+
+// Currencies a fee can be denominated in. Mirrors the backend's accepted
+// assets plus ISO fiat codes; the school default is used when unset.
+const FEE_CURRENCY_OPTIONS = ["XLM", "USDC", "USD", "EUR", "GBP", "NGN", "KES"];
+=======
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +33,7 @@ export default function FeesPage() {
   const [fees, setFees]             = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1 });
   const [classOptions, setClassOptions] = useState(DEFAULT_CLASS_OPTIONS);
+  const [schoolFeeCurrency, setSchoolFeeCurrency] = useState("");
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
 
@@ -45,6 +52,17 @@ export default function FeesPage() {
   useEffect(() => {
     loadFees();
     loadSchoolClassOptions(getSchool, setClassOptions);
+    getSchool()
+      .then(({ data }) => {
+        const currency = data?.feeCurrency || data?.data?.feeCurrency || "";
+        if (currency) {
+          setSchoolFeeCurrency(currency);
+          setForm((prev) => (prev.feeCurrency ? prev : { ...prev, feeCurrency: currency }));
+        }
+      })
+      .catch(() => {
+        // non-fatal — fall back to the default option
+      });
   }, []);
 
   // Auto-focus success message for screen readers
@@ -98,11 +116,12 @@ export default function FeesPage() {
       const payload = {
         className: form.className,
         feeAmount,
+        ...(form.feeCurrency && { feeCurrency: form.feeCurrency }),
         ...(form.academicYear && { academicYear: form.academicYear }),
         ...(form.description.trim() && { description: form.description.trim() }),
       };
       await createFeeStructure(payload);
-      setForm(EMPTY_FORM);
+      setForm({ ...EMPTY_FORM, feeCurrency: schoolFeeCurrency });
       setCreateSuccess(true);
       loadFees(1);
     } catch (err) {
@@ -248,6 +267,32 @@ export default function FeesPage() {
                 />
               </div>
 
+              {/* Fee Currency */}
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" htmlFor="fee-feeCurrency">
+                  {t("fees.feeCurrencyLabel")}
+                </label>
+                <select
+                  id="fee-feeCurrency"
+                  name="feeCurrency"
+                  value={form.feeCurrency}
+                  onChange={handleFormChange}
+                  disabled={creating}
+                  className="form-input"
+                >
+                  <option value="">
+                    {schoolFeeCurrency
+                      ? t("fees.feeCurrencySchoolDefault", { currency: schoolFeeCurrency })
+                      : t("fees.feeCurrencyDefault")}
+                  </option>
+                  {FEE_CURRENCY_OPTIONS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Academic Year */}
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" htmlFor="fee-academicYear">
@@ -369,7 +414,7 @@ export default function FeesPage() {
                             fontWeight: 600,
                           }}
                         >
-                          XLM
+                          {fee.feeCurrency || schoolFeeCurrency || "XLM"}
                         </span>
                       </td>
                       <td>{fee.academicYear || "—"}</td>

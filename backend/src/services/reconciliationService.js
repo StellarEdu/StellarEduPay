@@ -97,11 +97,22 @@ async function reconcileAll(schoolId) {
 
       for (const s of students) {
         try {
+          // Sum creditedAmount (already expressed in the student's fee currency)
+          // rather than raw `amount`, which may be denominated in a different
+          // asset. Rows without a creditedAmount are not counted (#1974).
           const [agg] = await Payment.aggregate([
-            { $match: { schoolId: s.schoolId, studentId: s.studentId, status: 'SUCCESS', deletedAt: null } },
-            { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
+            {
+              $match: {
+                schoolId: s.schoolId,
+                studentId: s.studentId,
+                status: 'SUCCESS',
+                deletedAt: null,
+                creditedAmount: { $ne: null, $exists: true },
+              },
+            },
+            { $group: { _id: null, computedTotal: { $sum: { $toDecimal: '$creditedAmount' } } } },
           ]);
-          const paymentTotal = agg?.computedTotal ?? 0;
+          const paymentTotal = agg?.computedTotal != null ? parseFloat(agg.computedTotal.toString()) : 0;
           const creditAdjustments = s.creditAdjustments || 0;
           const computed = parseFloat((paymentTotal + creditAdjustments).toFixed(7));
 
@@ -242,10 +253,13 @@ async function generateReconciliationReport(schoolId) {
 
     // Amounts of different assets (XLM, USDC) must never be summed together.
     // Group credited totals by assetCode so drift is computed per asset.
+    // Use creditedAmount when present (the amount actually credited in the
+    // fee currency); fall back to `amount` for legacy rows (#1974).
     const dbTotalsByAsset = {};
     for (const p of dbPayments) {
       const asset = p.assetCode || 'XLM';
-      dbTotalsByAsset[asset] = parseFloat(((dbTotalsByAsset[asset] || 0) + (p.amount || 0)).toFixed(7));
+      const credited = p.creditedAmount != null ? p.creditedAmount : p.amount;
+      dbTotalsByAsset[asset] = parseFloat(((dbTotalsByAsset[asset] || 0) + (credited || 0)).toFixed(7));
     }
 
     // The chain total is expensive to compute (paginated Horizon fetch + a

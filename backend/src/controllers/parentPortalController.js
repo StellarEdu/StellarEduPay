@@ -22,7 +22,7 @@ const { logAudit } = require('../services/auditService');
 const parentPortal = require('../services/parentPortalService');
 const logger = require('../utils/logger').child('ParentPortal');
 
-const PAYMENT_FIELDS = 'txHash amount assetCode status confirmedAt createdAt feeCategory memo feeValidationStatus';
+const PAYMENT_FIELDS = 'txHash amount assetCode creditedAmount creditedCurrency status confirmedAt createdAt feeCategory memo feeValidationStatus';
 
 function _audit(req, action, targetId, details = {}) {
   logAudit({
@@ -45,6 +45,7 @@ function _summarisePlan(plan) {
   return {
     status: plan.status,
     totalAmount: plan.totalAmount,
+    feeCurrency: plan.feeCurrency || null,
     paidAmount: ordered.reduce((sum, i) => sum + (i.paidAmount || 0), 0),
     installmentCount: ordered.length,
     paidInstallments: ordered.filter((i) => i.paid).length,
@@ -67,41 +68,53 @@ async function getOverview(req, res, next) {
   try {
     const { schoolId, studentIds, expiresAt } = req.parent;
     const [school, students, plans] = await Promise.all([
-      School.findOne({ schoolId }).select('name logoUrl primaryColor supportContact localCurrency').lean(),
+      School.findOne({ schoolId }).select('name logoUrl primaryColor supportContact localCurrency feeCurrency').lean(),
       Student.find({ schoolId, studentId: { $in: studentIds }, deletedAt: null })
-        .select('studentId name class academicYear feeAmount totalPaid remainingBalance feePaid paymentDeadline reminderOptOut fees')
+        .select('studentId name class academicYear feeAmount feeCurrency totalPaid remainingBalance feePaid paymentDeadline reminderOptOut fees')
         .lean(),
       PaymentPlan.find({ schoolId, studentId: { $in: studentIds }, status: 'active', deletedAt: null }).lean(),
     ]);
 
     const planByStudent = new Map(plans.map((p) => [p.studentId, p]));
+    const schoolFeeCurrency = school?.feeCurrency || null;
 
     _audit(req, 'parent_portal_view', studentIds.join(','), { view: 'overview' });
 
     return res.json({
       school: school
-        ? { name: school.name, logoUrl: school.logoUrl || null, primaryColor: school.primaryColor || null, supportContact: school.supportContact || null }
+        ? {
+          name: school.name,
+          logoUrl: school.logoUrl || null,
+          primaryColor: school.primaryColor || null,
+          supportContact: school.supportContact || null,
+          feeCurrency: schoolFeeCurrency,
+        }
         : null,
       expiresAt,
-      students: students.map((s) => ({
-        studentId: s.studentId,
-        name: s.name,
-        class: s.class,
-        academicYear: s.academicYear || null,
-        feeAmount: s.feeAmount,
-        totalPaid: s.totalPaid || 0,
-        remainingBalance: _balance(s),
-        feePaid: Boolean(s.feePaid),
-        paymentDeadline: s.paymentDeadline || null,
-        fees: (s.fees || []).map((f) => ({
-          category: f.category,
-          amount: f.amount,
-          totalPaid: f.totalPaid || 0,
-          paid: Boolean(f.paid),
-        })),
-        preferences: { reminderOptOut: Boolean(s.reminderOptOut) },
-        paymentPlan: _summarisePlan(planByStudent.get(s.studentId)),
-      })),
+      students: students.map((s) => {
+        const feeCurrency = s.feeCurrency || schoolFeeCurrency || null;
+        return {
+          studentId: s.studentId,
+          name: s.name,
+          class: s.class,
+          academicYear: s.academicYear || null,
+          feeAmount: s.feeAmount,
+          feeCurrency,
+          totalPaid: s.totalPaid || 0,
+          remainingBalance: _balance(s),
+          feePaid: Boolean(s.feePaid),
+          paymentDeadline: s.paymentDeadline || null,
+          fees: (s.fees || []).map((f) => ({
+            category: f.category,
+            amount: f.amount,
+            feeCurrency: f.feeCurrency || feeCurrency,
+            totalPaid: f.totalPaid || 0,
+            paid: Boolean(f.paid),
+          })),
+          preferences: { reminderOptOut: Boolean(s.reminderOptOut) },
+          paymentPlan: _summarisePlan(planByStudent.get(s.studentId)),
+        };
+      }),
     });
   } catch (err) {
     next(err);
@@ -117,15 +130,20 @@ async function getPaymentHistory(req, res, next) {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
 
     const filter = { schoolId, studentId, deletedAt: null };
-    const [payments, total] = await Promise.all([
+    const [payments, total, student, school] = await Promise.all([
       Payment.find(filter).select(PAYMENT_FIELDS).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       Payment.countDocuments(filter),
+      Student.findOne({ schoolId, studentId, deletedAt: null }).select('feeCurrency').lean(),
+      School.findOne({ schoolId }).select('feeCurrency').lean(),
     ]);
+
+    const feeCurrency = student?.feeCurrency || school?.feeCurrency || null;
 
     _audit(req, 'parent_portal_view', studentId, { view: 'payments', page });
 
     return res.json({
       studentId,
+      feeCurrency,
       page,
       limit,
       total,
@@ -133,6 +151,9 @@ async function getPaymentHistory(req, res, next) {
         txHash: p.txHash,
         amount: p.amount,
         assetCode: p.assetCode || 'XLM',
+        // Amount credited toward the fee, expressed in the fee currency (#1974).
+        creditedAmount: p.creditedAmount !== null && p.creditedAmount !== undefined ? p.creditedAmount : null,
+        creditedCurrency: p.creditedCurrency || feeCurrency,
         status: p.status,
         feeCategory: p.feeCategory || null,
         feeValidationStatus: p.feeValidationStatus || null,

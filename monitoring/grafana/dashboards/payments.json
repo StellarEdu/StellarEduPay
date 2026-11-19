@@ -101,6 +101,119 @@
           "unit": "short"
         }
       }
+    },
+    {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 17, "w": 24, "h": 1 },
+      "options": {
+        "mode": "markdown",
+        "content": "## Sync Efficiency (Horizon quota)"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Horizon Calls per Sync — p95 (calls)",
+      "description": "95th percentile of Horizon calls made per sync run. Should track O(new transactions) since the last sync cursor, not O(transactions since the last recorded payment). A flat or slowly growing line while wallet activity grows indicates the sync cursor is advancing correctly (#1976).",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(sync_horizon_calls_per_run_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(sync_horizon_calls_per_run_bucket[5m])) by (le))",
+          "legendFormat": "p50 (median)"
+        },
+        {
+          "expr": "sum(rate(sync_horizon_calls_per_run_sum[5m])) / clamp_min(sum(rate(sync_horizon_calls_per_run_count[5m])), 1)",
+          "legendFormat": "mean"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": 0 },
+              { "color": "yellow", "value": 20 },
+              { "color": "red",    "value": 50 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50 (median)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "title": "Sync Outcomes — Skipped / Retryable vs Credited (per min)",
+      "description": "Per-transaction sync outcomes. 'skipped' counts creditable-but-skipped transactions recorded for deliberate retry; 'retryable' counts transactions deferred to a later run; 'credited' counts payments applied. Skipped/retryable should not grow unboundedly relative to credited (#1976).",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(sync_transaction_outcomes_total{outcome=\"credited\"}[5m])) * 60",
+          "legendFormat": "credited"
+        },
+        {
+          "expr": "sum(rate(sync_transaction_outcomes_total{outcome=\"skipped\"}[5m])) * 60",
+          "legendFormat": "skipped (retryable)"
+        },
+        {
+          "expr": "sum(rate(sync_transaction_outcomes_total{outcome=\"retryable\"}[5m])) * 60",
+          "legendFormat": "retryable"
+        },
+        {
+          "expr": "sum(rate(sync_transaction_outcomes_total{outcome=\"failed\"}[5m])) * 60",
+          "legendFormat": "failed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Sync Cursor Lag (transactions behind tip)",
+      "description": "Number of transactions between the stored sync cursor (school.syncCursor) and the current ledger tip. A steadily growing value means the cursor is not advancing and Horizon calls will scale with wallet history (#1976).",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 26, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "max by (school_id) (sync_cursor_lag_transactions)",
+          "legendFormat": "{{school_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": 0 },
+              { "color": "yellow", "value": 100 },
+              { "color": "red",    "value": 1000 }
+            ]
+          }
+        }
+      }
     }
   ]
 }

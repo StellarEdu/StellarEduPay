@@ -392,7 +392,9 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
               <InfoRow label={t("paymentForm.class")}>{student.class}</InfoRow>
               <InfoRow label={t("paymentForm.fee")}>
                 {instructions.feeAmount ?? student.feeAmount}
-                <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                  {instructions.feeCurrency || student.feeCurrency || "XLM"}
+                </span>
               </InfoRow>
               <InfoRow label={t("actions.status")}>
                 <span className={student.feePaid ? "badge badge-success" : "badge badge-danger"}>
@@ -403,11 +405,15 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 <>
                   <InfoRow label={t("paymentForm.minAmount")}>
                     {instructions.paymentLimits.min}
-                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                      {instructions.feeCurrency || student.feeCurrency || "XLM"}
+                    </span>
                   </InfoRow>
                   <InfoRow label={t("paymentForm.maxAmount")}>
                     {instructions.paymentLimits.max}
-                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                      {instructions.feeCurrency || student.feeCurrency || "XLM"}
+                    </span>
                   </InfoRow>
                 </>
               )}
@@ -494,6 +500,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 });
                 const encodedMemo = encodeMemo(instructions.memo, activeMemoType);
                 const qrAmount = instructions.feeAmount ?? student.feeAmount ?? 0;
+                const feeCurrency = instructions.feeCurrency || student.feeCurrency || "XLM";
                 const downloadFilename = `stellar-payment-${instructions.memo}.png`;
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
@@ -511,11 +518,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         value={paymentUri}
                         size={200}
                         role="img"
-                        aria-label={t("paymentForm.qrPayAria", { amount: qrAmount, memo: instructions.memo })}
+                        aria-label={t("paymentForm.qrPayAria", { amount: qrAmount, currency: feeCurrency, memo: instructions.memo })}
                       />
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       {t("paymentForm.walletCompatibility")}
+                    </p>
+                    <p style={{ marginTop: "0.375rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                      {t("paymentForm.feeCurrencyNote", { currency: feeCurrency })}
                     </p>
 
                     {/* Memo type — for wallets that require a numeric or hash memo (#1118) */}
@@ -636,6 +646,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
                           {p.assetCode || "XLM"}
                         </span>
+                        {p.creditedAmount != null && (
+                          <span style={{ marginLeft: "0.35rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
+                            {t("paymentForm.creditedAs", {
+                              amount: p.creditedAmount,
+                              currency: p.feeCurrency || instructions?.feeCurrency || student?.feeCurrency || "XLM",
+                            })}
+                          </span>
+                        )}
                       </strong>
                       <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
                           <span className={badge.cls}>{t(badge.key)}</span>

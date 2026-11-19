@@ -72,12 +72,28 @@ const schoolSchema = new mongoose.Schema(
     walletActiveFrom: { type: Date, default: null },
     isActive:       { type: Boolean, default: true, index: true },
     /**
-     * Horizon paging cursor for the transaction poller (#839).
-     * Holds the `paging_token` of the most recently examined transaction for
-     * this school's wallet. The poller resumes ascending paging from this value
-     * each cycle, so it never re-scans history from genesis and never skips a
-     * transaction (gap-free, resumable). Null/unset = start from the oldest
-     * transaction on first run.
+     * Horizon paging cursor — the persisted ascending high-water mark for this
+     * school's wallet (#839, #1975, #1976).
+     *
+     * Holds the `paging_token` of the most recently *processed* transaction for
+     * this school's wallet. Both the scheduled poller and the manual sync
+     * (`syncPaymentsForSchool`) resume ascending paging from this value, so
+     * they never re-scan history from genesis and never skip a transaction
+     * (gap-free, resumable).
+     *
+     * Advancement rules (#1975, #1976):
+     *   - The cursor is advanced past a transaction only once that transaction
+     *     has reached a terminal outcome: recorded as a Payment, permanently
+     *     rejected, or recorded as an unmatched/skipped outcome (e.g. in
+     *     UnmatchedPayment / PaymentVerificationAttempt) so it can be re-scanned
+     *     on purpose.
+     *   - Transient errors (Horizon 5xx/429, DB errors, lock contention) must
+     *     NOT advance the cursor, so the transaction is retried next run.
+     *   - Non-payment transactions (outgoing sweeps, unmatched memos, failed
+     *     txs) are still covered by the cursor, so their operations are not
+     *     re-fetched on every run.
+     *
+     * Null/unset = start from the oldest transaction on first run.
      */
     syncCursor:     { type: String, default: null },
     /**
@@ -110,6 +126,26 @@ const schoolSchema = new mongoose.Schema(
      * e.g. "USD" for US schools, "PGK" for Papua New Guinea, "NGN" for Nigeria.
      */
     localCurrency:  { type: String, default: 'USD', uppercase: true, trim: true },
+    /**
+     * Default currency in which this school's fees are denominated (#1974).
+     *
+     * `FeeStructure.feeAmount`, `Student.feeAmount` and `PaymentIntent.amount`
+     * are bare numbers; this field says what unit they are in. It is the
+     * default inherited by FeeStructure, Student fee entries and PaymentIntent
+     * when they do not set their own `feeCurrency`.
+     *
+     * Accepted values:
+     *   - a Stellar asset code the school accepts (see ACCEPTED_ASSETS,
+     *     e.g. 'XLM' or 'USDC'), or
+     *   - an ISO 4217 fiat code (e.g. 'USD', 'NGN', 'PGK').
+     *
+     * Payments made in a different asset are credited in this currency via
+     * `creditedAmount` (using the recorded rate snapshot), so student balances
+     * never add up amounts across assets. Defaults to 'XLM' — the network's
+     * native asset and the historical implicit unit for existing schools.
+     * Operators should confirm the default per school before relying on it.
+     */
+    feeCurrency:    { type: String, default: 'XLM', uppercase: true, trim: true },
     /**
      * School's timezone (IANA timezone identifier, e.g. "America/New_York", "Pacific/Port_Moresby").
      * Used for date grouping in reports and dashboard metrics.
