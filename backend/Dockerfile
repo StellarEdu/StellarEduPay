@@ -2,6 +2,15 @@
 # Node major version — keep in sync with the root .nvmrc.
 # Override at build time: docker build --build-arg NODE_VERSION=24 ...
 ARG NODE_VERSION=24
+FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS deps
+
+# Stage 1 — production dependencies only (#1930). Only the manifests are
+# copied here, so this layer is cached until package*.json changes and no
+# host node_modules (built for another OS/libc) can leak into the image.
+WORKDIR /app
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
 FROM node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
 
 # tini: init process for PID 1 — forwards signals to Node and reaps zombies
@@ -26,18 +35,16 @@ ENV APP_VERSION=${APP_VERSION} \
 
 WORKDIR /app
 
-COPY package*.json ./
+# Source is copied with explicit ownership: COPY ignores USER, so a plain
+# `COPY . .` after `USER appuser` would leave everything root-owned (#1930).
+# The .dockerignore file keeps .env files, logs, tests and host artifacts out.
+COPY --from=deps --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --chown=appuser:appgroup . .
 
-# Migrations and the deploy-time migration CLI must be in the image.
-COPY migrations/ ./migrations/
-COPY scripts/ ./scripts/
-
-# Own everything as the non-root user
-RUN chown -R appuser:appgroup /app
+# The logger writes to ./logs at runtime, so that directory must be writable.
+RUN mkdir -p /app/logs && chown appuser:appgroup /app /app/logs
 
 USER appuser
-
-COPY . .
 
 # Use a tiny Node one-liner instead of curl: same result, no extra package.
 # Checks /health/live (process-alive probe, no external calls).
