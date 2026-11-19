@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { get, set, del } = require('../cache');
 const { sendAdminAlert } = require('../services/alertService');
+const tokenService = require('../services/tokenService');
 const { maskEmail } = require('../utils/piiRedaction');
 const { logAudit } = require('../services/auditService');
 const {
@@ -226,13 +227,12 @@ async function handleLogin(req, res) {
 
     clearLoginFailures(loginId);
 
-    const jwt = require('jsonwebtoken');
-    const secret    = process.env.JWT_SECRET;
     const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
     const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
     const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
-    const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+    // #1939 — sign through tokenService so the token matches what requireAdminAuth verifies.
+    const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
 
     const store = getStore();
     let refreshToken;
@@ -322,8 +322,6 @@ async function handleLogin(req, res) {
 
   clearLoginFailures(loginId);
 
-  const jwt = require('jsonwebtoken');
-  const secret    = process.env.JWT_SECRET;
   const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
@@ -352,9 +350,11 @@ async function handleLogin(req, res) {
     userId:   user._id.toString(),
     schoolId: user.schoolId,
     roles:    user.roles,
+    // Must match the account's tokenVersion or checkSessionRevoked rejects the token.
+    tokenVersion: user.tokenVersion || 0,
     ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
   };
-  const token = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+  const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
 
   const store = getStore();
   let refreshToken;
@@ -402,8 +402,6 @@ async function handleRefresh(req, res) {
     return res.status(401).json({ error: 'Session has been revoked.', code: 'SESSION_REVOKED' });
   }
 
-  const jwt = require('jsonwebtoken');
-  const secret     = process.env.JWT_SECRET;
   const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
@@ -447,6 +445,7 @@ async function handleRefresh(req, res) {
   if (meta.roles)    jwtPayload.roles    = meta.roles;
   if (meta.schoolId) jwtPayload.schoolId = meta.schoolId;
   if (meta.username) jwtPayload.username = meta.username;
+  if (meta.tokenVersion !== undefined) jwtPayload.tokenVersion = meta.tokenVersion;
 
   // Re-derive mfaSetupPending for DB users only (super_admin has no User doc).
   if (meta.userId && meta.userId !== 'super_admin') {
@@ -463,6 +462,7 @@ async function handleRefresh(req, res) {
       // Reflect any role / school changes made since the token was originally issued.
       if (liveUser.roles)    jwtPayload.roles    = liveUser.roles;
       if (liveUser.schoolId) jwtPayload.schoolId = liveUser.schoolId;
+      jwtPayload.tokenVersion = liveUser.tokenVersion || 0;
 
       // Re-evaluate MFA setup requirement against live state.
       const userHasPersonalMfa = Boolean(liveUser.mfaEnabled && liveUser.mfaSecret);
@@ -493,7 +493,7 @@ async function handleRefresh(req, res) {
     }
   }
 
-  const accessToken = jwt.sign(jwtPayload, secret, { expiresIn: accessTTL });
+  const { token: accessToken } = tokenService.sign(jwtPayload, { expiresIn: accessTTL });
 
   // Deliver via cookies only — no tokens in response body (#821)
   res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions(accessTTL));

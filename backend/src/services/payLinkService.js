@@ -139,5 +139,4 @@ module.exports = {
   revokePayLinks,
   resolvePayLink,
   buildReminderPayUrl,
-  buildPayUrl,
 };

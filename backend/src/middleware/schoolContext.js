@@ -2,7 +2,7 @@
 
 const School = require('../models/schoolModel');
 const cache = require('../cache');
-const jwt = require('jsonwebtoken');
+const tokenService = require('../services/tokenService');
 const { logAudit } = require('../services/auditService');
 
 const SUPER_ADMIN_AUDIT_WINDOW_MS = 60 * 60 * 1000;
@@ -130,7 +130,7 @@ async function resolveSchool(req, res, next) {
 
     if (rawToken) {
       try {
-        const decoded = jwt.verify(rawToken, process.env.JWT_SECRET);
+        const decoded = tokenService.verify(rawToken);
         const isSuperAdmin =
           decoded.role === 'admin' ||
           (Array.isArray(decoded.roles) && decoded.roles.includes('super_admin'));

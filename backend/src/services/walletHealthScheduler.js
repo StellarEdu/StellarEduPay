@@ -92,14 +92,9 @@ function stopWalletHealthScheduler() {
   }
 }
 
-function getWalletHealthLastRunAt() {
-  return _lastRunAt;
-}
-
 module.exports = {
   REPORTED_CODES,
   runWalletHealthCheck,
   startWalletHealthScheduler,
   stopWalletHealthScheduler,
-  getWalletHealthLastRunAt,
 };

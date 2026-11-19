@@ -5,7 +5,7 @@
  * Issue #63 — API Authentication Layer
  */
 
-const jwt = require('jsonwebtoken');
+const tokenService = require('../backend/src/services/tokenService');
 
 const TEST_SECRET = 'test-secret-for-jest';
 
@@ -38,8 +38,10 @@ function mockRes() {
   return res;
 }
 
-function makeToken(payload, secret = TEST_SECRET, options = {}) {
-  return jwt.sign(payload, secret, { expiresIn: '1h', ...options });
+// #1939 — tokens must be signed the way the server signs them (HKDF key, iss/aud),
+// not with the raw secret, or the middleware rejects them.
+function makeToken(payload, _secret = TEST_SECRET, options = {}) {
+  return tokenService.sign(payload, { expiresIn: options.expiresIn || '1h' }).token;
 }
 
 describe('requireAdminAuth middleware', () => {
@@ -89,7 +91,7 @@ describe('requireAdminAuth middleware', () => {
   });
 
   it('allows valid admin tokens', async () => {
-    const token = makeToken({ role: 'admin', sub: 'admin-user' });
+    const token = makeToken({ role: 'admin', userId: 'super_admin', roles: ['super_admin'] });
     const req = mockReq(`Bearer ${token}`);
     const res = mockRes();
     await requireAdminAuth(req, res, next);

@@ -136,7 +136,7 @@ describe('issue #1937 — signed pay links', () => {
       class: 'JSS1',
       feeAmount: 100,
     });
-    expect(used.body.fees[0]).toMatchObject({ category: 'tuition', remainingBalance: '60.0000000' });
+    expect(used.body.fees[0]).toMatchObject({ category: 'tuition', remainingBalance: 60 });
     // The student ID is only the memo; no other field echoes it back.
     expect(JSON.stringify({ ...used.body, memo: undefined })).not.toContain(STUDENT_ID);
   });

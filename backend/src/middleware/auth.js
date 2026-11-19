@@ -32,6 +32,9 @@ function ipBlockKey(ip) {
 // send back when it has been revoked.
 async function checkSessionRevoked(decoded) {
   // Env super-admin tokens (role:'admin') are not backed by a DB user row.
+  // #1939 — the env super-admin's userId is the literal 'super_admin', which is not
+  // an ObjectId; looking it up would throw a CastError and fail every request.
+  if (decoded.userId === 'super_admin') return null;
   if (decoded.role === 'admin' && !decoded.userId && !decoded.sub) return null;
 
   const userId = decoded.userId || decoded.sub || decoded.id;

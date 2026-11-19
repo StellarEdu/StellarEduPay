@@ -1,6 +1,6 @@
 'use strict';
 
-const Decimal = require('decimal.js');
+const { toMoney, toMoneyNumber, Decimal } = require('../utils/money');
 const logger = require('../utils/logger');
 const { logAudit } = require('../services/auditService');
 const {
@@ -28,7 +28,8 @@ function maskName(name) {
 }
 
 function remainingFor(fee) {
-  return Decimal.max(0, new Decimal(fee.amount || 0).minus(fee.totalPaid || 0)).toFixed(7);
+  const remaining = Decimal.max(0, toMoney(fee.amount).minus(toMoney(fee.totalPaid || 0)));
+  return toMoneyNumber(remaining);
 }
 
 // POST /api/students/:studentId/pay-link  (owner / staff)

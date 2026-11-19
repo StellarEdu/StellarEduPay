@@ -7,6 +7,7 @@ const School = require('../models/schoolModel');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
 const schoolCache = require('../services/schoolCacheInvalidator');
+const tokenService = require('../services/tokenService');
 const { revokeAllUserSessions } = require('../services/sessionStore');
 
 // ── MFA secret encryption (AES-256-GCM) ──────────────────────────────────────
@@ -581,16 +582,16 @@ async function verifyAndEnableUserMfa(req, res) {
     // metadata and re-mints a restricted access token on every silent refresh even
     // after enrolment is complete, keeping the user in the /mfa-setup loop.
     if (req.user?.mfaSetupPending) {
-      const jwt = require('jsonwebtoken');
       const { parseTTL, getStore, issueRefreshToken } = require('./authController');
-      const { role, userId: uid, schoolId, roles } = req.user;
+      const { role, userId: uid, schoolId, roles, tokenVersion } = req.user;
 
       const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL',  8 * 3600);
       const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
       // Build the full, unrestricted payload (no mfaSetupPending).
-      const newPayload = { role, userId: uid, schoolId, roles };
-      const newAccessToken = jwt.sign(newPayload, process.env.JWT_SECRET, { expiresIn: accessTTL });
+      // tokenVersion carries over so the re-issued token still matches the account.
+      const newPayload = { role, userId: uid, schoolId, roles, tokenVersion: tokenVersion || 0 };
+      const { token: newAccessToken } = tokenService.sign(newPayload, { expiresIn: accessTTL });
 
       // Rotate the refresh token: revoke the old family, issue a clean new one.
       const store = getStore();
