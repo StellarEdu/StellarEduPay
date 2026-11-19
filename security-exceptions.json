@@ -42,6 +42,54 @@
       "file": "tests/scanRepoSecrets.test.js",
       "line": 59,
       "reason": "BIP-39 mnemonic test fixture (all real BIP-39 words) used to exercise the mnemonic detector in unit tests."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/src/middleware/rateLimiter.js",
+      "line": 173,
+      "reason": "Comment prose in rate limiter; lowercase English words match the BIP-39 wordlist heuristic. Contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/src/services/disputeNotificationService.js",
+      "line": 65,
+      "reason": "Comment prose in dispute notifications; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/src/utils/stellarAmount.js",
+      "line": 24,
+      "reason": "Comment prose describing a helper; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "backend/tests/issue1799-walletHistory.test.js",
+      "line": 148,
+      "reason": "Test comment prose; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/api-spec.md",
+      "line": 672,
+      "reason": "API documentation prose about the school wallet; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/load-simulation.md",
+      "line": 36,
+      "reason": "Documentation prose about the budget service; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "docs/stellar-integration.md",
+      "line": 490,
+      "reason": "Documentation prose about fires-for-schools behaviour; matches the BIP-39 heuristic but contains no mnemonic material."
+    },
+    {
+      "type": "mnemonic",
+      "file": "tests/loadsim/horizonPollLoadModel.test.js",
+      "line": 12,
+      "reason": "Test comment prose; matches the BIP-39 heuristic but contains no mnemonic material."
     }
   ]
 }
