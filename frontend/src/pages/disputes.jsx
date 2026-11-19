@@ -125,9 +125,55 @@ function ResolveForm({ dispute, onResolved }) {
   );
 }
 
+function isSafeEvidenceUrl(url) {
+  if (typeof url !== "string") return false;
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function EvidenceList({ evidence }) {
+  const { t } = useTranslation();
+  if (!Array.isArray(evidence) || evidence.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: "1rem" }}>
+      <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.5rem" }}>
+        {t("disputes.evidence")}
+      </div>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.375rem" }}>
+        {evidence.map((item, i) => (
+          <li key={i} style={{ fontSize: "0.8125rem", color: "var(--text)", wordBreak: "break-all" }}>
+            <span style={{ fontWeight: 600, marginRight: "0.375rem" }}>{item.type}:</span>
+            {isSafeEvidenceUrl(item.url) ? (
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: "0.25rem" }}
+              >
+                {item.url}
+                <IconExternalLink size={11} />
+              </a>
+            ) : (
+              <span style={{ fontFamily: "monospace" }}>{item.url}</span>
+            )}
+            {item.description && (
+              <span style={{ color: "var(--text-muted)", marginLeft: "0.375rem" }}>— {item.description}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
   const { t } = useTranslation();
   const canResolve = dispute.status === "open" || dispute.status === "under_review";
+=======
 
   return (
     <div className="card" style={{ marginBottom: "0.75rem" }}>
@@ -176,6 +222,7 @@ function DisputeCard({ dispute, expanded, onToggle, onResolved }) {
         {/* Expanded section */}
         {expanded && (
           <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
+            <EvidenceList evidence={dispute.evidence} />
             {dispute.resolutionNote && (
               <div className="alert alert-info" style={{ marginBottom: "1rem" }}>
                 <strong>{t("disputes.resolutionNotePrefix")}</strong>&nbsp;{dispute.resolutionNote}

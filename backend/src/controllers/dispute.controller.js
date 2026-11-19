@@ -11,6 +11,7 @@
  *          change, alert admins on new disputes (SLA breaches: disputeNotificationService).
  */
 
+const Joi = require('joi');
 const Dispute = require('../models/disputeModel');
 const { decryptLeanDispute } = require('../models/disputeModel');
 const Payment = require('../models/paymentModel');
@@ -72,6 +73,43 @@ const DISPUTE_TO_PAYMENT_STATUS = {
 function isValidTransition(from, to) {
   const allowed = DISPUTE_TRANSITIONS.get(from);
   return allowed ? allowed.has(to) : false;
+}
+
+// ── Evidence validation (#1959) ──────────────────────────────────────────────
+//
+// Evidence can be supplied by parents through the parent portal, so it is
+// attacker-controlled. Only https: URLs are accepted (javascript:, data: and
+// file: links would otherwise reach the admin UI), descriptions are bounded,
+// unknown keys are stripped, and the number of items is capped both per call
+// and per dispute.
+
+const EVIDENCE_TYPES = ['screenshot', 'tx_reference', 'document', 'other'];
+const MAX_EVIDENCE_PER_CALL = 10;
+const MAX_EVIDENCE_PER_DISPUTE = 25;
+
+const evidenceItemSchema = Joi.object({
+  type: Joi.string().valid(...EVIDENCE_TYPES).required(),
+  url: Joi.string().uri({ scheme: ['https'] }).max(2048).required(),
+  description: Joi.string().max(500).allow('', null),
+}).unknown(false);
+
+const evidenceArraySchema = Joi.array()
+  .items(evidenceItemSchema)
+  .max(MAX_EVIDENCE_PER_CALL);
+
+/**
+ * Validate an evidence array. Returns `{ value }` on success or `{ error }`
+ * with a client-safe message on failure.
+ */
+function _validateEvidence(evidence) {
+  const { value, error } = evidenceArraySchema.validate(evidence, {
+    abortEarly: true,
+    stripUnknown: true,
+  });
+  if (error) {
+    return { error: `Invalid evidence: ${error.message}` };
+  }
+  return { value };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -212,7 +250,7 @@ async function flagDispute(req, res, next) {
   try {
     const { schoolId } = req;
     const { txHash, studentId, raisedBy, reason, txReference, evidence, raisedByEmail, raisedByPhone } = req.body;
-    if (!txHash || !studentId || !raisedBy || !reason) {
+    if (!txHash || !raisedBy || !reason) {
       return res.status(400).json({ error: 'txHash, studentId, raisedBy, and reason are all required.', code: 'VALIDATION_ERROR' });
     }
 
@@ -256,36 +294,47 @@ async function flagDispute(req, res, next) {
     if (!payment) {
       return res.status(404).json({ error: 'Payment not found for this school.', code: 'NOT_FOUND' });
     }
-    // #1810 — a dispute and its disputeHold must attach to the student the
-    // payment actually belongs to, not whichever studentId the body claims.
-    if (String(payment.studentId) !== String(studentId)) {
+    // #1810 / #1959 — a dispute and its disputeHold must attach to the student
+    // the payment actually belongs to, not whichever studentId the body claims.
+    // The body's studentId is only used to detect a mismatch.
+    if (studentId !== undefined && studentId !== null && studentId !== '' &&
+        String(payment.studentId) !== String(studentId)) {
       return res.status(404).json({ error: 'Payment not found for this student.', code: 'NOT_FOUND' });
     }
+    const disputeStudentId = payment.studentId;
     const existing = await Dispute.findOne({ schoolId, txHash, status: { $in: ['open', 'under_review'] } });
     if (existing) {
       return res.status(409).json({ error: 'An active dispute already exists for this payment.', code: 'DISPUTE_ALREADY_EXISTS', disputeId: existing._id });
     }
-    // Validate evidence array if provided
-    if (evidence && !Array.isArray(evidence)) {
-      return res.status(400).json({ error: 'evidence must be an array.', code: 'VALIDATION_ERROR' });
+    // Validate evidence array if provided (#1959)
+    let validatedEvidence = [];
+    if (evidence !== undefined && evidence !== null) {
+      if (!Array.isArray(evidence)) {
+        return res.status(400).json({ error: 'evidence must be an array.', code: 'VALIDATION_ERROR' });
+      }
+      const { value, error } = _validateEvidence(evidence);
+      if (error) {
+        return res.status(400).json({ error, code: 'VALIDATION_ERROR' });
+      }
+      validatedEvidence = value;
     }
 
     const dispute = await Dispute.create({
       schoolId,
       txHash,
-      studentId,
+      studentId: disputeStudentId,
       raisedBy: raisedByTrimmed,
       raisedByEmail: contactEmail,
       raisedByPhone: contactPhone,
       reason: reasonTrimmed,
       txReference: txReference ? txReference.trim() : undefined,
-      evidence: evidence || [],
+      evidence: validatedEvidence,
       status: 'open',
     });
 
     // #993 — Pause automated reminders/automation while the dispute is active.
     await Student.findOneAndUpdate(
-      { schoolId, studentId },
+      { schoolId, studentId: disputeStudentId },
       { $set: { disputeHold: true } }
     );
 
@@ -301,7 +350,7 @@ async function flagDispute(req, res, next) {
         targetId:    String(dispute._id),
         targetType:  'dispute',
         details:     {
-          txHash, studentId, raisedBy: raisedByTrimmed, reason: reasonTrimmed,
+          txHash, studentId: disputeStudentId, raisedBy: raisedByTrimmed, reason: reasonTrimmed,
           contactProvided: Boolean(contactEmail || contactPhone),
         },
         result:      'success',
@@ -436,18 +485,47 @@ async function resolveDispute(req, res, next) {
       update.$set.assignedTo = assignedTo.trim();
     }
 
-    // Push new evidence if provided (#991)
-    if (evidence && Array.isArray(evidence) && evidence.length > 0) {
-      update.$push = { evidence: { $each: evidence } };
+    // Push new evidence if provided (#991, validated per #1959)
+    if (evidence !== undefined && evidence !== null) {
+      if (!Array.isArray(evidence)) {
+        return res.status(400).json({ error: 'evidence must be an array.', code: 'VALIDATION_ERROR' });
+      }
+      if (evidence.length > 0) {
+        const { value: validatedEvidence, error: evidenceError } = _validateEvidence(evidence);
+        if (evidenceError) {
+          return res.status(400).json({ error: evidenceError, code: 'VALIDATION_ERROR' });
+        }
+        update.$push = { evidence: { $each: validatedEvidence } };
+      }
+    }
+
+    const filter = { _id: req.params.id, schoolId };
+    // #1959 — enforce the per-dispute evidence cap atomically when pushing.
+    if (update.$push && update.$push.evidence) {
+      filter.$expr = {
+        $lte: [
+          { $add: [{ $size: { $ifNull: ['$evidence', []] } }, update.$push.evidence.$each.length] },
+          MAX_EVIDENCE_PER_DISPUTE,
+        ],
+      };
     }
 
     const dispute = await Dispute.findOneAndUpdate(
-      { _id: req.params.id, schoolId },
+      filter,
       update,
       { new: true }
     );
 
     if (!dispute) {
+      if (filter.$expr) {
+        const stillOpen = await Dispute.exists({ _id: req.params.id, schoolId });
+        if (stillOpen) {
+          return res.status(400).json({
+            error: `A dispute may hold at most ${MAX_EVIDENCE_PER_DISPUTE} evidence items.`,
+            code: 'EVIDENCE_LIMIT_REACHED',
+          });
+        }
+      }
       return res.status(404).json({ error: 'Dispute not found.', code: 'NOT_FOUND' });
     }
 
@@ -520,32 +598,45 @@ async function addEvidence(req, res, next) {
       return res.status(400).json({ error: 'evidence array is required.', code: 'VALIDATION_ERROR' });
     }
 
-    // Validate each evidence item
-    for (const item of evidence) {
-      if (!item.type || !item.url) {
-        return res.status(400).json({
-          error: 'Each evidence item must have a type and url.',
-          code: 'VALIDATION_ERROR',
-        });
-      }
-      if (!['screenshot', 'tx_reference', 'document', 'other'].includes(item.type)) {
-        return res.status(400).json({
-          error: `Invalid evidence type: ${item.type}. Must be one of: screenshot, tx_reference, document, other`,
-          code: 'VALIDATION_ERROR',
-        });
-      }
+    // #1959 — validate scheme/format, strip unknown keys, cap per-call count.
+    const { value: validatedEvidence, error: evidenceError } = _validateEvidence(evidence);
+    if (evidenceError) {
+      return res.status(400).json({ error: evidenceError, code: 'VALIDATION_ERROR' });
     }
 
+    // #1959 — enforce the per-dispute cap atomically in the update filter so
+    // concurrent requests cannot exceed it.
     const dispute = await Dispute.findOneAndUpdate(
-      { _id: req.params.id, schoolId, status: { $in: ['open', 'under_review'] } },
       {
-        $push: { evidence: { $each: evidence } },
+        _id: req.params.id,
+        schoolId,
+        status: { $in: ['open', 'under_review'] },
+        $expr: {
+          $lte: [
+            { $add: [{ $size: { $ifNull: ['$evidence', []] } }, validatedEvidence.length] },
+            MAX_EVIDENCE_PER_DISPUTE,
+          ],
+        },
+      },
+      {
+        $push: { evidence: { $each: validatedEvidence } },
         $set: { lastActivityAt: new Date() },
       },
       { new: true }
     );
 
     if (!dispute) {
+      // Distinguish "closed/missing" from "evidence limit reached".
+      const existing = await Dispute.findOne(
+        { _id: req.params.id, schoolId },
+        { evidence: 1, status: 1 }
+      ).lean();
+      if (existing && ['open', 'under_review'].includes(existing.status)) {
+        return res.status(400).json({
+          error: `A dispute may hold at most ${MAX_EVIDENCE_PER_DISPUTE} evidence items.`,
+          code: 'EVIDENCE_LIMIT_REACHED',
+        });
+      }
       return res.status(404).json({ error: 'Dispute not found or already closed.', code: 'NOT_FOUND' });
     }
 

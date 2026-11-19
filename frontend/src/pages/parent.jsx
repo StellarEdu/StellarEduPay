@@ -2,14 +2,38 @@ import Head from "next/head";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { useTranslation } from "react-i18next";
-import { createParentApi, loadParentToken, saveParentToken } from "../services/parentApi";
+import {
+  createParentApi,
+  exchangeParentToken,
+  loadParentToken,
+  saveParentToken,
+} from "../services/parentApi";
 import { getErrorMessage } from "../utils/errorMessages";
 import styles from "../styles/parent.module.css";
 
 // #1637 — parent self-service portal. Reached through a per-family magic link
-// (/parent?token=…) from reminder emails or sent by the school. The token is
-// moved out of the address bar into sessionStorage on first load so it is not
-// left in browser history, and is sent only in the X-Parent-Token header.
+// (/parent#token=…) from reminder emails or sent by the school. The token is
+// carried in the URL fragment so it is never sent to the server, ingress or
+// CDN logs; on first load it is read from window.location.hash, stripped with
+// history.replaceState and exchanged for a short-lived session (HttpOnly
+// cookie scoped to /api/parent) so the long-lived token is used only once per
+// device. The session token is kept in sessionStorage as a fallback and sent
+// only in the X-Parent-Token header.
+
+// Read the magic token from the URL fragment (#token=…) and remove it from the
+// address bar without adding a history entry.
+function readAndStripHashToken() {
+  if (typeof window === "undefined") return "";
+  const hash = window.location.hash || "";
+  if (!hash) return "";
+  const params = new URLSearchParams(hash.replace(/^#/, ""));
+  const fromHash = params.get("token") || "";
+  if (fromHash) {
+    const { pathname, search } = window.location;
+    window.history.replaceState(window.history.state, "", `${pathname}${search}`);
+  }
+  return fromHash;
+}
 
 function formatAmount(amount, asset) {
   if (amount === null || amount === undefined) return "—";
@@ -246,17 +270,36 @@ export default function ParentPortalPage() {
   const [state, setState] = useState({ status: "loading", data: null, error: "" });
   const [disputePayment, setDisputePayment] = useState(null);
 
-  // Move the token from the link into session storage and out of the URL.
+  // Exchange the magic token from the fragment for a short-lived session and
+  // move it out of the URL; otherwise fall back to the stored session token.
   useEffect(() => {
     if (!router.isReady) return;
-    const fromLink = typeof router.query.token === "string" ? router.query.token : "";
-    if (fromLink) {
-      saveParentToken(fromLink);
-      setToken(fromLink);
-      router.replace("/parent", undefined, { shallow: true });
+    let cancelled = false;
+    const fromHash = readAndStripHashToken();
+    if (fromHash) {
+      exchangeParentToken(fromHash)
+        .then((sessionToken) => {
+          if (cancelled) return;
+          saveParentToken(sessionToken);
+          setToken(sessionToken);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          const body = err.response?.data || {};
+          saveParentToken("");
+          setToken("");
+          setState({
+            status: "error",
+            data: null,
+            error: body.error || getErrorMessage(body.code, body.error),
+          });
+        });
     } else {
       setToken(loadParentToken());
     }
+    return () => {
+      cancelled = true;
+    };
   }, [router.isReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const api = useMemo(() => (token ? createParentApi(token) : null), [token]);
@@ -279,8 +322,10 @@ export default function ParentPortalPage() {
   }, [token, api]);
 
   useEffect(() => {
+    // Wait until the token has been resolved (null = still reading the link).
+    if (token === null) return;
     load();
-  }, [load]);
+  }, [load, token]);
 
   function handlePreferenceChange(studentId, preferences) {
     setState((s) => ({

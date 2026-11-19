@@ -53,9 +53,11 @@ export default function DisputeForm({ txHash, studentId, onSuccess, onCancel }) 
     setSubmitting(true);
 
     try {
+      // studentId is intentionally omitted: the backend derives it from the
+      // payment identified by txHash, so a client-supplied value can never
+      // disagree with the payment being disputed.
       const res = await flagDispute({
         txHash,
-        studentId,
         raisedBy: raisedBy.trim(),
         reason: reason.trim(),
         ...(contactEmail.trim() ? { raisedByEmail: contactEmail.trim() } : {}),

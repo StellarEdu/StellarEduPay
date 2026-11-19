@@ -22,6 +22,28 @@ const { logAudit } = require('../services/auditService');
 const parentPortal = require('../services/parentPortalService');
 const logger = require('../utils/logger').child('ParentPortal');
 
+const SESSION_COOKIE = 'parent_session';
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SESSION_PATH = '/api/parent';
+
+function _sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: SESSION_PATH,
+    maxAge: SESSION_TTL_MS,
+  };
+}
+
+function _extractMagicToken(req) {
+  const header = req.get('X-Parent-Token');
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  const bodyToken = req.body?.token;
+  if (typeof bodyToken === 'string' && bodyToken.trim()) return bodyToken.trim();
+  return null;
+}
+
 const PAYMENT_FIELDS = 'txHash amount assetCode status confirmedAt createdAt feeCategory memo feeValidationStatus';
 
 function _audit(req, action, targetId, details = {}) {
@@ -249,6 +271,38 @@ async function updatePreferences(req, res, next) {
   }
 }
 
+// POST /api/parent/session  { token }  (or X-Parent-Token header)
+// Exchanges the long-lived magic token for a short-lived HttpOnly session
+// cookie scoped to /api/parent. The magic token is only used once per device.
+async function createSession(req, res, next) {
+  try {
+    const token = _extractMagicToken(req);
+    if (!token) {
+      return res.status(400).json({ error: 'token is required.', code: 'VALIDATION_ERROR' });
+    }
+
+    const payload = await parentPortal.verifyParentToken(token);
+    if (!payload) {
+      return res.status(401).json({ error: 'Invalid or expired token', code: 'INVALID_TOKEN' });
+    }
+
+    const deviceId = parentPortal.recordDeviceUse({
+      tokenId: payload.tokenId,
+      userAgent: req.get('User-Agent') || null,
+      ipAddress: req.ip || null,
+    });
+
+    res.cookie(SESSION_COOKIE, token, _sessionCookieOptions());
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+    logger.info('Parent portal session created', { tokenId: payload.tokenId, deviceId });
+
+    return res.json({ expiresAt, deviceId });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Staff endpoints ──────────────────────────────────────────────────────────
 
 function _staffId(req) {
@@ -309,8 +363,36 @@ async function listLinks(req, res, next) {
         revokedBy: l.revokedBy,
         lastUsedAt: l.lastUsedAt,
         useCount: l.useCount || 0,
+        devices: parentPortal.listDevices(l.tokenId),
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/parent/links/:tokenId/devices
+async function listLinkDevices(req, res, next) {
+  try {
+    const record = await parentPortal.getParentLink({ schoolId: req.schoolId, tokenId: req.params.tokenId });
+    if (!record) return res.status(404).json({ error: 'Link not found', code: 'NOT_FOUND' });
+    return res.json({ tokenId: record.tokenId, devices: parentPortal.listDevices(record.tokenId) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/parent/links/:tokenId/devices/:deviceId
+async function revokeLinkDevice(req, res, next) {
+  try {
+    const record = await parentPortal.getParentLink({ schoolId: req.schoolId, tokenId: req.params.tokenId });
+    if (!record) return res.status(404).json({ error: 'Link not found', code: 'NOT_FOUND' });
+    const revoked = parentPortal.revokeDevice(record.tokenId, req.params.deviceId);
+    if (!revoked) return res.status(404).json({ error: 'Device not found', code: 'NOT_FOUND' });
+
+    _audit(req, 'parent_portal_device_revoked', record.studentIds.join(','), { tokenId: record.tokenId, deviceId: req.params.deviceId });
+
+    return res.json({ tokenId: record.tokenId, deviceId: req.params.deviceId, revokedAt: revoked.revokedAt });
   } catch (err) {
     next(err);
   }
@@ -357,8 +439,11 @@ module.exports = {
   getReceipt,
   raiseDispute,
   updatePreferences,
+  createSession,
   createLink,
   listLinks,
+  listLinkDevices,
+  revokeLinkDevice,
   revokeLink,
   revokeStudentLinks,
 };

@@ -53,16 +53,19 @@ function isEnabled() {
 }
 
 /**
- * Attribute keys that carry a full URL or query string. Query strings are
- * dropped entirely: parent-portal and password-reset tokens travel in them.
+ * Attribute keys that carry a full URL or query string. Query strings and
+ * fragments are dropped entirely: parent-portal and password-reset tokens
+ * travel in them.
  */
 const URL_ATTRIBUTE_KEYS = new Set(['http.url', 'url.full', 'http.target']);
 
 /**
- * Secret-looking query/form parameters. Anything matching is masked in every
- * string attribute and span name, whatever instrumentation produced it.
+ * Secret-looking query/form/fragment parameters. Anything matching is masked
+ * in every string attribute and span name, whatever instrumentation produced
+ * it. The delimiter class includes `#` so fragment-style `#token=…` (the
+ * parent-portal magic link) is masked too.
  */
-const SECRET_PARAM_RE = /((?:^|[?&;\s"'])(?:access_token|refresh_token|reset_token|token|password|secret|api[_-]?key|code)=)[^&;\s"'#]*/gi;
+const SECRET_PARAM_RE = /((?:^|[?&;\s"'#])(?:access_token|refresh_token|reset_token|token|password|secret|api[_-]?key|code)=)[^&;\s"'#]*/gi;
 
 function redactString(value) {
   return value.replace(SECRET_PARAM_RE, '$1[REDACTED]');
@@ -74,8 +77,12 @@ function redactAttributeValue(key, value) {
   if (typeof value !== 'string') return value;
   if (QUERY_ONLY_ATTRIBUTE_KEYS.has(key)) return value ? '[REDACTED]' : value;
   if (URL_ATTRIBUTE_KEYS.has(key)) {
-    const cut = value.indexOf('?');
-    if (cut !== -1) return `${value.slice(0, cut)}?[REDACTED]`;
+    const queryCut = value.indexOf('?');
+    const fragmentCut = value.indexOf('#');
+    const cut = queryCut === -1 ? fragmentCut
+      : fragmentCut === -1 ? queryCut
+        : Math.min(queryCut, fragmentCut);
+    if (cut !== -1) return `${value.slice(0, cut)}[REDACTED]`;
   }
   return redactString(value);
 }

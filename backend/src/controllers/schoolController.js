@@ -297,6 +297,52 @@ async function createSchool(req, res, next) {
   }
 }
 
+// Allow-list for the anonymous school endpoints (list and single-school).
+// Anything not listed here (emails, webhook config, fraud thresholds, MFA,
+// settings) stays private, including fields added to the schema in future.
+const PUBLIC_SCHOOL_FIELDS = {
+  schoolId: 1,
+  name: 1,
+  slug: 1,
+  stellarAddress: 1,
+  localCurrency: 1,
+  timezone: 1,
+  logoUrl: 1,
+  primaryColor: 1,
+  supportContact: 1,
+  classOptions: 1,
+  emailLocale: 1,
+};
+
+// Extended projection for super-admins only. Includes operational config that
+// must never reach anonymous callers (emails, fraud thresholds, webhook PII
+// config, wallet history).
+const ADMIN_SCHOOL_FIELDS = {
+  ...PUBLIC_SCHOOL_FIELDS,
+  previousStellarAddress: 1,
+  network: 1,
+  isActive: 1,
+  adminEmail: 1,
+  address: 1,
+  contactEmail: 1,
+  suspiciousPaymentMultiplier: 1,
+  suspiciousAmountConfig: 1,
+  maxPaymentMultiplier: 1,
+  maxStudents: 1,
+  maintenanceMode: 1,
+  webhookPayloadConfig: 1,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+// Issue #1957: only super-admins may see the extended projection.
+function isSuperAdmin(req) {
+  const admin = req && req.admin;
+  if (!admin) return false;
+  if (admin.role === 'admin' || admin.role === 'super_admin') return true;
+  return Array.isArray(admin.roles) && admin.roles.includes('super_admin');
+}
+
 // GET /api/schools
 async function getAllSchools(req, res, next) {
   try {
@@ -311,35 +357,11 @@ async function getAllSchools(req, res, next) {
       const escaped = req.query.q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.name = { $regex: escaped, $options: 'i' };
     }
-    const publicFields = {
-      schoolId: 1,
-      name: 1,
-      slug: 1,
-      stellarAddress: 1,
-      previousStellarAddress: 1,
-      network: 1,
-      isActive: 1,
-      adminEmail: 1,
-      address: 1,
-      contactEmail: 1,
-      localCurrency: 1,
-      timezone: 1,
-      suspiciousPaymentMultiplier: 1,
-      suspiciousAmountConfig: 1,
-      maxPaymentMultiplier: 1,
-      maxStudents: 1,
-      logoUrl: 1,
-      supportContact: 1,
-      primaryColor: 1,
-      emailLocale: 1,
-      maintenanceMode: 1,
-      webhookPayloadConfig: 1,
-      classOptions: 1,
-      createdAt: 1,
-      updatedAt: 1,
-    };
+    // Issue #1957: anonymous callers get the allow-list only; the extended
+    // projection (emails, fraud thresholds, internal config) is super-admin only.
+    const projection = isSuperAdmin(req) ? ADMIN_SCHOOL_FIELDS : PUBLIC_SCHOOL_FIELDS;
     const [schools, total] = await Promise.all([
-      School.find(query, publicFields)
+      School.find(query, projection)
         .sort({ name: 1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -354,23 +376,6 @@ async function getAllSchools(req, res, next) {
     next(err);
   }
 }
-
-// Allow-list for the anonymous single-school endpoint. Anything not listed
-// here (emails, webhook config, fraud thresholds, MFA, settings) stays private,
-// including fields added to the schema in future.
-const PUBLIC_SCHOOL_FIELDS = {
-  schoolId: 1,
-  name: 1,
-  slug: 1,
-  stellarAddress: 1,
-  localCurrency: 1,
-  timezone: 1,
-  logoUrl: 1,
-  primaryColor: 1,
-  supportContact: 1,
-  classOptions: 1,
-  emailLocale: 1,
-};
 
 // GET /api/schools/:schoolId
 async function getSchool(req, res, next) {

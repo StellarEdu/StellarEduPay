@@ -345,6 +345,11 @@ function requireSchoolAuth(allowedRoles = []) {
       }
     }
 
+    // req.admin is set for EVERY authenticated user (it is an alias of req.user,
+    // kept for backwards compatibility). Do NOT use its presence to decide what a
+    // caller may see — branch on the role instead (req.user.roles /
+    // req.admin.role), e.g. studentController.getAllStudents picks its PII
+    // projection from the role, not from `req.admin ? ... : ...`.
     req.user = decoded;
     req.admin = decoded;
     next();

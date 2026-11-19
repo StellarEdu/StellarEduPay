@@ -18,7 +18,7 @@ const {
   clearSchoolSetting,
   getWalletHealth,
 } = require('../controllers/schoolController');
-const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth, optionalAdminAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 // ?includeInactive=true requires admin auth (cookie or Bearer, admin/super_admin)
@@ -28,7 +28,10 @@ function adminAuthForInactive(req, res, next) {
 }
 
 // Public read endpoints
-router.get('/',                 adminAuthForInactive, getAllSchools);
+// optionalAdminAuth populates req.admin when a valid admin token is present so
+// getAllSchools can return the extended projection to super-admins only; anonymous
+// callers still get the public allow-list.
+router.get('/',                 optionalAdminAuth, adminAuthForInactive, getAllSchools);
 router.get('/:schoolId',        getSchool);
 
 // Admin-only write endpoints — require JWT auth

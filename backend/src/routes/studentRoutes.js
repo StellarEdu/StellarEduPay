@@ -34,6 +34,7 @@ const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 const { bulkImportLimiter, publicStudentLimiter } = require('../middleware/rateLimiter');
 const streamingCsvUpload = require('../middleware/streamingCsvUpload');
+const { getStudentsByRole } = require('../controllers/studentController');
 
 router.use(resolveSchool);
 

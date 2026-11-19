@@ -26,6 +26,22 @@ const DISPUTE_SLA_HOURS = parseInt(process.env.DISPUTE_SLA_HOURS, 10) || 72; // 
  */
 const DISPUTE_CONTACT_FIELDS = ['raisedByEmail', 'raisedByPhone'];
 
+const MAX_EVIDENCE_ITEMS = 25;
+
+/**
+ * Only https: URLs are accepted as evidence links (#1959). javascript:, data:
+ * and file: URLs would otherwise be rendered as clickable links in the admin
+ * UI and could execute script in the admin origin.
+ */
+function isHttpsUrl(value) {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 const evidenceSchema = new mongoose.Schema(
   {
     type: {
@@ -33,7 +49,16 @@ const evidenceSchema = new mongoose.Schema(
       enum: ['screenshot', 'tx_reference', 'document', 'other'],
       required: true,
     },
-    url:         { type: String, required: true, trim: true },
+    url: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 2048,
+      validate: {
+        validator: isHttpsUrl,
+        message: 'Evidence URL must be a valid https: URL',
+      },
+    },
     description: { type: String, default: null, trim: true, maxlength: 500 },
     uploadedAt:  { type: Date, default: Date.now },
   },
@@ -61,8 +86,15 @@ const disputeSchema = new mongoose.Schema(
     raisedByEmail: { type: String, default: null, trim: true },
     raisedByPhone: { type: String, default: null, trim: true },
 
-    // Supporting evidence
-    evidence:    { type: [evidenceSchema], default: [] },
+    // Supporting evidence — capped so the document cannot grow without bound
+    evidence: {
+      type: [evidenceSchema],
+      default: [],
+      validate: {
+        validator: (items) => !Array.isArray(items) || items.length <= MAX_EVIDENCE_ITEMS,
+        message: `A dispute may hold at most ${MAX_EVIDENCE_ITEMS} evidence items`,
+      },
+    },
 
     status: {
       type: String,
@@ -196,3 +228,5 @@ module.exports = mongoose.model('Dispute', disputeSchema);
 /** Decrypt contact fields on a .lean() result (post('init') does not run). */
 module.exports.decryptLeanDispute = _decryptContact;
 module.exports.DISPUTE_SLA_HOURS = DISPUTE_SLA_HOURS;
+module.exports.MAX_EVIDENCE_ITEMS = MAX_EVIDENCE_ITEMS;
+module.exports.isHttpsUrl = isHttpsUrl;
