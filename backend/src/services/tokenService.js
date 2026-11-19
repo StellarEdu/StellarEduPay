@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
 const { get, set, del } = require('../cache');
-const { parseTTL } = require('./sessionStore');
+const { parseTTL } = require('../utils/ttl');
 
 const ISSUER = 'stellaredupay-api';
 const AUDIENCE = 'stellaredupay-admin';

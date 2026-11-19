@@ -1,5 +1,7 @@
 'use strict';
 
+const { SECRET_ENV_KEYS, FILE_SUFFIX } = require('../config/secrets');
+
 // Pattern-based secret detection to automatically cover new secrets.
 // Matches common secret-related suffixes plus explicit known-non-secret exceptions.
 const SECRET_PATTERN = /(SECRET|PASSWORD|PASS|TOKEN|KEY|SID|URI|HASH|API_KEY)$/i;
@@ -49,6 +51,15 @@ function shouldRedact(key) {
 }
 
 /**
+ * Secret file references (<NAME>_FILE, issue #1829) hold a filesystem path to a
+ * secret. The path is operational detail, so it is redacted like the secret.
+ */
+function isSecretFileRef(key) {
+  if (!key.endsWith(FILE_SUFFIX)) return false;
+  return SECRET_ENV_KEYS.includes(key.slice(0, -FILE_SUFFIX.length));
+}
+
+/**
  * Redact credentials embedded in URIs (mongodb://user:pass@host, redis://:pass@host).
  */
 function redactUri(value) {
@@ -72,7 +83,7 @@ function redactConfig(cfg) {
       if (v === undefined) return [k, v];
       
       // Redact if key matches the secret pattern
-      if (shouldRedact(k)) {
+      if (shouldRedact(k) || isSecretFileRef(k)) {
         return [k, '[REDACTED]'];
       }
       
@@ -87,8 +98,9 @@ function redactConfig(cfg) {
 }
 
 module.exports = { 
-  redactConfig, 
-  shouldRedact, 
+  redactConfig,
+  shouldRedact,
+  isSecretFileRef,
   redactUri, 
   REQUEST_LOG_REDACT_FIELDS,
   SECRET_PATTERN,

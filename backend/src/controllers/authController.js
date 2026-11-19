@@ -11,9 +11,10 @@ const { logAudit } = require('../services/auditService');
 const {
   getStore,
   revokeAllUserSessions,
-  parseTTL,
   _resetStore,
+  TokenStoreUnavailableError,
 } = require('../services/sessionStore');
+const { parseTTL } = require('../utils/ttl');
 
 // ── Constant-time string comparison ───────────────────────────────────────────
 
@@ -166,7 +167,11 @@ async function issueRefreshToken(store, jwtPayload, refreshTTL, req) {
   const sessionId = crypto.randomBytes(16).toString('hex');
   const refreshToken = crypto.randomBytes(40).toString('hex');
 
-  await store.setToken(refreshToken, refreshTTL, { familyId, sessionId, ...jwtPayload });
+  // #1528 — absolute session lifetime. Rotation copies this forward, so it is
+  // not extended by refreshing; the session ends at sessionMaxAge regardless.
+  const sessionMaxAge = Math.floor(Date.now() / 1000) + parseTTL('JWT_SESSION_MAX_LIFETIME', 30 * 86400);
+
+  await store.setToken(refreshToken, refreshTTL, { familyId, sessionId, sessionMaxAge, ...jwtPayload });
 
   store.setSession(sessionId, {
     userId:     jwtPayload.userId   || null,
@@ -375,6 +380,18 @@ async function handleLogin(req, res) {
 // ── Refresh ───────────────────────────────────────────────────────────────────
 
 async function handleRefresh(req, res) {
+  try {
+    return await refreshWithStore(req, res);
+  } catch (err) {
+    if (err instanceof TokenStoreUnavailableError) {
+      logger.error('[AuthController] Token store unavailable during refresh', { error: err.message });
+      return res.status(503).json({ error: 'Authentication service unavailable.', code: 'TOKEN_STORE_UNAVAILABLE' });
+    }
+    throw err;
+  }
+}
+
+async function refreshWithStore(req, res) {
   const refreshToken = req.cookies?.[REFRESH_COOKIE] || (req.body && req.body.refreshToken);
 
   if (!refreshToken) {
@@ -400,6 +417,14 @@ async function handleRefresh(req, res) {
   if (!meta.familyId || await store.isFamilyRevoked(meta.familyId)) {
     res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
     return res.status(401).json({ error: 'Session has been revoked.', code: 'SESSION_REVOKED' });
+  }
+
+  // #1528 — absolute maximum lifetime, independent of rotation.
+  if (meta.sessionMaxAge && Math.floor(Date.now() / 1000) >= meta.sessionMaxAge) {
+    const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
+    await store.revokeFamily(meta.familyId, refreshTTL).catch(() => logger.debug('[AuthController] revokeFamily on max-lifetime expiry missed'));
+    res.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH });
+    return res.status(401).json({ error: 'Session has reached its maximum lifetime. Please log in again.', code: 'SESSION_EXPIRED' });
   }
 
   const jwt = require('jsonwebtoken');
@@ -705,6 +730,8 @@ module.exports = {
   // Re-exported from services/sessionStore so callers (e.g. userController)
   // can revoke sessions without optional chaining that silently no-ops.
   getStore,
+  // Alias kept for existing callers and tests that use the historical name.
+  _getTokenStore: getStore,
   revokeAllUserSessions,
   parseTTL,
   _resetStore,

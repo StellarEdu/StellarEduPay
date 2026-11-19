@@ -3,7 +3,8 @@ import Head from "next/head";
 import PaymentForm from "../../components/PaymentForm";
 import VerifyPayment from "../../components/VerifyPayment";
 import SseDegradedBanner from "../../components/SseDegradedBanner";
-import { usePaymentEvents } from "../../hooks/usePaymentEvents";
+import { usePublicHealthPolling } from "../../hooks/usePublicHealthPolling";
+import { apiUrl } from "../../config/apiBase";
 import { useTranslation } from "react-i18next";
 
 // #1344 — shareable, bookmarkable payment status URL. Pre-fills the student
@@ -12,7 +13,9 @@ export default function PayFeesForStudent() {
   const router = useRouter();
   const { t } = useTranslation();
   const { studentId } = router.query;
-  const { degraded, connectionStatus } = usePaymentEvents();
+  // Issue #1831 — public parents poll a small endpoint with back-off instead of
+  // holding an SSE connection open on a flaky mobile network.
+  const { degraded, connectionStatus } = usePublicHealthPolling({ url: apiUrl("/public-config") });
 
   return (
     <>

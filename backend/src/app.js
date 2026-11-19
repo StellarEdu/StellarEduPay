@@ -1,6 +1,8 @@
 'use strict';
 
 require('dotenv').config();
+// #1829: resolve <SECRET>_FILE references before tracing/config/any module reads env.
+require('./config/secrets').resolveFileSecrets();
 // #1636: OpenTelemetry must start before express/mongoose/ioredis are required
 // so auto-instrumentation can patch them. No-op unless OTEL_TRACING_ENABLED=true.
 require('./tracing').initTracing();

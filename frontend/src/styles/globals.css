@@ -29,7 +29,7 @@
   --card-bg:      #ffffff;
   --text:         #0f172a;
   --text-muted:   #64748b;
-  --text-subtle:  #94a3b8;
+  --text-subtle:  #5b6780;
   --border:       #e7e9f3;
   --border-strong:#d4d8ea;
 
@@ -99,7 +99,7 @@ html.dark {
   --card-bg:      #141a30;
   --text:         #f1f5f9;
   --text-muted:   #94a3b8;
-  --text-subtle:  #64748b;
+  --text-subtle:  #94a3b8;
   --border:       #25304d;
   --border-strong:#33415f;
   --primary:      #34d399;
@@ -152,7 +152,7 @@ html.dark {
     --card-bg:      #141a30;
     --text:         #f1f5f9;
     --text-muted:   #94a3b8;
-    --text-subtle:  #64748b;
+    --text-subtle:  #94a3b8;
     --border:       #25304d;
     --border-strong:#33415f;
 
@@ -195,7 +195,7 @@ html.light {
   --card-bg:      #ffffff;
   --text:         #0f172a;
   --text-muted:   #64748b;
-  --text-subtle:  #94a3b8;
+  --text-subtle:  #5b6780;
   --border:       #e7e9f3;
   --border-strong:#d4d8ea;
   --primary:      #0f172a;
@@ -1792,7 +1792,7 @@ html.light {
   --card-bg:      #ffffff;
   --text:         #101a15;
   --text-muted:   #566b60;
-  --text-subtle:  #8a988f;
+  --text-subtle:  #596a60;
   --border:       #e4eae4;
   --border-strong:#d2dcd2;
   --primary:      #101a15;
