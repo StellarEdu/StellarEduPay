@@ -29,7 +29,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/mystery-cli/stellaredupay-backend:placeholder
+          image: ghcr.io/stellaredu/stellaredupay-backend:placeholder
           imagePullPolicy: IfNotPresent
           command: ["node", "scripts/migrate.js"]
           securityContext:
@@ -69,7 +69,7 @@ spec:
               memory: "256Mi"
       containers:
         - name: backend
-          image: ghcr.io/mystery-cli/stellaredupay-backend:placeholder
+          image: ghcr.io/stellaredu/stellaredupay-backend:placeholder
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000

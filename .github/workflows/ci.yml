@@ -231,6 +231,17 @@ jobs:
           fi
           echo "All backend/src JS files passed node --check"
 
+  k8s-image-refs:
+    name: Kubernetes image references (#1927)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Check deploy/ image references match the canonical registry
+        run: node scripts/check-k8s-images.js
+
   dead-code-backend:
     name: Detect dead/orphan backend modules (knip)
     runs-on: ubuntu-latest

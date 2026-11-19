@@ -4,7 +4,7 @@
 # object-storage clients backup.sh needs, nor the scripts themselves (needed in
 # Kubernetes, where the repo is not mounted). Build from the repo root:
 #
-#   docker build -f deploy/backup/Dockerfile -t stellaredupay/backup-tools:<sha> .
+#   docker build -f deploy/backup/Dockerfile -t ghcr.io/stellaredu/stellaredupay-backup-tools:<sha> .
 FROM mongo:7
 
 RUN apt-get update \

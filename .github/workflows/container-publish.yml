@@ -23,8 +23,15 @@ jobs:
         include:
           - image: backend
             context: backend
+            dockerfile: backend/Dockerfile
           - image: frontend
             context: frontend
+            dockerfile: frontend/Dockerfile
+          # Backup tooling image (#1630, #1927). Its Dockerfile copies scripts/
+          # from the repo root, so the build context is the whole repository.
+          - image: backup-tools
+            context: .
+            dockerfile: deploy/backup/Dockerfile
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -55,7 +62,8 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: ./${{ matrix.context }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.img.outputs.name }}:sha-${{ github.sha }}
           provenance: true
