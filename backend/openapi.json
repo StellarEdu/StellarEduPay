@@ -2468,96 +2468,6 @@
         }
       }
     },
-    "/api/auth/mfa/backup-codes/regenerate": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "operationId": "postAuthMfaBackupCodesRegenerate",
-        "summary": "POST /api/auth/mfa/backup-codes/regenerate",
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "x-auth": "admin",
-        "x-source": "backend/src/routes/authRoutes.js",
-        "responses": {
-          "201": {
-            "description": "Successful response."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/api/auth/mfa/disable": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "operationId": "postAuthMfaDisable",
-        "summary": "POST /api/auth/mfa/disable",
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "x-auth": "admin",
-        "x-source": "backend/src/routes/authRoutes.js",
-        "responses": {
-          "201": {
-            "description": "Successful response."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/api/auth/mfa/setup": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "operationId": "postAuthMfaSetup",
-        "summary": "POST /api/auth/mfa/setup",
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "x-auth": "admin",
-        "x-source": "backend/src/routes/authRoutes.js",
-        "responses": {
-          "201": {
-            "description": "Successful response."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/api/auth/mfa/user/disable": {
       "post": {
         "tags": [
@@ -2631,36 +2541,6 @@
           }
         ],
         "x-auth": "school",
-        "x-source": "backend/src/routes/authRoutes.js",
-        "responses": {
-          "201": {
-            "description": "Successful response."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/api/auth/mfa/verify": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "operationId": "postAuthMfaVerify",
-        "summary": "POST /api/auth/mfa/verify",
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "x-auth": "admin",
         "x-source": "backend/src/routes/authRoutes.js",
         "responses": {
           "201": {

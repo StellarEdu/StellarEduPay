@@ -75,13 +75,9 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/auth/login` | public |  |
 | `POST` | `/api/auth/logout` | public |  |
 | `GET` | `/api/auth/me` | admin |  |
-| `POST` | `/api/auth/mfa/backup-codes/regenerate` | admin |  |
-| `POST` | `/api/auth/mfa/disable` | admin |  |
-| `POST` | `/api/auth/mfa/setup` | admin |  |
 | `POST` | `/api/auth/mfa/user/disable` | school |  |
 | `POST` | `/api/auth/mfa/user/setup` | school |  |
 | `POST` | `/api/auth/mfa/user/verify` | school |  |
-| `POST` | `/api/auth/mfa/verify` | admin |  |
 | `POST` | `/api/auth/refresh` | public |  |
 | `GET` | `/api/auth/sessions` | admin |  |
 | `DELETE` | `/api/auth/sessions/{sessionId}` | admin |  |

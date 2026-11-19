@@ -243,21 +243,6 @@ const schoolSchema = new mongoose.Schema(
       enum: ['en', 'fr', 'es', 'pt', 'tpi', 'ha'],
     },
     /**
-     * MFA (TOTP) protection for school admin operations.
-     * mfaSecret is AES-256-GCM encrypted; key is derived from JWT_SECRET.
-     * mfaBackupCodes holds SHA-256 hashes — each code is single-use.
-     *
-     * DEPRECATION NOTICE (issue #1553):
-     * mfaSecret / mfaBackupCodes on the School document represent a shared
-     * second factor distributed to every admin of the school — a known-bad
-     * security pattern. They are retained here only for a transition window.
-     * New deployments should use per-user MFA (User.mfaSecret) enforced via
-     * the requireMfa policy flag below.  The mfaSecret / mfaBackupCodes fields
-     * will be removed in a future migration once all schools have migrated.
-     */
-    mfaEnabled: { type: Boolean, default: false },
-    mfaSecret: { type: String, default: null },
-    /**
      * MFA policy flag (issue #1553).
      *
      * When requireMfa: true, every DB user belonging to this school MUST have
@@ -314,12 +299,6 @@ const schoolSchema = new mongoose.Schema(
       type: [String],
       default: ['JSS1', 'JSS2', 'JSS3', 'SS1', 'SS2', 'SS3'],
     },
-    mfaBackupCodes: [
-      {
-        hash: { type: String, required: true },
-        used: { type: Boolean, default: false },
-      },
-    ],
   },
   { timestamps: true }
 );
@@ -333,6 +312,8 @@ schoolSchema.set('toJSON', {
   transform: (doc, ret) => {
     delete ret.jwtSecret;
     delete ret.internalNotes;
+    // #1946 — school-level MFA secrets were removed; these deletes stay so any
+    // legacy values still present before migration 037 runs are never serialised.
     delete ret.mfaSecret;
     delete ret.mfaBackupCodes;
     return ret;

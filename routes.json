@@ -289,21 +289,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/auth/mfa/backup-codes/regenerate",
-      "middleware": []
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/mfa/disable",
-      "middleware": []
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/mfa/setup",
-      "middleware": []
-    },
-    {
-      "method": "POST",
       "path": "/api/auth/mfa/user/disable",
       "middleware": []
     },
@@ -315,11 +300,6 @@
     {
       "method": "POST",
       "path": "/api/auth/mfa/user/verify",
-      "middleware": []
-    },
-    {
-      "method": "POST",
-      "path": "/api/auth/mfa/verify",
       "middleware": []
     },
     {

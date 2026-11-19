@@ -4,10 +4,9 @@ const express = require('express');
 const { rl } = require('../middleware/rateLimiter');
 const { handleLogin, handleRefresh, handleLogout, handleMe, handleListSessions, handleRevokeSession, handleChangePassword } = require('../controllers/authController');
 const {
-  setupMfa, verifyAndEnableMfa, disableMfa, regenerateBackupCodes,
   setupUserMfa, verifyAndEnableUserMfa, disableUserMfa,
 } = require('../controllers/mfaController');
-const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
+const { requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 
 const router = express.Router();
@@ -43,13 +42,10 @@ router.get('/sessions', requireSchoolAuth(), handleListSessions);
 // #1554 — session revocation changes auth state; attribute the actor.
 router.delete('/sessions/:sessionId', requireSchoolAuth(), auditContext, handleRevokeSession);
 
-// ── School-level TOTP / MFA routes (require super-admin auth) ────────────────
-// #1554 — all MFA mutations (setup/verify/disable/backup) affect authentication
-// state and must appear in the audit trail with the acting admin's identity.
-router.post('/mfa/setup',   requireAdminAuth, auditContext, setupMfa);
-router.post('/mfa/verify',  requireAdminAuth, auditContext, verifyAndEnableMfa);
-router.post('/mfa/disable', requireAdminAuth, auditContext, disableMfa);
-router.post('/mfa/backup-codes/regenerate', requireAdminAuth, auditContext, regenerateBackupCodes);
+// #1946 — The school-level MFA endpoints (/mfa/setup, /mfa/verify,
+// /mfa/disable, /mfa/backup-codes/regenerate) were removed. They managed a
+// shared per-school TOTP secret and authenticated backup-code regeneration with
+// one process-wide password. Per-user MFA below is the only supported path.
 
 // ── User-level TOTP / MFA routes (any authenticated user) ────────────────────
 router.post('/mfa/user/setup',   requireSchoolAuth(), auditContext, setupUserMfa);
