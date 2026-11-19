@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a maintainer re-run CI on main from the Actions tab, for example after
+  # changing branch protection or approving a fork PR (#1922).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,9 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Same Node as .nvmrc, the engines field and the Docker images (Node 24).
+      # Node 20 cannot run the backend (#1924).
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
 
       - name: Syntax check every tracked .js file
         run: |
@@ -45,11 +52,19 @@ jobs:
           fi
           echo "No truncated-file placeholders found"
 
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --ignore-scripts
+
       - name: Boot backend app with dummy env (no DB)
+        working-directory: backend
         env:
           NODE_ENV: test
-        run: |
-          node -e "require('./backend/src/app')"
+          # config/index.js refuses to load without these (Joi validation).
+          JWT_SECRET: ci-only-${{ github.run_id }}-0123456789abcdef0123456789
+          RECEIPT_SIGNATURE_SECRET: ci-only-receipt-0123456789abcdef0123456789
+          MONGO_URI: mongodb://127.0.0.1:1/ci
+        run: node -e "require('./src/app'); console.log('boot ok'); process.exit(0)"
 
   audit:
     name: Dependency security audit
@@ -121,36 +136,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: node scripts/check-error-response-shape.js
 
+  error-catalog:
+    name: Shared error-code catalog covers backend codes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: node scripts/check-error-catalog.js
+
   k8s-ingress-tls:
     name: Verify Kubernetes ingress has TLS configuration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Check ingress TLS block exists
-        run: |
-          set -euo pipefail
-          fail=0
-          while IFS= read -r file; do
-            if ! node --check "$file"; then
-              echo "::error file=$file::node --check failed"
-              fail=1
-            fi
-          done < <(git ls-files '*.js')
-          exit "$fail"
-
-      - name: Fail on truncated-file placeholders
-        run: |
-          if git grep -n -E "truncated [0-9]+ chars"; then
-            echo "::error::Found truncated-file placeholder markers in tracked files"
-            exit 1
-          fi
-          echo "No truncated-file placeholders found"
-
-      - name: Boot backend app with dummy env (no DB)
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+      # js-yaml is installed outside the repo so this job does not need the
+      # backend lockfile. The version is pinned.
+      - name: Install js-yaml (pinned, outside the repo)
+        run: npm install --prefix "$RUNNER_TEMP/yaml-tools" --no-save --no-package-lock --ignore-scripts js-yaml@4.1.0
+      - name: Check every Ingress has TLS covering each rule host
         env:
-          NODE_ENV: test
-        run: |
-          node -e "require('./backend/src/app')"
+          NODE_PATH: ${{ runner.temp }}/yaml-tools/node_modules
+        run: node scripts/check-ingress-tls.js
 
   lockfile-sync:
     name: Lockfile sync
@@ -170,6 +178,22 @@ jobs:
         run: cd backend && npm ci --ignore-scripts
       - name: Run ESLint (backend)
         run: cd backend && npx eslint src/ --max-warnings=0
+      # Fail when backend code requires a package that backend/package.json does
+      # not declare. Hoisting from the root package.json used to hide these
+      # (issue #1928). Unused-dependency reports are informational only.
+      - name: Check for undeclared backend dependencies (depcheck)
+        run: |
+          cd backend
+          npx depcheck --json > depcheck-report.json || true
+          node -e "
+            const report = require('./depcheck-report.json');
+            const missing = Object.keys(report.missing || {});
+            if (missing.length > 0) {
+              console.error('Undeclared backend dependencies: ' + missing.join(', '));
+              process.exit(1);
+            }
+            console.log('No undeclared backend dependencies.');
+          "
       - name: Verify root package-lock.json is in sync
         run: npm ci --dry-run
       - name: Verify frontend package-lock.json is in sync
@@ -230,6 +254,17 @@ jobs:
             exit 1
           fi
           echo "All backend/src JS files passed node --check"
+
+  k8s-image-refs:
+    name: Kubernetes image references (#1927)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Check deploy/ image references match the canonical registry
+        run: node scripts/check-k8s-images.js
 
   dead-code-backend:
     name: Detect dead/orphan backend modules (knip)
@@ -442,7 +477,7 @@ jobs:
         run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
       - name: Comment coverage on PR
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: coverage-ratchet
           path: coverage/ratchet.md
@@ -509,7 +544,7 @@ jobs:
         run: node scripts/coverage-ratchet.js --base origin/${{ github.base_ref || 'main' }} --markdown coverage/ratchet.md
       - name: Comment coverage on PR
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: coverage-ratchet
           path: coverage/ratchet.md
@@ -530,7 +565,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: '.nvmrc'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

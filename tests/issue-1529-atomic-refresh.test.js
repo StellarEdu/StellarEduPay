@@ -25,7 +25,9 @@ jest.mock('jsonwebtoken', () => ({
   },
 }));
 
-const { handleRefresh } = require('../backend/src/controllers/authController');
+// Loaded in beforeEach, after the Redis client mock is in place, so the token
+// store binds to the mocked client rather than the real one.
+let handleRefresh;
 
 function mockRes() {
   const res = {};
@@ -66,6 +68,10 @@ describe('Issue #1529: Atomic refresh token rotation and concurrent handling', (
       getRedisClient: jest.fn(() => redisClientMock),
       isRedisReady: jest.fn(() => true),
     }));
+
+    jest.isolateModules(() => {
+      ({ handleRefresh } = require('../backend/src/controllers/authController'));
+    });
   });
 
   describe('Single refresh request', () => {

@@ -37,6 +37,25 @@ MIN_SEED_DOCUMENTS="${MIN_SEED_DOCUMENTS:-100}"
 cleanup() { rm -rf "${TEST_BACKUP_DIR}"; }
 trap cleanup EXIT
 
+# Fail fast with a clear message when a required tool is missing (issue #1926),
+# instead of failing halfway through the seed/backup/restore cycle.
+require_tools() {
+  local missing=() tool
+  for tool in node mongosh mongodump mongorestore; do
+    command -v "${tool}" >/dev/null 2>&1 || missing+=("${tool}")
+  done
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "❌  Missing required tool(s): ${missing[*]}" >&2
+    echo "    Install MongoDB Database Tools (mongodump/mongorestore), mongosh and Node.js." >&2
+    exit 2
+  fi
+  if [[ ! -f "$(dirname "$0")/seed-test-data.js" ]]; then
+    echo "❌  seed-test-data.js not found next to this script" >&2
+    exit 2
+  fi
+}
+require_tools
+
 # Total document count across every collection in the database.
 count_documents() {
   mongosh --quiet --eval \
@@ -89,12 +108,10 @@ echo "=== [0/4] Seeding realistic fixture and asserting document counts ==="
 # Seed via the shared fixture script so the dump is large enough to clear
 # backup.sh's MIN_BACKUP_SIZE floor (issue #1734). The seed script must target
 # the same database/URI we back up below.
-if [[ -f "$(dirname "$0")/seed-test-data.js" ]]; then
-  MONGO_URI="${MONGO_URI}" DB_NAME="${DB_NAME}" \
-    mongosh --quiet "${MONGO_URI}" "$(dirname "$0")/seed-test-data.js" >/dev/null
-else
-  echo "    WARNING: seed-test-data.js not found — relying on pre-seeded data" >&2
-fi
+# The seed is a Node script (it uses mongoose + the backend models), so it must
+# run under node, not mongosh. Requires SCHOOL_WALLET_ADDRESS (a G... key).
+MONGO_URI="${MONGO_URI}" DB_NAME="${DB_NAME}" \
+  node "$(dirname "$0")/seed-test-data.js"
 
 SEED_COUNT="$(count_documents)"
 echo "    Seeded documents: ${SEED_COUNT} (minimum ${MIN_SEED_DOCUMENTS})"

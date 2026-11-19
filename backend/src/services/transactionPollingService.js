@@ -537,23 +537,6 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
 }
 
 /**
- * Gather the per-school signals that drive priority ordering (#1124).
- *
- * Deliberately ONE aggregate query for all schools rather than a query per
- * school: this runs every cycle, and a per-tenant query would reintroduce the
- * very linear-scaling problem we're fixing — just against MongoDB instead of
- * Horizon.
- *
- * Signals are best-effort. If the query fails, every school scores 0 from this
- * source and ordering falls back to aging alone, which is still correct — just
- * less well-informed. Polling must never stop because prioritisation couldn't
- * be computed.
- *
- * @param {Array<object>} schools
- * @param {HorizonPollBudget} budget
- * @returns {Promise<Map<string, object>>} schoolId → signals
- */
-/**
  * Poll a school's current wallet, then each retired wallet still inside its
  * drain window, one after another (#1799). A failure on a retired address is
  * logged and does not stop the current address's result.
@@ -574,6 +557,23 @@ async function pollSchoolWithDrainingAddresses(school, budget = null) {
   return result;
 }
 
+/**
+ * Gather the per-school signals that drive priority ordering (#1124).
+ *
+ * Deliberately ONE aggregate query for all schools rather than a query per
+ * school: this runs every cycle, and a per-tenant query would reintroduce the
+ * very linear-scaling problem we're fixing — just against MongoDB instead of
+ * Horizon.
+ *
+ * Signals are best-effort. If the query fails, every school scores 0 from this
+ * source and ordering falls back to aging alone, which is still correct — just
+ * less well-informed. Polling must never stop because prioritisation couldn't
+ * be computed.
+ *
+ * @param {Array<object>} schools
+ * @param {HorizonPollBudget} budget
+ * @returns {Promise<Map<string, object>>} schoolId → signals
+ */
 async function gatherSchoolSignals(schools, budget) {
   const signals = new Map();
 
@@ -882,4 +882,21 @@ module.exports = {
   pollAllSchools,
   pollSchoolTransactions,
   pollSchoolWithDrainingAddresses,
-  process
+  processTransaction,
+  isBeforeIngestStart,
+  // Exposed for testing
+  _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),
+  getHorizonUnreachableSince: () => horizonUnreachableSince,
+  _getBudgetStats: () => pollBudget.getStats(),
+  _setPollBudget: (budget) => { pollBudget = budget; },
+  _runWithConcurrency: runWithConcurrency,
+  _gatherSchoolSignals: gatherSchoolSignals,
+  _resetBackoffState: () => {
+    consecutiveErrors = 0;
+    currentIntervalMs = SYNC_INTERVAL_MS;
+    horizonUnreachableSince = null;
+    pollBudget = new HorizonPollBudget({ intervalMs: SYNC_INTERVAL_MS });
+    isPolling = true; // allow direct pollAllSchools() calls in tests
+    if (pollingInterval) { clearTimeout(pollingInterval); pollingInterval = null; }
+  },
+};

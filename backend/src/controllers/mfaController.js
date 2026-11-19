@@ -582,7 +582,8 @@ async function verifyAndEnableUserMfa(req, res) {
     // metadata and re-mints a restricted access token on every silent refresh even
     // after enrolment is complete, keeping the user in the /mfa-setup loop.
     if (req.user?.mfaSetupPending) {
-      const { parseTTL, getStore, issueRefreshToken } = require('./authController');
+      const { getStore, issueRefreshToken } = require('./authController');
+      const { parseTTL } = require('../utils/ttl');
       const { role, userId: uid, schoolId, roles, tokenVersion } = req.user;
 
       const accessTTL  = parseTTL('JWT_ACCESS_TOKEN_TTL',  8 * 3600);

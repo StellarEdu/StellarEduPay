@@ -50,6 +50,8 @@ export default function StudentForm({ student, onClose, onSave }) {
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
       setFieldErrors(validationErrors);
+      const firstInvalid = Object.keys(validationErrors)[0];
+      document.getElementById(`sf-${firstInvalid === "parentEmail" ? "parent-email" : firstInvalid}`)?.focus();
       return;
     }
     setFieldErrors({});
@@ -113,7 +115,7 @@ export default function StudentForm({ student, onClose, onSave }) {
         <h2 style={{ marginTop: 0, marginBottom: "1.5rem" }}>{t("studentForm.editTitle")}</h2>
 
         {error && (
-          <div style={{
+          <div role="alert" style={{
             background: "#fee2e2",
             border: "1px solid #fecaca",
             borderRadius: "6px",
@@ -127,7 +129,7 @@ export default function StudentForm({ student, onClose, onSave }) {
         )}
 
         {success && (
-          <div style={{
+          <div role="status" style={{
             background: "#dcfce7",
             border: "1px solid #bbf7d0",
             borderRadius: "6px",
@@ -142,7 +144,7 @@ export default function StudentForm({ student, onClose, onSave }) {
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-student-id" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -152,6 +154,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.studentId")}
             </label>
             <input
+              id="sf-student-id"
               type="text"
               value={student.studentId}
               disabled
@@ -169,7 +172,7 @@ export default function StudentForm({ student, onClose, onSave }) {
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-name" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -179,11 +182,13 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.name")}
             </label>
             <input
+              id="sf-name"
               type="text"
               name="name"
               value={formData.name}
               onChange={handleChange}
               aria-invalid={!!fieldErrors.name}
+              aria-describedby={fieldErrors.name ? "sf-name-error" : undefined}
               style={{
                 width: "100%",
                 padding: "0.75rem",
@@ -195,21 +200,22 @@ export default function StudentForm({ student, onClose, onSave }) {
               }}
             />
             {fieldErrors.name && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
+              <span id="sf-name-error" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.name}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-class" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
               marginBottom: "0.5rem",
               color: "var(--text)",
             }}>
-               {t("studentForm.className")}
+              {t("studentForm.className")}
             </label>
             <input
+              id="sf-class"
               type="text"
               name="class"
               value={formData.class}
@@ -227,7 +233,7 @@ export default function StudentForm({ student, onClose, onSave }) {
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-parent-email" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -237,11 +243,13 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.parentEmail")}
             </label>
             <input
+              id="sf-parent-email"
               type="email"
               name="parentEmail"
               value={formData.parentEmail}
               onChange={handleChange}
               aria-invalid={!!fieldErrors.parentEmail}
+              aria-describedby={fieldErrors.parentEmail ? "sf-parent-email-error" : undefined}
               style={{
                 width: "100%",
                 padding: "0.75rem",
@@ -253,12 +261,12 @@ export default function StudentForm({ student, onClose, onSave }) {
               }}
             />
             {fieldErrors.parentEmail && (
-              <span role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
+              <span id="sf-parent-email-error" role="alert" style={{ color: "#dc2626", fontSize: "0.78rem" }}>{fieldErrors.parentEmail}</span>
             )}
           </div>
 
           <div style={{ marginBottom: "1.25rem" }}>
-            <label style={{
+            <label htmlFor="sf-parent-phone" style={{
               display: "block",
               fontSize: "0.875rem",
               fontWeight: 600,
@@ -268,6 +276,7 @@ export default function StudentForm({ student, onClose, onSave }) {
               {t("studentForm.parentPhone")}
             </label>
             <input
+              id="sf-parent-phone"
               type="tel"
               name="parentPhone"
               value={formData.parentPhone}

@@ -10,7 +10,7 @@
 #                         against the restore. A failed Job is the alert signal
 #                         (kube_job_status_failed).
 #
-# Image: stellaredupay/backup-tools is built from deploy/backup/Dockerfile; pin
+# Image: ghcr.io/stellaredu/stellaredupay-backup-tools is built from deploy/backup/Dockerfile; pin
 # its tag in each overlay alongside the backend/frontend images.
 #
 # Required Secrets (create out-of-band, e.g. with scripts/provision-k8s-secrets.sh):
@@ -65,7 +65,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: backup
-              image: stellaredupay/backup-tools:placeholder
+              image: ghcr.io/stellaredu/stellaredupay-backup-tools:placeholder
               imagePullPolicy: IfNotPresent
               command: ["bash", "/scripts/backup.sh"]
               securityContext:
@@ -180,7 +180,7 @@ spec:
             # Download newest off-site archive → decrypt → restore (with oplog
             # replay) into the scratch mongod.
             - name: restore
-              image: stellaredupay/backup-tools:placeholder
+              image: ghcr.io/stellaredu/stellaredupay-backup-tools:placeholder
               imagePullPolicy: IfNotPresent
               command: ["bash", "/scripts/verify-latest-backup.sh"]
               securityContext:
@@ -229,7 +229,7 @@ spec:
             # Cross-collection invariants on the restored data (balances vs
             # payments) — catches restores that are internally inconsistent.
             - name: consistency-check
-              image: stellaredupay/backend:placeholder
+              image: ghcr.io/stellaredu/stellaredupay-backend:placeholder
               imagePullPolicy: IfNotPresent
               command: ["node", "scripts/verify-restored-db.js"]
               securityContext:

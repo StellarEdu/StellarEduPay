@@ -544,6 +544,20 @@ Your PR must meet these criteria before merging:
 - [ ] **Follows conventions** - Branch naming, commit messages, code style
 - [ ] **No sensitive data** - No secrets, API keys, or PII in code
 
+#### Required CI checks
+
+The `CI` workflow (`.github/workflows/ci.yml`) must pass on every pull request before merge. These jobs are required status checks on `main`:
+
+- `smoke` — every tracked `.js` file parses, no truncation placeholders, and the backend boots
+- `syntax-check` — `node --check` over `backend/src`
+- `test` — backend and frontend test suites with the coverage ratchet
+- `lint-frontend` — `next lint`
+- `build-frontend` — `next build`
+- `migrations` — migration numbering
+- `route-contract` — generated route manifest and frontend API contract
+
+Pull requests from forks wait for a maintainer to click **Approve and run** before their CI starts. To re-run CI on `main` (for example after changing branch protection), use **Actions → CI → Run workflow**.
+
 ### Documentation Rules
 
 - **PR descriptions belong in the PR, not in `docs/`.** Do not commit

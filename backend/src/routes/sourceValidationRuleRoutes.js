@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const { createRule, getRules, deleteRule } = require('../controllers/sourceValidationRuleController');
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 const { resolveSchool } = require('../middleware/schoolContext');
 const { auditContext } = require('../middleware/auditContext');
 

@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { getAuditLogsEndpoint, getRecentAuditLogsEndpoint, verifyChainEndpoint, exportAuditLogsEndpoint } = require('../controllers/auditController');
 const { resolveSchool } = require('../middleware/schoolContext');
-const { requireAdminAuth } = require('../middleware/auth');
+const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
 
 router.use(resolveSchool);
 router.use(requireSchoolAuth(['owner', 'staff', 'read_only']));
