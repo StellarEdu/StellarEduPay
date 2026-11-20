@@ -38,6 +38,8 @@ const REQUEST_LOG_REDACT_FIELDS = [
   'parentPhone',
   'email',
   'phone',
+  // Issue #2015 — raw request bodies must never reach the logs.
+  'rawBody',
 ];
 
 /**

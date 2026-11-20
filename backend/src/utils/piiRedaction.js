@@ -22,6 +22,8 @@ const PII_FIELDS = new Set([
   'memo',
   'senderAddress',
   'walletAddress',
+  // Issue #2015 — raw request bodies are never logged.
+  'rawBody',
 ]);
 
 /**
