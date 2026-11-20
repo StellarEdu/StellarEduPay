@@ -430,9 +430,23 @@ async function detectMemoCollision(
   expectedFee,
   txDate,
   schoolId,
+  multiSenderPolicy,
 ) {
   const COLLISION_WINDOW_MS = 24 * 60 * 60 * 1000;
   const windowStart = new Date(txDate.getTime() - COLLISION_WINDOW_MS);
+
+  // #1980 — a second payer for the same student (two guardians, a sponsor, a
+  // relative) is normal, so a different sender is only a risk factor. The
+  // school's multi-sender policy decides what to do with it:
+  //   'ignore' — never flag (no query needed)
+  //   'flag'   — flag for review, still credit (default)
+  //   'hold'   — flag and hold the payment (legacy behaviour)
+  const policy = MULTI_SENDER_POLICIES.includes(multiSenderPolicy)
+    ? multiSenderPolicy
+    : DEFAULT_MULTI_SENDER_POLICY;
+  if (policy === 'ignore') {
+    return { suspicious: false, reason: null, policy, riskFactor: false };
+  }
 
   const recentFromOtherSender = await Payment.findOne({
     schoolId,
@@ -446,7 +460,9 @@ async function detectMemoCollision(
 
   if (recentFromOtherSender) {
     return {
-      suspicious: true,
+      suspicious: policy === 'hold',
+      riskFactor: true,
+      policy,
       reason:
         'Memo "' +
         memo +
@@ -456,7 +472,7 @@ async function detectMemoCollision(
     };
   }
 
-  return { suspicious: false, reason: null };
+  return { suspicious: false, reason: null, policy, riskFactor: false };
 }
 
 /**
