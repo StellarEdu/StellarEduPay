@@ -18,16 +18,16 @@ const logger = require('../utils/logger');
  *
  * @param {string|mongoose.Types.ObjectId} schoolId
  * @param {string} memo
- * @returns {Promise<{student: object|null, intent: object|null, studentDeleted: boolean}>}
+ * @returns {Promise<{student: object|null, intent: object|null, lateIntent: boolean, studentDeleted: boolean}>}
  */
 async function resolveReference(schoolId, memo) {
   if (!memo) {
-    return { student: null, intent: null, studentDeleted: false };
+    return { student: null, intent: null, lateIntent: false, studentDeleted: false };
   }
 
   const normalizedMemo = String(memo).trim();
   if (!normalizedMemo) {
-    return { student: null, intent: null, studentDeleted: false };
+    return { student: null, intent: null, lateIntent: false, studentDeleted: false };
   }
 
   // 1. Pending intent
@@ -37,7 +37,9 @@ async function resolveReference(schoolId, memo) {
     status: 'pending',
   });
 
-  // 2. Any intent
+  // 2. Any intent — a payment can land after the intent expired (#1977). The
+  // memo is still the intent's code, so credit the intent's student and flag
+  // the payment as late instead of treating the 8-hex memo as a student ID.
   if (!intent) {
     intent = await PaymentIntent.findOne({
       schoolId,
@@ -45,13 +47,15 @@ async function resolveReference(schoolId, memo) {
     });
   }
 
+  const lateIntent = Boolean(intent && intent.status === 'expired');
+
   if (intent && intent.studentId) {
     const student = await Student.findOne({
       schoolId,
       studentId: intent.studentId,
     });
     if (student) {
-      return { student, intent, studentDeleted: !!student.studentDeleted };
+      return { student, intent, lateIntent, studentDeleted: !!student.studentDeleted };
     }
   }
 
@@ -62,7 +66,7 @@ async function resolveReference(schoolId, memo) {
     studentDeleted: { $ne: true },
   });
   if (student) {
-    return { student, intent: intent || null, studentDeleted: false };
+    return { student, intent: intent || null, lateIntent, studentDeleted: false };
   }
 
   // 4. Soft-deleted student
@@ -72,10 +76,10 @@ async function resolveReference(schoolId, memo) {
     studentDeleted: true,
   });
   if (student) {
-    return { student, intent: intent || null, studentDeleted: true };
+    return { student, intent: intent || null, lateIntent, studentDeleted: true };
   }
 
-  return { student: null, intent: intent || null, studentDeleted: false };
+  return { student: null, intent: intent || null, lateIntent, studentDeleted: false };
 }
 
 /**

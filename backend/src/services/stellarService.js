@@ -477,42 +477,45 @@ async function detectMemoCollision(
 }
 
 /**
- * Detect memo collision across schools: the same memo (student ID) was
- * recorded as a confirmed payment for a *different* school within the last
- * 24 hours. Memos are only unique within a school's own student roster
- * (`Student.studentId` is school-scoped), so two unrelated schools can
- * legitimately assign the same ID to different students — but a payment
- * landing under that ID at two schools in a short window is worth flagging
- * for manual review rather than silently trusting both.
+ * Detect memo collision across schools (#1979).
  *
- * Deliberately independent of `detectMemoCollision` (which is single-school,
- * sender-based) — this is the cross-school signal the original function
- * explicitly does not cover.
+ * Memos are only unique within a school's own roster (`Student.studentId` is
+ * school-scoped), so two unrelated schools legitimately assign the same ID to
+ * different students. Sharing a student ID across schools is therefore NOT a
+ * signal and must never flag a payment.
+ *
+ * The only remaining signal is a *same-sender* one: the same sender address
+ * paid the same memo at a different school within 24h. That is returned as a
+ * non-excluding hint (`suspicious: false`) so callers never fail or hold the
+ * payment on it. The hint deliberately carries no other tenant's schoolId —
+ * only a boolean — so no cross-tenant identifier can leak into this tenant's
+ * payment record.
  */
-async function detectCrossSchoolMemoCollision(memo, schoolId, txDate) {
+async function detectCrossSchoolMemoCollision(memo, schoolId, txDate, senderAddress) {
   const COLLISION_WINDOW_MS = 24 * 60 * 60 * 1000;
   const windowStart = new Date(txDate.getTime() - COLLISION_WINDOW_MS);
+
+  if (!senderAddress) {
+    return { suspicious: false, reason: null, hint: null };
+  }
 
   const recentFromOtherSchool = await Payment.findOne({
     schoolId: { $ne: schoolId },
     studentId: memo,
+    senderAddress,
     confirmedAt: { $gte: windowStart },
     deletedAt: null,
   });
 
   if (recentFromOtherSchool) {
     return {
-      suspicious: true,
-      reason:
-        'Memo "' +
-        memo +
-        '" was also used for a payment to a different school (' +
-        recentFromOtherSchool.schoolId +
-        ") within the last 24 hours",
+      suspicious: false,
+      reason: null,
+      hint: 'same_sender_cross_school_memo',
     };
   }
 
-  return { suspicious: false, reason: null };
+  return { suspicious: false, reason: null, hint: null };
 }
 
 /**
@@ -1037,14 +1040,16 @@ async function recordIncomingTransaction(tx, school, { source = "unknown" } = {}
     txDate,
     schoolId,
   );
+  // #1979 — cross-school memo reuse is a non-excluding hint only; it never
+  // marks the payment suspicious and never contributes a reason string.
   const crossSchoolCollision = await detectCrossSchoolMemoCollision(
     memo,
     schoolId,
     txDate,
+    senderAddress,
   );
-  const isSuspicious = collision.suspicious || crossSchoolCollision.suspicious;
-  const suspicionReason =
-    [collision.reason, crossSchoolCollision.reason].filter(Boolean).join("; ") || null;
+  const isSuspicious = collision.suspicious;
+  const suspicionReason = collision.reason || null;
 
   const confirmation = await determineConfirmationState(
     txLedger,
@@ -1174,6 +1179,7 @@ async function recordIncomingTransaction(tx, school, { source = "unknown" } = {}
     confirmationStatus,
     confirmationState: confirmation.state,
     intentMatched: Boolean(intent),
+    crossSchoolMemoHint: crossSchoolCollision.hint || null,
   });
 
   return {
