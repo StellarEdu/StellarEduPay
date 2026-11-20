@@ -48,7 +48,19 @@ data:
   # ── Public base URL ───────────────────────────────────────────────────────
   # Required in production. Used for unsubscribe links and emails.
   # Must be overridden in your overlay or via a patch.
-  APP_URL: "https://YOUR_DOMAIN_HERE"
+  APP_URL: "https://stellaredupay.example.com"
+---
+# Single source of truth for the public Ingress host (issue #2005).
+# Kustomize `replacements` (see kustomization.yaml) copy INGRESS_HOST into both
+# spec.tls[0].hosts and spec.rules[0].host of the Ingress, so the TLS
+# certificate and the routing rule can never disagree. Override this value in
+# an overlay to deploy a different domain.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stellaredupay-ingress-host
+data:
+  INGRESS_HOST: "stellaredupay.example.com"
 ---
 # Redis server configuration, mounted at /usr/local/etc/redis/redis.conf and
 # passed to `redis-server` as its config file.
