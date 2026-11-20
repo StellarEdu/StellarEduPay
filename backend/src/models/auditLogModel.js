@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const tenantScope = require('../plugins/tenantScope');
+const { AUDIT_TARGET_TYPES } = require('../constants/auditTargetTypes');
 
 // Issue #885: Audit records are never deleted — archived only.
 // Hash chain: each entry stores the SHA-256 HMAC of its own content and a
@@ -14,7 +15,7 @@ const auditLogSchema = new mongoose.Schema(
     targetId:     { type: String, required: true, index: true },
     targetType:   {
       type: String,
-      enum: ['student', 'payment', 'fee', 'school', 'user', 'webhook', 'academicPeriod', 'auth'],
+      enum: AUDIT_TARGET_TYPES,
       required: true,
       index: true,
     },
