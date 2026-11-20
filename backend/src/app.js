@@ -236,6 +236,15 @@ const concurrentMiddleware = createConcurrentRequestMiddleware({
   rateLimit: { windowMs: 60000, maxRequests: 100 },
   deduplicationTtlMs: 60000,
 });
+// ── Health probes (#2011) ─────────────────────────────────────────────────────
+// Mounted ahead of the rate limiter, the request queue and maintenanceMode so a
+// saturated pod still answers liveness (and is not killed) and readiness can
+// report not_ready (so it is taken out of rotation instead of restarted).
+// /health/live performs no I/O; /health and /health/ready do their own checks.
+app.get('/health', healthCheck);
+app.get('/health/live', healthLive);
+app.get('/health/ready', healthReady);
+
 // ── Metrics ───────────────────────────────────────────────────────────────────
 // Mounted before the rate-limiter so Prometheus scrapes are never throttled.
 app.use('/metrics', metricsRoute);
@@ -297,9 +306,6 @@ app.use('/api/parent', parentPortalRoutes);
 app.use('/api/public-config', publicConfigRoutes);
 app.use('/api/retry-queue', retryQueueRoutes);
 app.get('/api/consistency', requireAdminAuth, runConsistencyCheck);
-app.get('/health', healthCheck);
-app.get('/health/live', healthLive);
-app.get('/health/ready', healthReady);
 app.get('/api/version', versionInfo);
 
 // Issue #671: OpenAPI/Swagger documentation

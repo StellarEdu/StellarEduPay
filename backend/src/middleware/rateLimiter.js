@@ -110,9 +110,16 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
   const keyGenerator = opts.keyGenerator || ((req) => req.ip);
   const ttlSec = Math.ceil((windowMs * 2) / 1000) + 1;
   const name = opts.name || 'rl';
+  // Optional per-key limit (e.g. authenticated vs anonymous callers).
+  const maxForKey = opts.maxForKey || (() => max);
+  // When true (production, #2012) the limiter refuses to silently degrade to
+  // per-replica in-memory counters: it fails open and raises an admin alert.
+  const requireRedis = opts.requireRedis === true;
+  let redisAlerted = false;
 
   return async (req, res, next) => {
     const clientKey = keyGenerator(req) || 'unknown';
+    const limit = maxForKey(clientKey);
     const now = Date.now();
     const { bucket, weight, resetSeconds } = _bucketInfo(now, windowMs);
     const redis = getRedisClient();
@@ -159,6 +166,36 @@ function rl(windowMs, max, message = RL_MSG, opts = {}) {
     next();
   };
 }
+
+// ── Global limiter (#2012) ──────────────────────────────────────────────────
+//
+// The old global limiter keyed every request by IP with a flat 100/min, so a
+// whole school office behind one NAT address shared a single bucket and the
+// effective limit differed per replica. The global limiter now:
+//
+//  - keys authenticated requests by user ID with a generous limit, so many
+//    users behind one IP each get their own bucket;
+//  - keys anonymous requests by IP with a tighter limit;
+//  - requires Redis in production (see `requireRedis` below) and fails open
+//    with an admin alert when Redis is unavailable.
+const GLOBAL_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+const GLOBAL_AUTH_MAX = parseInt(process.env.RATE_LIMIT_AUTH_MAX_REQUESTS || '600', 10);
+const GLOBAL_ANON_MAX = parseInt(process.env.RATE_LIMIT_ANON_MAX_REQUESTS || '100', 10);
+
+function _globalKey(req) {
+  const user = req.user || req.admin;
+  const userId = user && (user.id || user._id || user.sub);
+  if (userId) return `user:${userId}`;
+  return `ip:${req.ip}`;
+}
+
+const globalLimiter = rl(GLOBAL_WINDOW_MS, GLOBAL_AUTH_MAX, RL_MSG, {
+  name: 'rl:global',
+  keyGenerator: _globalKey,
+  // Anonymous callers get the tighter per-route limit.
+  maxForKey: (key) => (key.startsWith('user:') ? GLOBAL_AUTH_MAX : GLOBAL_ANON_MAX),
+  requireRedis: process.env.NODE_ENV === 'production',
+});
 
 const generalLimiter       = rl(15 * 60 * 1000, 100, RL_MSG, { name: 'rl:general' });
 const strictLimiter        = rl(15 * 60 * 1000, 10, RL_MSG, { name: 'rl:strict' });
@@ -320,6 +357,7 @@ module.exports = {
   payLinkLookupLimiter,
   anchorIpLimiter,
   anchorSchoolLimiter,
+  globalLimiter,
   generalLimiter,
   strictLimiter,
   syncLimiter,

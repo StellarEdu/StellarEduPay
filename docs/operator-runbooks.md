@@ -50,6 +50,24 @@ A canary deployment routes a small percentage of traffic to a new backend image 
 
 **Readiness Probe:** The canary uses `/health/ready` (not `/health`) to ensure that database migrations complete before traffic is routed to the new pod. If migrations fail, the readiness probe fails, and the pod is not added to the load balancer.
 
+## High Availability And Node Topology
+
+The backend and frontend Deployments run 2 replicas and set `topologySpreadConstraints`:
+
+- `kubernetes.io/hostname` with `whenUnsatisfiable: DoNotSchedule` — the two replicas must land on different nodes.
+- `topology.kubernetes.io/zone` with `whenUnsatisfiable: ScheduleAnyway` — prefer spreading across zones when the cluster has them.
+
+**Production clusters must have at least 2 schedulable nodes.** On a single-node cluster the hostname constraint is unsatisfiable, so the second replica stays `Pending` and the rollout never completes. The backend PodDisruptionBudget only provides real HA when the replicas are on distinct nodes.
+
+Verify the spread after a rollout:
+
+```sh
+kubectl get pods -l app=backend -o wide
+kubectl get pods -l app=frontend -o wide
+```
+
+Each pod should report a different `NODE`. If a pod is `Pending` with a `FailedScheduling` event mentioning topology spread, add a node or lower `replicas`.
+
 ## General Incident Steps
 
 1. Open an incident record with time, environment, reporter, and affected tenants.

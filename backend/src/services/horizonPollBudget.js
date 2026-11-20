@@ -312,8 +312,16 @@ class HorizonPollBudget {
   }
 }
 
+/**
+ * Process-wide budget shared by every Horizon consumer (transaction poller,
+ * health probes). Kept here rather than in the poller so the health check can
+ * draw from the same allowance without a circular require (#2014).
+ */
+const sharedPollBudget = new HorizonPollBudget();
+
 module.exports = {
   HorizonPollBudget,
+  sharedPollBudget,
   computeCycleBudget,
   computeSchoolPriority,
   orderSchoolsByPriority,

@@ -20,6 +20,22 @@ spec:
       # add 10 s margin so tini can relay the signal and Node can flush.
       terminationGracePeriodSeconds: 45
       automountServiceAccountToken: false
+      # Spread replicas across nodes so a single node failure cannot take out
+      # every backend pod (the PDB only helps if pods are on distinct nodes).
+      # Production clusters must run at least 2 nodes for this to be effective.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
