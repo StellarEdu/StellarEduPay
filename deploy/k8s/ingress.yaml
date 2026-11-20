@@ -11,6 +11,31 @@ metadata:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     # Issue TLS certificate using cert-manager and Let's Encrypt
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Defence in depth for portal magic-link tokens (issue #1958).
+    #
+    # The parent portal link now carries its token in the URL *fragment*
+    # (`/parent#token=<jwt>`), and fragments are never sent to the server, so
+    # the token should not reach this ingress at all. The invitation flow
+    # (`/set-password#token=…`) already works this way.
+    #
+    # As a second line of defence, redact any `token=` query parameter from the
+    # access log. NGINX's default `$request` includes the query string, which
+    # would otherwise persist a leaked token in ingress/CDN/WAF logs. The
+    # `log-format` annotation replaces the whole log line, so it mirrors the
+    # default combined format but logs a sanitised request line.
+    #
+    # `$request` is rewritten by the `map` below: everything from `token=`
+    # onwards is replaced with `token=[REDACTED]`. The map is defined via the
+    # `server-snippet` so it is available to the log format.
+    nginx.ingress.kubernetes.io/server-snippet: |
+      map $request $stellaredupay_redacted_request {
+          default                     $request;
+          "~^(?<prefix>.*[?&]token=)[^&\s]*"  "${prefix}[REDACTED]";
+      }
+    nginx.ingress.kubernetes.io/log-format: >-
+      $remote_addr - $remote_user [$time_local] "$stellaredupay_redacted_request"
+      $status $body_bytes_sent "$http_referer" "$http_user_agent"
+=======
 spec:
   ingressClassName: nginx
   # TLS configuration — certificate termination at the Ingress

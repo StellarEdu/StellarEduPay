@@ -35,17 +35,35 @@ const parentAccessTokenSchema = new mongoose.Schema(
     createdBy:  { type: String, required: true }, // staff user id, or 'system'
     lastUsedAt: { type: Date, default: null },
     useCount:   { type: Number, default: 0 },
+
+    // Per-device binding (#1958). The magic link is exchanged once per device
+    // for a short-lived session; the device that redeemed it is recorded here
+    // so staff can list and revoke individual devices.
+    deviceId:    { type: String, default: null },
+    deviceLabel: { type: String, default: null, maxlength: 200 },
+    deviceFirstSeenAt: { type: Date, default: null },
+    deviceLastSeenAt:  { type: Date, default: null },
+    deviceRevokedAt:   { type: Date, default: null },
+    deviceRevokedBy:   { type: String, default: null },
+    deviceRevokeReason: { type: String, default: null, maxlength: 500 },
   },
   { timestamps: true }
 );
 
 parentAccessTokenSchema.index({ schoolId: 1, tokenId: 1 }, { unique: true });
 parentAccessTokenSchema.index({ schoolId: 1, studentIds: 1, revokedAt: 1 });
+// Device lookup and per-device revocation (#1958).
+parentAccessTokenSchema.index({ schoolId: 1, deviceId: 1 });
+parentAccessTokenSchema.index({ schoolId: 1, deviceRevokedAt: 1 });
 // Purge records 30 days after they expire; an expired link is useless anyway.
 parentAccessTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
 
 parentAccessTokenSchema.methods.isActive = function isActive(now = new Date()) {
   return !this.revokedAt && this.expiresAt > now;
+};
+
+parentAccessTokenSchema.methods.isDeviceActive = function isDeviceActive(now = new Date()) {
+  return this.isActive(now) && !this.deviceRevokedAt;
 };
 
 parentAccessTokenSchema.plugin(tenantScope, { modelName: 'ParentAccessToken' });

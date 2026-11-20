@@ -187,8 +187,19 @@ async function getAllStudents(req, res, next) {
       }
     }
 
+    // Field visibility is decided by role, not by the presence of req.admin
+    // (requireSchoolAuth sets req.admin for every authenticated user, so it is
+    // always truthy). Use an explicit allow-list so new PII fields are private
+    // by default. parentEmailHash is never selected: it is a blind index that
+    // would allow offline guessing of parent emails.
+    const role = req.user?.role || req.admin?.role;
+    const canSeeContact = role === 'owner' || role === 'staff';
+    const projection = canSeeContact
+      ? 'studentId name class feeAmount totalPaid remainingBalance feePaid paymentDeadline parentEmail parentPhone walletAddress reminderOptOut createdAt updatedAt'
+      : 'studentId name class feeAmount totalPaid remainingBalance feePaid paymentDeadline';
+
     const [students, total] = await Promise.all([
-      Student.find(filter, req.admin ? {} : { walletAddress: 0, contactEmail: 0, parentPhone: 0 }).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Student.find(filter).select(projection).sort({ createdAt: -1 }).skip(skip).limit(limit),
       Student.countDocuments(filter),
     ]);
 

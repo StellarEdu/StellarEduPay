@@ -57,6 +57,12 @@ const studentSchema = new mongoose.Schema(
     // Deterministic blind-index hash of parentEmail, used for exact-match
     // lookups (e.g. suppression-list opt-out) since the encrypted value uses
     // a random IV and isn't matchable across records.
+    //
+    // SECURITY: this blind index allows offline guessing of parent emails, so
+    // it must NEVER be returned by list/read endpoints. `select: false` keeps
+    // it out of query results unless a caller explicitly re-selects it (only
+    // suppression/opt-out lookups should do so), and the toJSON/toObject
+    // transforms below strip it defensively.
     parentEmailHash: { type: String, default: null, index: true, select: false },
 
     // Reminder tracking
@@ -98,8 +104,21 @@ const studentSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    toJSON: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        // Never serialize the parent email blind index (see parentEmailHash).
+        delete ret.parentEmailHash;
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        delete ret.parentEmailHash;
+        return ret;
+      },
+    },
   }
 );
 

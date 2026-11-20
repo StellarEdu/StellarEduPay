@@ -3,7 +3,9 @@
 /**
  * Parent self-service portal routes (#1637), mounted at /api/parent.
  *
- *   Parent (magic-link token in X-Parent-Token):
+ *   Parent (magic-link token in X-Parent-Token, or the HttpOnly session
+ *   cookie issued by POST /session):
+ *     POST /session                             exchange magic token for session cookie
  *     GET  /me                                  balances, fees, payment plan, preferences
  *     GET  /students/:studentId/payments        payment history
  *     GET  /receipts/:txHash[?format=pdf]       receipt download
@@ -15,6 +17,7 @@
  *     GET    /links                             list links
  *     DELETE /links/:tokenId                    revoke one link
  *     POST   /links/revoke-student/:studentId   revoke every link for a student
+ *     GET    /links/:tokenId/devices            list active devices for a link
  */
 
 const express = require('express');
@@ -42,6 +45,14 @@ const parentWriteLimiter = rl(
   { error: 'Too many requests, please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
   { name: 'rl:parent-write' },
 );
+// Session exchange is unauthenticated (the magic token is the credential), so
+// it gets its own tight per-IP limit to blunt token guessing.
+const parentSessionLimiter = rl(
+  15 * 60 * 1000,
+  parseInt(process.env.PARENT_SESSION_RATE_LIMIT, 10) || 20,
+  { error: 'Too many requests, please try again later.', code: 'RATE_LIMIT_EXCEEDED' },
+  { name: 'rl:parent-session' },
+);
 
 const staff = [resolveSchool, requireSchoolAuth(['owner', 'staff'])];
 const staffRead = [resolveSchool, requireSchoolAuth(['owner', 'staff', 'read_only'])];
@@ -51,8 +62,12 @@ router.post('/links', ...staff, auditContext, ctrl.createLink);
 router.get('/links', ...staffRead, ctrl.listLinks);
 router.delete('/links/:tokenId', ...staff, auditContext, ctrl.revokeLink);
 router.post('/links/revoke-student/:studentId', ...staff, validateStudentIdParam, auditContext, ctrl.revokeStudentLinks);
+router.get('/links/:tokenId/devices', ...staffRead, ctrl.listLinkDevices);
 
 // ── Parent
+// Exchange the long-lived magic-link token for a short-lived HttpOnly session
+// cookie so the token itself is only ever sent once per device.
+router.post('/session', parentSessionLimiter, ctrl.createSession);
 router.get('/me', parentReadLimiter, requireParentAuth, ctrl.getOverview);
 router.get('/students/:studentId/payments', parentReadLimiter, requireParentAuth, requireLinkedStudent, ctrl.getPaymentHistory);
 router.get('/receipts/:txHash', parentReadLimiter, requireParentAuth, validateTxHashParam, ctrl.getReceipt);

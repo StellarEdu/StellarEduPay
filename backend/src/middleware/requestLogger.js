@@ -27,6 +27,26 @@ const { hashIp, stripQueryString } = require('../utils/piiRedaction');
 
 const DEFAULT_REDACT_FIELDS = REQUEST_LOG_REDACT_FIELDS;
 
+// Query parameters whose values are bearer credentials and must never be logged.
+const SENSITIVE_QUERY_PARAMS = ['token', 'access_token', 'reset_token'];
+
+/**
+ * Defence in depth: strip the fragment (never sent to servers, but guard anyway)
+ * and redact any sensitive token query parameter that survives query stripping.
+ * e.g. `/parent?token=abc&x=1` -> `/parent?token=[REDACTED]&x=1`
+ */
+function redactUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || rawUrl.length === 0) return rawUrl;
+  // Fragments are client-side only; drop them if they ever appear.
+  const withoutFragment = rawUrl.split('#')[0];
+  let out = withoutFragment;
+  for (const param of SENSITIVE_QUERY_PARAMS) {
+    const re = new RegExp(`([?&]${param}=)[^&]*`, 'gi');
+    out = out.replace(re, '$1[REDACTED]');
+  }
+  return out;
+}
+
 // Headers that must never appear in logs (auth/session/PII)
 const SENSITIVE_HEADERS = new Set([
   'authorization',
@@ -99,7 +119,9 @@ function requestLogger() {
       requestId,
       correlationId,
       method: req.method,
-      url: stripQueryString(req.originalUrl), // Strip query strings to prevent token leakage
+      // Strip query strings to prevent token leakage, then redact any token
+      // params and fragments that might survive as defence in depth.
+      url: redactUrl(stripQueryString(req.originalUrl)),
       ipHash, // Use hashed IP instead of raw IP
       userAgent: req.headers['user-agent'] || '',
     };
@@ -124,7 +146,7 @@ function requestLogger() {
         requestId,
         correlationId,
         method: req.method,
-        url: stripQueryString(req.originalUrl), // Strip query strings
+        url: redactUrl(stripQueryString(req.originalUrl)), // Strip query strings + redact tokens
         statusCode: res.statusCode,
         durationMs,
         ipHash, // Use hashed IP
@@ -143,4 +165,4 @@ function requestLogger() {
   };
 }
 
-module.exports = { requestLogger, redact, redactHeaders };
+module.exports = { requestLogger, redact, redactHeaders, redactUrl };

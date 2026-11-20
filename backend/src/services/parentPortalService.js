@@ -3,12 +3,18 @@
 /**
  * Parent self-service portal — magic-link issuance and verification (#1637).
  *
- * A link is `${APP_URL}/parent?token=<jwt>`. The JWT is signed with a key
- * derived from JWT_SECRET (so it can never be accepted as a staff token, and
- * staff tokens can never be accepted here), carries `typ: 'parent'`, the
- * school and the `jti` of a ParentAccessToken record. The record — not the
- * JWT — decides which students the link can see and whether it has been
- * revoked, so a school can revoke a link at any time.
+ * A link is `${APP_URL}/parent#token=<jwt>` — the token lives in the URL
+ * fragment so it is never sent to the server, never appears in ingress/proxy
+ * access logs and is not consumed by email link scanners (#1958). The client
+ * exchanges it once for a short-lived session via `POST /api/parent/session`.
+ *
+ * The JWT is signed with a key derived from JWT_SECRET (so it can never be
+ * accepted as a staff token, and staff tokens can never be accepted here),
+ * carries `typ: 'parent'`, the school and the `jti` of a ParentAccessToken
+ * record. The record — not the JWT — decides which students the link can see
+ * and whether it has been revoked, so a school can revoke a link at any time.
+ * Each device that exchanges the link is tracked on the record (deviceId,
+ * lastUsedAt, revokedAt) so access can be revoked per device.
  */
 
 const crypto = require('crypto');
@@ -21,8 +27,13 @@ const { hashParentEmail } = require('./studentPiiEncryption');
 const logger = require('../utils/logger').child('ParentPortal');
 
 const AUDIENCE = 'parent-portal';
+const SESSION_AUDIENCE = 'parent-portal-session';
 const DEFAULT_TTL_DAYS = parseInt(process.env.PARENT_PORTAL_TOKEN_TTL_DAYS, 10) || 30;
 const MAX_TTL_DAYS = 180;
+const SESSION_TTL_SECONDS = 3600;
+const SESSION_COOKIE_NAME = 'parent_session';
+const SESSION_COOKIE_PATH = '/api/parent';
+const MAX_DEVICES_PER_LINK = 20;
 
 function _signingKey() {
   return crypto.createHmac('sha256', config.JWT_SECRET).update('stellaredupay:parent-portal:v1').digest();
@@ -40,7 +51,9 @@ function _ttlDays(requested) {
 
 function buildPortalUrl(token) {
   const baseUrl = (config.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
-  return `${baseUrl}/parent?token=${encodeURIComponent(token)}`;
+  // Fragment, never query string: browsers do not send it to the server, so
+  // the bearer token stays out of ingress/proxy/CDN logs and link scanners.
+  return `${baseUrl}/parent#token=${encodeURIComponent(token)}`;
 }
 
 function _error(message, code, status) {
@@ -181,6 +194,129 @@ async function verifyParentToken(token) {
   return record;
 }
 
+/**
+ * Exchange a magic-link token for a short-lived session token bound to a
+ * device. The long-lived link token is used once per device; the session
+ * token is what the browser presents afterwards (HttpOnly cookie scoped to
+ * /api/parent, or the X-Parent-Token header).
+ *
+ * @param {object} opts
+ * @param {string} opts.token
+ * @param {string} opts.deviceId - opaque client-generated device identifier
+ * @param {string} [opts.userAgent]
+ * @returns {Promise<{sessionToken, expiresAt, cookie: {name, value, options}, record}>}
+ */
+async function exchangeParentToken({ token, deviceId, userAgent = null }) {
+  if (!deviceId || typeof deviceId !== 'string' || deviceId.length < 8 || deviceId.length > 128) {
+    throw _error('A device identifier is required', 'PARENT_DEVICE_REQUIRED', 400);
+  }
+  const record = await verifyParentToken(token);
+
+  const now = new Date();
+  const device = (record.devices || []).find((d) => d.deviceId === deviceId);
+  if (device && device.revokedAt) {
+    throw _error('This device has been revoked by the school', 'PARENT_DEVICE_REVOKED', 401);
+  }
+
+  const sessionToken = tokenService.signWithKey(
+    { typ: 'parent-session', sid: record.schoolId, jti: record.tokenId, did: deviceId },
+    _signingKey(),
+    { audience: SESSION_AUDIENCE, expiresIn: SESSION_TTL_SECONDS }
+  );
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_SECONDS * 1000);
+
+  const deviceEntry = {
+    deviceId,
+    userAgent: userAgent ? String(userAgent).slice(0, 256) : null,
+    lastUsedAt: now,
+    revokedAt: null,
+  };
+  const update = device
+    ? { $set: { 'devices.$.lastUsedAt': now, 'devices.$.userAgent': deviceEntry.userAgent } }
+    : { $push: { devices: { $each: [deviceEntry], $slice: -MAX_DEVICES_PER_LINK } } };
+  await ParentAccessToken.updateOne({ schoolId: record.schoolId, tokenId: record.tokenId }, update).catch((err) => {
+    logger.warn('Failed to record parent portal device', { schoolId: record.schoolId, error: err.message });
+  });
+
+  return {
+    sessionToken,
+    expiresAt,
+    record,
+    cookie: {
+      name: SESSION_COOKIE_NAME,
+      value: sessionToken,
+      options: {
+        httpOnly: true,
+        secure: config.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: SESSION_COOKIE_PATH,
+        maxAge: SESSION_TTL_SECONDS * 1000,
+      },
+    },
+  };
+}
+
+/**
+ * Verify a short-lived session token issued by exchangeParentToken.
+ * Returns the ParentAccessToken record plus the deviceId.
+ */
+async function verifyParentSession(sessionToken) {
+  if (!sessionToken || typeof sessionToken !== 'string') {
+    throw _error('Missing parent session', 'PARENT_SESSION_MISSING', 401);
+  }
+  let payload;
+  try {
+    payload = tokenService.verifyWithKey(sessionToken, _signingKey(), { audience: SESSION_AUDIENCE });
+  } catch (err) {
+    const code = err.name === 'TokenExpiredError' ? 'PARENT_SESSION_EXPIRED' : 'PARENT_SESSION_INVALID';
+    throw _error('Your session has expired, please reopen your link', code, 401);
+  }
+  if (payload.typ !== 'parent-session' || !payload.sid || !payload.jti || !payload.did) {
+    throw _error('Your session has expired, please reopen your link', 'PARENT_SESSION_INVALID', 401);
+  }
+  const record = await ParentAccessToken.findOne({ schoolId: payload.sid, tokenId: payload.jti }).select('+tokenHash');
+  if (!record) throw _error('Your session has expired, please reopen your link', 'PARENT_SESSION_INVALID', 401);
+  if (record.revokedAt) throw _error('This link has been revoked by the school', 'PARENT_TOKEN_REVOKED', 401);
+  if (record.expiresAt <= new Date()) throw _error('This link has expired', 'PARENT_TOKEN_EXPIRED', 401);
+  const device = (record.devices || []).find((d) => d.deviceId === payload.did);
+  if (!device || device.revokedAt) {
+    throw _error('This device has been revoked by the school', 'PARENT_DEVICE_REVOKED', 401);
+  }
+  ParentAccessToken.updateOne(
+    { schoolId: record.schoolId, tokenId: record.tokenId, 'devices.deviceId': payload.did },
+    { $set: { 'devices.$.lastUsedAt': new Date() } }
+  ).catch(() => {});
+  return { record, deviceId: payload.did };
+}
+
+/** Revoke a single device's access to a link (staff action). */
+async function revokeParentDevice({ schoolId, tokenId, deviceId, revokedBy, reason = null }) {
+  const record = await ParentAccessToken.findOneAndUpdate(
+    { schoolId, tokenId, 'devices.deviceId': deviceId, 'devices.revokedAt': null },
+    { $set: { 'devices.$.revokedAt': new Date(), 'devices.$.revokedBy': revokedBy, 'devices.$.revokeReason': reason } },
+    { new: true }
+  );
+  return record;
+}
+
+/** List the devices that have exchanged a link (for the staff "active devices" view). */
+async function listParentDevices({ schoolId, tokenId }) {
+  const record = await ParentAccessToken.findOne({ schoolId, tokenId }).select('devices tokenId studentIds expiresAt revokedAt').lean();
+  if (!record) return null;
+  return {
+    tokenId: record.tokenId,
+    studentIds: record.studentIds,
+    expiresAt: record.expiresAt,
+    revokedAt: record.revokedAt,
+    devices: (record.devices || []).map((d) => ({
+      deviceId: d.deviceId,
+      userAgent: d.userAgent || null,
+      lastUsedAt: d.lastUsedAt,
+      revokedAt: d.revokedAt || null,
+    })),
+  };
+}
+
 async function revokeParentLink({ schoolId, tokenId, revokedBy, reason = null }) {
   const record = await ParentAccessToken.findOneAndUpdate(
     { schoolId, tokenId, revokedAt: null },
@@ -212,10 +348,17 @@ async function listParentLinks({ schoolId, studentId = null, includeInactive = f
 module.exports = {
   issueParentLink,
   verifyParentToken,
+  exchangeParentToken,
+  verifyParentSession,
   revokeParentLink,
+  revokeParentDevice,
   revokeLinksForStudent,
   listParentLinks,
+  listParentDevices,
   buildPortalUrl,
   DEFAULT_TTL_DAYS,
   MAX_TTL_DAYS,
+  SESSION_TTL_SECONDS,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_PATH,
 };

@@ -8,12 +8,20 @@
  * not end up in access logs or Referer headers. The frontend /parent page
  * reads it from the link once and strips it from the address bar.
  *
+ * A short-lived session cookie (scoped to /api/parent, HttpOnly) issued by
+ * POST /api/parent/session is also accepted, so the long-lived magic token is
+ * only ever sent once per device.
+ *
  * On success sets:
- *   req.parent   = { tokenId, schoolId, studentIds }
+ *   req.parent   = { tokenId, schoolId, studentIds, expiresAt }
  *   req.schoolId = the token's school (authoritative; no X-School-ID needed)
  */
 
-const { verifyParentToken } = require('../services/parentPortalService');
+const {
+  verifyParentToken,
+  verifyParentSession,
+  PARENT_SESSION_COOKIE,
+} = require('../services/parentPortalService');
 
 function _extractToken(req) {
   const header = req.get('X-Parent-Token');
@@ -23,9 +31,18 @@ function _extractToken(req) {
   return match ? match[1].trim() : null;
 }
 
+function _extractSession(req) {
+  const cookies = req.cookies || {};
+  const value = cookies[PARENT_SESSION_COOKIE];
+  return typeof value === 'string' && value ? value : null;
+}
+
 async function requireParentAuth(req, res, next) {
   try {
-    const record = await verifyParentToken(_extractToken(req));
+    const session = _extractSession(req);
+    const record = session
+      ? await verifyParentSession(session)
+      : await verifyParentToken(_extractToken(req));
     req.parent = {
       tokenId: record.tokenId,
       schoolId: record.schoolId,
