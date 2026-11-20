@@ -17,6 +17,12 @@
  *   - parentName             → null
  *   - contactNumber          → null
  *   - parentPhone            → null
+ *   - parentEmail            → null
+ *   - parentEmailHash        → null (blind index would allow offline guessing)
+ *   - walletAddress          → null
+ *   - reminderOptOut / parentEmailSuppressed / parentEmailSuppressionReason /
+ *     parentEmailSuppressedAt / lastEmailDeliveryStatus / lastEmailDeliveryAt
+ *                            → notification prefs reset
  */
 
 const Student = require('../models/studentModel');
@@ -72,6 +78,13 @@ async function anonymizeExpiredPii() {
           { parentName: { $ne: null } },
           { contactNumber: { $ne: null } },
           { parentPhone: { $ne: null } },
+          { parentEmail: { $ne: null } },
+          { parentEmailHash: { $ne: null } },
+          { walletAddress: { $ne: null } },
+          { parentEmailSuppressionReason: { $ne: null } },
+          { parentEmailSuppressedAt: { $ne: null } },
+          { lastEmailDeliveryStatus: { $ne: null } },
+          { lastEmailDeliveryAt: { $ne: null } },
         ],
       },
       {
@@ -82,6 +95,15 @@ async function anonymizeExpiredPii() {
           parentName: null,
           contactNumber: null,
           parentPhone: null,
+          parentEmail: null,
+          parentEmailHash: null,
+          walletAddress: null,
+          reminderOptOut: false,
+          parentEmailSuppressed: false,
+          parentEmailSuppressionReason: null,
+          parentEmailSuppressedAt: null,
+          lastEmailDeliveryStatus: null,
+          lastEmailDeliveryAt: null,
         },
       }
     );

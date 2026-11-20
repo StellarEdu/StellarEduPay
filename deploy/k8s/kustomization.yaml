@@ -42,3 +42,21 @@ resources:
   - configmap.yaml
   - ingress.yaml
   - backup-cronjob.yaml
+
+# Single source of truth for the Ingress host (issue #2005).
+# INGRESS_HOST from the `stellaredupay-ingress-host` ConfigMap is copied into
+# both spec.tls[0].hosts and spec.rules[0].host, so the TLS certificate and the
+# routing rule always name the same host. Override the ConfigMap value in an
+# overlay to deploy a different domain.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: stellaredupay-ingress-host
+      fieldPath: data.INGRESS_HOST
+    targets:
+      - select:
+          kind: Ingress
+          name: stellaredupay
+        fieldPaths:
+          - spec.tls.0.hosts.0
+          - spec.rules.0.host

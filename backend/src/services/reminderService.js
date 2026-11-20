@@ -312,25 +312,21 @@ async function processReminders() {
         }
 
         // Idempotency: claim this (school, student, day) slot atomically.
-        // If another replica or a mid-batch restart already sent for today, skip.
+        // The slot is claimed in the 'sending' state and only marked 'sent' once a
+        // channel actually delivers. Failed or stale 'sending' claims are re-claimed
+        // (up to MAX_ATTEMPTS_PER_DAY) so a transient SMTP/SMS failure is retried
+        // the same day instead of consuming the student's reminder (#1997).
         const windowStart = computeWindowStart(school.timezone || 'UTC');
-        try {
-          await ReminderLog.create({
-            schoolId: school.schoolId,
+        const claim = await claimReminderSlot(school.schoolId, student.studentId, windowStart);
+        if (!claim.claimed) {
+          logger.debug('Reminder slot already claimed for today — skipping', {
             studentId: student.studentId,
+            schoolId: school.schoolId,
             windowStart,
+            reason: claim.reason,
           });
-        } catch (err) {
-          if (err.code === 11000) { // duplicate key
-            logger.debug('Reminder already sent for today — skipping', {
-              studentId: student.studentId,
-              schoolId: school.schoolId,
-              windowStart,
-            });
-            summary.skipped++;
-            continue;
-          }
-          throw err;
+          summary.skipped++;
+          continue;
         }
 
         const escalationLevel = computeEscalationLevel(student);

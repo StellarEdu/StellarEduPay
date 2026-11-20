@@ -113,15 +113,29 @@ const RENEW_SCRIPT =
 // Fencing token counter key prefix
 const FENCE_PREFIX = '__fence__:';
 
-// Issue #1990: fencing counters used to live forever, leaking one Redis key per
-// verified transaction, student and refund. They now carry a long TTL (refreshed
-// on every acquisition) so idle counters are reclaimed automatically.
-const FENCE_TTL_MS = parseInt(process.env.FENCE_TTL_MS || '', 10) || 7 * 24 * 60 * 60 * 1000;
+/**
+ * Issue #1991 — thrown when the lock backend (Redis) cannot be reached, so the
+ * caller can distinguish "someone else holds the lock" (acquire() -> null) from
+ * "we could not even ask" (this error). Callers should map this to 503, never 409.
+ */
+class LockUnavailableError extends Error {
+  constructor(message, cause) {
+    super(message || 'Lock service unavailable');
+    this.name = 'LockUnavailableError';
+    this.code = 'LOCK_SERVICE_UNAVAILABLE';
+    if (cause) this.cause = cause;
+  }
+}
 
-// Issue #1990: the in-process fallback fence map is swept periodically so it
-// cannot grow without bound in long-lived single-instance deployments.
-const LOCAL_FENCE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
-const localFenceCounters = new Map(); // fenceKey -> { fencingToken, expiresAt }
+/**
+ * Issue #1991 — Redis Cluster requires all keys touched by one Lua script to
+ * live in the same hash slot. Wrapping the logical key in `{...}` makes the
+ * lock key and its fence key hash to the same slot.
+ * @param {string} key
+ */
+function clusterSafeKey(key) {
+  return key.startsWith('{') ? key : `{${key}}`;
+}
 
 function newToken() {
   return crypto.randomBytes(16).toString('hex');
