@@ -100,6 +100,25 @@ function buildDateRangeFilter({ startDate, endDate, timezone = 'UTC' }) {
 }
 
 /**
+ * #1974 — Resolve the fee currency a school's fees are denominated in.
+ * Falls back to 'XLM' when the school has no explicit feeCurrency so that
+ * existing behaviour is preserved for schools that predate the field.
+ *
+ * @param {string} schoolId
+ * @returns {Promise<string>}
+ */
+async function resolveFeeCurrency(schoolId) {
+  try {
+    const School = require('../models/schoolModel');
+    const school = await School.findOne({ _id: schoolId }, 'feeCurrency').lean();
+    return (school && school.feeCurrency) || 'XLM';
+  } catch (err) {
+    // Never let a missing/optional model break report generation.
+    return 'XLM';
+  }
+}
+
+/**
  * Get the data version for cache key generation.
  * Returns the timestamp of the most recent confirmed payment for a school,
  * which can be used to invalidate cached reports when data changes.
@@ -192,6 +211,15 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
             amount: '$amount',
           },
         },
+        // #1974 — also collect credited amounts (in the fee currency) so the
+        // report can show what was credited toward the fee, separate from the
+        // raw per-asset amounts actually received.
+        creditedTotals: {
+          $push: {
+            asset: { $ifNull: ['$feeCurrency', { $ifNull: ['$assetCode', 'XLM'] }] },
+            amount: '$creditedAmount',
+          },
+        },
         // #883 — sum historical fiat amounts from locked snapshots
         totalFiatAmount:{ $sum: { $ifNull: ['$fiatSnapshot.fiatAmount', 0] } },
         fiatSnapshotCount: { $sum: { $cond: [{ $ne: [{ $ifNull: ['$fiatSnapshot.fiatAmount', null] }, null] }, 1, 0] } },
@@ -243,6 +271,61 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
             },
           },
         },
+        // #1974 — fold credited amounts (fee currency) into per-currency sums.
+        // Only rows where creditedAmount is set contribute.
+        creditedTotals: {
+          $arrayToObject: {
+            $map: {
+              input: {
+                $setUnion: [
+                  {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: '$creditedTotals',
+                          as: 'c',
+                          cond: { $ne: [{ $ifNull: ['$$c.amount', null] }, null] },
+                        },
+                      },
+                      as: 'c',
+                      in: '$$c.asset',
+                    },
+                  },
+                  [],
+                ],
+              },
+              as: 'asset',
+              in: {
+                k: '$$asset',
+                v: {
+                  $round: [
+                    {
+                      $sum: {
+                        $map: {
+                          input: {
+                            $filter: {
+                              input: '$creditedTotals',
+                              as: 'c',
+                              cond: {
+                                $and: [
+                                  { $eq: ['$$c.asset', '$$asset'] },
+                                  { $ne: [{ $ifNull: ['$$c.amount', null] }, null] },
+                                ],
+                              },
+                            },
+                          },
+                          as: 'c',
+                          in: '$$c.amount',
+                        },
+                      },
+                    },
+                    7,
+                  ],
+                },
+              },
+            },
+          },
+        },
         totalFiatAmount: { $round: ['$totalFiatAmount', 2] },
         fiatSnapshotCount: 1,
         fiatCurrency: 1,
@@ -261,12 +344,18 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
     for (const [asset, amount] of Object.entries(row.assetTotals || {})) {
       totals[asset] = toExactAmountString(amount);
     }
+    // #1974 — credited totals keyed by fee currency.
+    const creditedTotals = {};
+    for (const [currency, amount] of Object.entries(row.creditedTotals || {})) {
+      creditedTotals[currency] = toExactAmountString(amount);
+    }
     const fiatCoverage = row.paymentCount > 0
       ? parseFloat(((row.fiatSnapshotCount / row.paymentCount) * 100).toFixed(2))
       : 0;
     return {
       date: row.date,
       totals,
+      creditedTotals,
       paymentCount: row.paymentCount,
       validCount: row.validCount,
       partialCount: row.partialCount,
@@ -327,11 +416,17 @@ function mergeAssetTotals(acc, totals) {
 async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' } = {}) {
   const byDate = await aggregateByDate({ schoolId, startDate, endDate, timezone });
 
+  // #1974 — surface the fee currency so the UI and ledger agree on what the
+  // fee is denominated in.
+  const feeCurrency = await resolveFeeCurrency(schoolId);
+
   // #1767 — accumulate per-asset totals separately; never add XLM to USDC.
   // #1766 — include partialCount and unknownCount so buckets sum to paymentCount.
   const totals = byDate.reduce(
     (acc, row) => {
       mergeAssetTotals(acc.totals, row.totals);
+      // #1974 — accumulate credited (fee-currency) totals separately too.
+      mergeAssetTotals(acc.creditedTotals, row.creditedTotals);
       acc.paymentCount  += row.paymentCount;
       acc.validCount    += row.validCount;
       acc.partialCount  += row.partialCount;
@@ -346,6 +441,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
     },
     {
       totals: {},
+      creditedTotals: {},
       paymentCount: 0,
       validCount: 0,
       partialCount: 0,
@@ -420,6 +516,19 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
             },
           },
         },
+        // #1974 — keep per-currency credited amounts separate as well.
+        creditedByCurrency: {
+          $push: {
+            $map: {
+              input: '$payments',
+              as: 'p',
+              in: {
+                asset: { $ifNull: ['$$p.feeCurrency', { $ifNull: ['$$p.assetCode', 'XLM'] }] },
+                amount: '$$p.creditedAmount',
+              },
+            },
+          },
+        },
         paymentCount: { $sum: { $size: '$payments' } },
         paidStudentIds: { $addToSet: { $cond: ['$feePaid', '$studentId', '$$REMOVE'] } },
         unpaidStudentIds: { $addToSet: { $cond: ['$feePaid', '$$REMOVE', '$studentId'] } },
@@ -430,6 +539,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
         _id: 0,
         className: '$_id',
         collectedByAsset: 1,
+        creditedByCurrency: 1,
         paymentCount: 1,
         paidCount: { $size: '$paidStudentIds' },
         unpaidCount: { $size: '$unpaidStudentIds' },
@@ -439,6 +549,7 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
   ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS });
 
   // #1767 — flatten the nested per-payment asset pairs into per-asset totals.
+  // #1974 — also flatten credited amounts into per-currency totals.
   const byClassWithTotals = byClass.map((row) => {
     const totals = {};
     for (const paymentList of row.collectedByAsset || []) {
@@ -447,9 +558,18 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
         totals[p.asset] = toExactAmountString(prev + (p.amount || 0));
       }
     }
+    const creditedTotals = {};
+    for (const paymentList of row.creditedByCurrency || []) {
+      for (const p of paymentList || []) {
+        if (p.amount === null || p.amount === undefined) continue;
+        const prev = parseFloat(creditedTotals[p.asset] || '0');
+        creditedTotals[p.asset] = toExactAmountString(prev + (p.amount || 0));
+      }
+    }
     return {
       className: row.className,
       totals,
+      creditedTotals,
       paymentCount: row.paymentCount,
       paidCount: row.paidCount,
       unpaidCount: row.unpaidCount,
@@ -467,9 +587,11 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
   return {
     generatedAt: new Date().toISOString(),
     schoolId,
+    // #1974 — the currency the school's fees are denominated in.
+    feeCurrency,
     period: { startDate: startDate || null, endDate: endDate || null },
     dateRangeDays,
-    summary: { ...totals, fullyPaidStudentCount: fullyPaidCount },
+    summary: { ...totals, feeCurrency, fullyPaidStudentCount: fullyPaidCount },
     byDate,
     byClass: byClassWithTotals,
   };
@@ -482,13 +604,17 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
  */
 // #1767 — report CSV schema version. Bumped to 2 because amounts are now
 // emitted one row per asset instead of a single cross-asset "Total Amount".
-const REPORT_CSV_SCHEMA_VERSION = 2;
+// #1974 — bumped to 3 to add the fee currency and credited (fee-currency)
+// totals so the export and the ledger agree on what the fee is denominated in.
+const REPORT_CSV_SCHEMA_VERSION = 3;
 
 function reportToCsv(report) {
   const lines = [];
   lines.push(`Schema Version,${csvEscape(REPORT_CSV_SCHEMA_VERSION)}`);
   lines.push(`Generated At,${csvEscape(report.generatedAt)}`);
   lines.push(`School ID,${csvEscape(report.schoolId)}`);
+  // #1974 — surface the fee currency in the export header.
+  lines.push(`Fee Currency,${csvEscape(report.feeCurrency || report.summary?.feeCurrency || 'XLM')}`);
   lines.push(`Period Start,${csvEscape(report.period.startDate || 'all time')}`);
   lines.push(`Period End,${csvEscape(report.period.endDate || 'all time')}`);
   if (report.dateRangeDays !== null) {
@@ -500,6 +626,16 @@ function reportToCsv(report) {
   lines.push('Asset,Total Amount');
   for (const [asset, amount] of Object.entries(report.summary.totals || {})) {
     lines.push([csvEscape(asset), csvEscape(amount)].join(','));
+  }
+  // #1974 — credited amounts (in the fee currency) as a separate section.
+  const creditedEntries = Object.entries(report.summary.creditedTotals || {});
+  if (creditedEntries.length > 0) {
+    lines.push('');
+    lines.push('--- Credited (Fee Currency) ---');
+    lines.push('Currency,Credited Amount');
+    for (const [currency, amount] of creditedEntries) {
+      lines.push([csvEscape(currency), csvEscape(amount)].join(','));
+    }
   }
   lines.push(`Total Fiat,${csvEscape(report.summary.totalFiatAmount)}`);
   lines.push(`Fiat Coverage %,${csvEscape(report.summary.fiatCoverage)}`);
@@ -519,9 +655,15 @@ function reportToCsv(report) {
   lines.push('Date,Asset,Total Amount,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students,Suspicious,Pending Review');
   for (const row of report.byDate) {
     const assets = Object.entries(row.totals || {});
+    // #1974 — credited totals are keyed by fee currency; render them alongside.
+    const creditedEntries = Object.entries(row.creditedTotals || {});
+    const creditedAmount = creditedEntries.length > 0 ? creditedEntries[0][1] : '';
+    const creditedCurrency = creditedEntries.length > 0 ? creditedEntries[0][0] : '';
     if (assets.length === 0) {
       lines.push([
         csvEscape(row.date), '', '',
+        csvEscape(creditedAmount),
+        csvEscape(creditedCurrency),
         csvEscape(row.paymentCount),
         csvEscape(row.validCount),
         csvEscape(row.partialCount),
@@ -539,6 +681,8 @@ function reportToCsv(report) {
         csvEscape(row.date),
         csvEscape(asset),
         csvEscape(amount),
+        csvEscape(creditedAmount),
+        csvEscape(creditedCurrency),
         csvEscape(row.paymentCount),
         csvEscape(row.validCount),
         csvEscape(row.partialCount),
@@ -554,12 +698,17 @@ function reportToCsv(report) {
   if (report.byClass && report.byClass.length > 0) {
     lines.push('');
     lines.push('--- Class Breakdown ---');
-    lines.push('Class,Asset,Total Collected,Payment Count,Paid Students,Unpaid Students');
+    lines.push('Class,Asset,Total Collected,Credited Amount,Credited Currency,Payment Count,Paid Students,Unpaid Students');
     for (const row of report.byClass) {
       const assets = Object.entries(row.totals || {});
+      const creditedEntries = Object.entries(row.creditedTotals || {});
+      const creditedAmount = creditedEntries.length > 0 ? creditedEntries[0][1] : '';
+      const creditedCurrency = creditedEntries.length > 0 ? creditedEntries[0][0] : '';
       if (assets.length === 0) {
         lines.push([
           csvEscape(row.className), '', '',
+          csvEscape(creditedAmount),
+          csvEscape(creditedCurrency),
           csvEscape(row.paymentCount),
           csvEscape(row.paidCount),
           csvEscape(row.unpaidCount),
@@ -571,6 +720,8 @@ function reportToCsv(report) {
           csvEscape(row.className),
           csvEscape(asset),
           csvEscape(amount),
+          csvEscape(creditedAmount),
+          csvEscape(creditedCurrency),
           csvEscape(row.paymentCount),
           csvEscape(row.paidCount),
           csvEscape(row.unpaidCount),
@@ -603,6 +754,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
     byClass,
     recentPayments,
     feeAgg,
+    feeCurrency,
   ] = await Promise.all([
     Student.countDocuments({ schoolId }),
     Student.countDocuments({ schoolId, feePaid: true }),
@@ -657,6 +809,9 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       { $match: Student.activeFilter({ schoolId }) },
       { $group: { _id: null, totalExpected: { $sum: '$feeAmount' }, totalPaid: { $sum: '$totalPaid' } } },
     ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
+
+    // #1974 — the currency the school's fees are denominated in.
+    resolveFeeCurrency(schoolId),
   ]);
 
   const collected = allTimeRollup[0] || { totalCollected: 0, count: 0 };
@@ -666,6 +821,9 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
   return {
     generatedAt: now.toISOString(),
     fromRollup: true,
+    // #1974 — surface the fee currency so the UI and ledger agree on what the
+    // fee amounts (totalExpected, outstanding, byClass totals) are in.
+    feeCurrency,
     students: {
       total:   totalStudents,
       paid:    paidStudents,
@@ -673,6 +831,7 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       overdue: overdueStudents,
     },
     fees: {
+      feeCurrency,
       totalExpected:  parseFloat(feeRow.totalExpected.toFixed(7)),
       totalCollected: parseFloat(collected.totalCollected.toFixed(7)),
       outstanding:    parseFloat(Math.max(0, feeRow.totalExpected - feeRow.totalPaid).toFixed(7)),

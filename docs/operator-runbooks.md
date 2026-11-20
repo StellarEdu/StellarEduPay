@@ -94,14 +94,20 @@ is idempotent, and emits an audit trail for your change-management log.
 **Checklist — run before every new environment or after a credential reset:**
 
 1. Generate values for all required secrets (see script header for generation
-   commands): `JWT_SECRET`, `MONGO_URI`, and (for production) `SIGNER_MASTER_KEY`.
+   commands): `JWT_SECRET`, `MONGO_URI`, `REDIS_PASSWORD`, and (for production)
+   `SIGNER_MASTER_KEY`.
 2. Verify you are targeting the correct cluster context:
    `kubectl config current-context`
 3. Run the provisioning script:
    ```sh
-   JWT_SECRET=<value> MONGO_URI=<value> SIGNER_MASTER_KEY=<value> \
+   JWT_SECRET=<value> MONGO_URI=<value> REDIS_PASSWORD=<value> \
+     SIGNER_MASTER_KEY=<value> \
      NAMESPACE=<namespace> \
      ./scripts/provision-k8s-secrets.sh
+   ```
+   The script also creates the datastore credentials described below
+   (`mongodb-keyfile`, `mongodb-credentials`, `redis-credentials`) when they do
+   not already exist, so a fresh environment comes up with auth enabled.
 Record the script's audit output (context, operator, timestamp) in your
 incident or change-management log.
 Deploy via the environment overlay — not the base manifest directly:
@@ -111,7 +117,132 @@ Verify the backend pods reach Running state and the /health endpoint
 returns {"status":"healthy"}.
 The script (scripts/provision-k8s-secrets.sh) uses --dry-run=client | apply
 so it is safe to re-run; it patches an existing secret without error.
-Key Rotation
+
+## Datastore Authentication (MongoDB and Redis)
+
+Both datastores run with authentication enabled in every environment. The
+backend reads `MONGO_URI` and `REDIS_URL` (or `REDIS_PASSWORD`) from the
+`stellaredupay` Secret; `config/redisClient.js` refuses to start when
+`NODE_ENV=production` and no Redis password is configured.
+
+### MongoDB users and the keyFile
+
+The StatefulSet (`deploy/k8s/mongodb-statefulset.yaml`) starts mongod with
+`--auth --keyFile /etc/mongo/keyfile`. The keyFile is stored in the
+`mongodb-keyfile` Secret, mounted with mode `0400`, and is required for
+replica-set member authentication.
+
+Three users are bootstrapped on first start (see the init job / bootstrap
+script):
+
+| User | Database | Roles |
+| --- | --- | --- |
+| `root` | `admin` | `root` (break-glass only) |
+| `stellaredupay_app` | `stellaredupay` | `readWrite` on `stellaredupay` only |
+| `stellaredupay_backup` | `admin` | `backup` |
+
+`MONGO_URI` in the app Secret must use the application user, e.g.
+`mongodb://stellaredupay_app:<password>@mongodb-0.mongodb:27017/stellaredupay?replicaSet=rs0&authSource=stellaredupay`.
+The backup CronJob uses the backup user. Never put the root credentials in the
+application Secret.
+
+Bootstrap order on a brand-new cluster:
+
+1. Apply the keyFile Secret (`mongodb-keyfile`) and the StatefulSet.
+2. Start mongod with `--auth --keyFile`; the localhost exception allows the
+   first user creation.
+3. Create the root user, then the app and backup users, then initiate the
+   replica set (`rs.initiate()`).
+4. Patch `MONGO_URI` in the `stellaredupay` Secret to the app user and roll the
+   backend.
+
+### Redis authentication and memory policy
+
+Redis runs with `requirepass` (password in the `redis-credentials` Secret,
+exposed to the backend as `REDIS_PASSWORD` / `REDIS_URL`) and with:
+
+```
+appendonly yes
+maxmemory 100mb
+maxmemory-policy noeviction
+```
+
+`noeviction` is mandatory for BullMQ: with any eviction policy, job and lock
+keys silently disappear. `maxmemory` is set below the container limit so Redis
+rejects writes with an OOM error instead of being OOM-killed by the kernel
+(which would drop every in-flight lock and queue entry). In Kubernetes the
+settings live in the `redis-config` ConfigMap (`redis.conf`); in Compose they
+are passed as `redis-server` flags.
+
+Alert on `redis_memory_used_bytes / redis_memory_max_bytes > 0.8` (redis_exporter
+is already scraped by the monitoring stack) so the memory ceiling is raised
+before writes start failing.
+
+### Redis sizing guide
+
+Rough per-key costs (AOF overhead excluded; add ~30% headroom):
+
+| Data | Keys | Approx. size per key |
+| --- | --- | --- |
+| BullMQ job (payment processing) | ~1 job + ~3 state keys per payment attempt | 1–3 KB |
+| Idempotency key | 1 per payment request | ~200 B |
+| Distributed lock / fencing counter | 1 per active worker action | ~100 B |
+| Rate-limit counter | 1 per tenant+route per window | ~100 B |
+| Session revocation (`revoked:sid:*`) | 1 per revoked session | ~100 B |
+| SSE pub/sub | transient, not persisted | ~1 KB per message |
+
+Per school: assume ~50 KB steady state plus ~2 KB per in-flight payment.
+Per payment: budget ~5 KB across job, idempotency and lock keys for the life of
+the job (jobs are removed on completion; dead-letter entries are retained).
+
+Example: 500 schools with 20 concurrent payments each ≈ 25 MB steady state
+plus 50 MB of job churn headroom → the 100 MB `maxmemory` ceiling is
+appropriate; raise it (and the container limit) together if
+`redis_memory_used_bytes` trends above 80 MB.
+
+### TLS decision for in-cluster traffic
+
+Redis and MongoDB traffic inside the cluster is **plaintext**, protected only
+by the NetworkPolicies in `deploy/k8s/` (ingress restricted to labelled pods)
+plus datastore authentication. This is a deliberate decision: the cluster
+network is treated as a trust boundary, and both datastores are single-replica
+in-cluster services that are not exposed outside the cluster. If the threat
+model changes (multi-tenant cluster, untrusted CNI, cross-cluster replication),
+enable TLS: `tls-port`/`tls-cert-file` for Redis and `--tlsMode requireTLS`
+with member certificates for MongoDB, and update `REDIS_URL`/`MONGO_URI` to
+`rediss://`/`mongodb+srv`-style TLS URIs.
+
+### Verification
+
+Run these after any datastore change:
+
+```sh
+# Redis: unauthenticated PING must fail with NOAUTH
+kubectl exec deploy/redis -- redis-cli -h 127.0.0.1 PING
+# (expected: (error) NOAUTH Authentication required.)
+
+# Redis: authenticated PING and memory policy
+kubectl exec deploy/redis -- sh -c \
+  'redis-cli -h 127.0.0.1 -a "$REDIS_PASSWORD" --no-auth-warning PING'
+# (expected: PONG)
+kubectl exec deploy/redis -- sh -c \
+  'redis-cli -h 127.0.0.1 -a "$REDIS_PASSWORD" --no-auth-warning CONFIG GET maxmemory-policy'
+# (expected: maxmemory-policy / noeviction)
+
+# MongoDB: unauthenticated access must be rejected
+kubectl exec mongodb-0 -- mongosh mongodb://mongodb-0.mongodb:27017 \
+  --eval 'db.adminCommand({listDatabases:1})'
+# (expected: MongoServerError: command listDatabases requires authentication)
+
+# MongoDB: app user can read/write its own database only
+kubectl exec mongodb-0 -- mongosh "$MONGO_URI" --eval 'db.payments.countDocuments()'
+```
+
+Also confirm the backend boots and drains the queue with auth enabled
+(`kubectl logs deploy/backend | grep -i redis`, and a test payment reaching
+`confirmed`).
+
+## Key Rotation
 Rotate JWT secrets, webhook secrets, database credentials, queue credentials, deployment tokens, and Stellar signing credentials when compromise is suspected, operator membership changes, or the scheduled interval expires.
 General rotation order (used for any credential not covered by a script below): create replacement secret, deploy dual-read support if required, rotate provider-side secret, redeploy API and workers, revoke old secret, verify operations, and record rotation time and operator.
 JWT secret — node scripts/rotate-jwt-secret.js --confirm
@@ -122,7 +253,7 @@ Rotates SIGNER_MASTER_KEY, the key that encrypts Stellar signing secret keys at 
 Webhook secret encryption key — node scripts/rotate-webhook-encryption-key.js [--apply]
 Rotates WEBHOOK_SECRET_ENCRYPTION_KEY, the key that encrypts per-school webhook secrets at rest (backend/src/services/webhookSecretEncryption.js). Set WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS to the key currently protecting stored secrets and WEBHOOK_SECRET_ENCRYPTION_KEY to the replacement, then run the script: it re-encrypts every school's webhookSecret under the new key. Defaults to a dry run; pass --apply to persist. Unlike the signer key, this rotation supports a dual-key grace period — leave WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS set across the redeploy so decryption falls back to it for any secret not yet migrated, then drop it once the --apply run reports zero failures. See the "Webhook secret encryption key rotation" section of docs/security.md for the full procedure.
 Other credentials
-Database credentials, queue credentials, and deployment tokens do not yet have scripted rotation — follow the general rotation order above and record the rotation in the incident log.
+Database credentials, queue credentials, and deployment tokens do not yet have scripted rotation — follow the general rotation order above and record the rotation in the incident log. For Redis, rotate `REDIS_PASSWORD` in the `redis-credentials` Secret and the `stellaredupay` Secret together, then roll Redis and the backend/worker deployments; for MongoDB, rotate the app and backup user passwords with `db.changeUserPassword()` and patch `MONGO_URI` before rolling the backend. Rotate the MongoDB keyFile only during a controlled replica-set restart (all members must share the same keyFile).
 Restore Procedure
 Stop API writes and workers.
 Create a forensic snapshot of the current database.
@@ -210,7 +341,7 @@ kubectl rollout undo deployment/backend
 kubectl rollout undo deployment/frontend
 Because the previous ReplicaSet still references the old immutable tag, undo restores that exact image (not whatever :latest points at).
 MongoDB
-deploy/k8s/mongodb-statefulset.yaml runs a single replica (replicas: 1) with no --replSet. This is intentional for the in-cluster baseline; multi-document transactions require a replica set or an external managed MongoDB (e.g. Atlas).
+deploy/k8s/mongodb-statefulset.yaml runs a single replica (replicas: 1) as member `rs0` with `--auth --keyFile` enabled (see "Datastore Authentication" above). The single-member replica set is intentional for the in-cluster baseline and is what enables `mongodump --oplog` backups; multi-document transactions work on it, but there is no failover — use an external managed MongoDB (e.g. Atlas) if you need HA.
 
 Backend auto-scaling
 deploy/k8s/backend-hpa.yaml defines a HorizontalPodAutoscaler for the backend Deployment: it scales between 2 and 10 replicas, targeting 70% average CPU utilization across pods. This handles end-of-term fee-collection peaks without manual `kubectl scale`. The Deployment's `replicas: 2` field is only the starting point once the HPA is applied — the HPA takes over adjusting replica count from there. Tune `minReplicas`/`maxReplicas`/`averageUtilization` in that file if peak load patterns change.

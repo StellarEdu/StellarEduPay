@@ -111,7 +111,7 @@ async function reconcileAll(schoolId) {
             },
             { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
           ]);
-          const paymentTotal = agg?.computedTotal ?? 0;
+          const paymentTotal = agg?.computedTotal != null ? parseFloat(agg.computedTotal.toString()) : 0;
           const creditAdjustments = s.creditAdjustments || 0;
           const computed = parseFloat((paymentTotal + creditAdjustments).toFixed(7));
 
@@ -255,6 +255,8 @@ async function generateReconciliationReport(schoolId) {
 
     // Amounts of different assets (XLM, USDC) must never be summed together.
     // Group credited totals by assetCode so drift is computed per asset.
+    // Use creditedAmount when present (the amount actually credited in the
+    // fee currency); fall back to `amount` for legacy rows (#1974).
     const dbTotalsByAsset = {};
     const pendingReviewByAsset = {};
     let pendingReviewCount = 0;

@@ -179,12 +179,34 @@ export default function VerifyPayment() {
               <span className={badge.cls}>{t(badge.key)}</span>
             </div>
 
-            <InfoRow label={t("verifyPayment.amount")}>
-              {result.amount}{" "}
-              <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
-                {result.assetCode || "XLM"}
-              </span>
-            </InfoRow>
+            {Array.isArray(result.operations) && result.operations.length > 0 ? (
+              result.operations.map((op, i) => (
+                <InfoRow
+                  key={`${op.opIndex ?? i}-${op.assetCode || "XLM"}`}
+                  label={t("verifyPayment.amount")}
+                >
+                  {op.amount}{" "}
+                  <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
+                    {op.assetCode || "XLM"}
+                  </span>
+                </InfoRow>
+              ))
+            ) : (
+              <InfoRow label={t("verifyPayment.amount")}>
+                {result.amount}{" "}
+                <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
+                  {result.assetCode || "XLM"}
+                </span>
+              </InfoRow>
+            )}
+            {result.creditedAmount != null && (
+              <InfoRow label={t("verifyPayment.creditedAmount")}>
+                {result.creditedAmount}{" "}
+                <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
+                  {result.feeCurrency || result.assetCode || "XLM"}
+                </span>
+              </InfoRow>
+            )}
             <InfoRow label={t("verifyPayment.memoLabel")} mono>{result.memo}</InfoRow>
             <InfoRow label={t("verifyPayment.date")}>
               {result.date ? new Date(result.date).toLocaleString() : "—"}
