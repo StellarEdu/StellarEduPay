@@ -40,15 +40,42 @@ const logger = require('../utils/logger').child('HorizonStreamingService');
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 const STREAMING_ENABLED = process.env.HORIZON_STREAMING_ENABLED !== 'false';
+// Issue #1989: ingestion mode. 'stream' = SSE streams only (safety-net poll
+// still runs), 'poll' = no streams, polling only, 'hybrid' = streams plus the
+// regular poller. Streams are always leader-only so N replicas open exactly one
+// stream per active school across the cluster.
+const INGESTION_MODE = (process.env.INGESTION_MODE || 'hybrid').toLowerCase();
+const VALID_INGESTION_MODES = ['stream', 'poll', 'hybrid'];
+const EFFECTIVE_INGESTION_MODE = VALID_INGESTION_MODES.includes(INGESTION_MODE)
+  ? INGESTION_MODE
+  : 'hybrid';
 const RECONNECT_INITIAL_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_MS || '1000', 10);
 const RECONNECT_MAX_MS = parseInt(process.env.STREAM_RECONNECT_MAX_MS || '64000', 10);
 const SAFETY_NET_INTERVAL_MS = parseInt(process.env.STREAM_SAFETY_NET_INTERVAL_MS || '600000', 10);
 const SCHOOLS_REFRESH_MS = parseInt(process.env.STREAM_SCHOOLS_REFRESH_MS || '60000', 10);
+// Max messages buffered while one is being processed before the stream is
+// paused/closed so the safety-net poller can catch up (Issue #1988).
+const STREAM_MAX_QUEUE = parseInt(process.env.STREAM_MAX_QUEUE || '100', 10);
+
+/**
+ * Compare two Horizon paging tokens numerically (they are decimal strings).
+ * Returns true when `next` is strictly ahead of `current`.
+ */
+function _isCursorAhead(next, current) {
+  if (!next) return false;
+  if (!current) return true;
+  try {
+    return BigInt(next) > BigInt(current);
+  } catch (_) {
+    return String(next) !== String(current);
+  }
+}
 
 // ── Prometheus metrics (lazily registered) ────────────────────────────────────
 let _streamsOpen;
 let _streamReconnectsTotal;
 let _streamLag;
+let _horizonRequestsTotal;
 
 function _ensureMetrics() {
   let metrics;
@@ -119,6 +146,12 @@ class SchoolStream {
     this._active = false;
     this._lastMessageAt = null;
     this._fencingToken = Date.now(); // monotonically increasing lock token per stream
+
+    // Serialised message processing (Issue #1988): messages are queued and
+    // handled one at a time so cursor writes can never go backwards.
+    this._queue = [];
+    this._draining = false;
+    this._paused = false;
   }
 
   start() {
@@ -131,6 +164,8 @@ class SchoolStream {
   stop() {
     this._active = false;
     this._clearReconnectTimer();
+    this._queue = [];
+    this._paused = false;
     this._closeStream?.();
     this._closeStream = null;
     logger.info('Stopped Horizon stream', { schoolId: this.schoolId });

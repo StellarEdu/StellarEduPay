@@ -60,7 +60,7 @@ const WORKER_CONFIG = {
     gracePeriodMs:      parseInt(process.env.WORKER_HEARTBEAT_GRACE_MS || '60000', 10),
   },
   [WORKER_NAMES.REMINDER_SCHEDULER]: {
-    expectedIntervalMs: parseInt(process.env.REMINDER_INTERVAL_MS || '86400000', 10),
+    expectedIntervalMs: parseInt(process.env.REMINDER_INTERVAL_MS || '3600000', 10),
     gracePeriodMs:      parseInt(process.env.WORKER_HEARTBEAT_GRACE_MS || '120000', 10),
   },
   [WORKER_NAMES.TX_QUEUE_WORKER]: {
