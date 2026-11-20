@@ -651,13 +651,12 @@ const BULK_IMPORT_MAX_FAILURES = parseInt(process.env.BULK_IMPORT_MAX_FAILURES, 
 // exactly these headers so bursars do not have to guess the mapping.
 const BULK_IMPORT_TEMPLATE_HEADERS = ['studentId', 'name', 'class', 'feeAmount', 'parentEmail', 'parentPhone'];
 
+// The template must contain only the header row and one clearly-marked example
+// row: any extra line (e.g. a "# Known classes" comment) is parsed as a student
+// row and reported as a validation failure (#1994).
 function buildBulkImportTemplateCsv(classNames = []) {
   const example = ['STU001', 'Jane Doe', classNames[0] || 'Grade 1', '', 'parent@example.com', '+15555550100'];
   const lines = [BULK_IMPORT_TEMPLATE_HEADERS.join(','), example.join(',')];
-  if (classNames.length > 0) {
-    lines.push('');
-    lines.push(`# Known classes: ${classNames.join(', ')}`);
-  }
   return `${lines.join('\n')}\n`;
 }
 

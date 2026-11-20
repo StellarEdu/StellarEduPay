@@ -27,9 +27,10 @@ describe('buildBulkImportTemplateCsv (#1816)', () => {
     expect(lines[1]).toBe('STU001,Jane Doe,Grade 1,,parent@example.com,+15555550100');
   });
 
-  it('lists the school class options in a comment line when classes exist', () => {
+  it('emits only the header and example rows, with no comment lines (#1994)', () => {
     const csv = buildBulkImportTemplateCsv(['Grade 1', 'Grade 2']);
-    expect(csv).toContain('# Known classes: Grade 1, Grade 2');
+    expect(csv).not.toContain('# Known classes');
+    expect(csv.trimEnd().split('\n')).toHaveLength(2);
   });
 
   it('omits the class comment when the school has no fee structures', () => {
