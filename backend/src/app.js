@@ -194,19 +194,11 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
-// Issue #1797 — the raw body is only kept for inbound webhook routes that verify
-// a signature over the exact bytes. Keeping a UTF-8 copy of every JSON body
-// doubled memory use (including bulk imports) and made the signed bytes depend
-// on re-decoding. The Buffer is stored as-is so signatures match the wire bytes.
-const RAW_BODY_ROUTE_RE = /^\/api\/(email-provider-webhook|email\/webhooks)(\/|$)/;
-app.use(express.json({
-  limit: config.MAX_BODY_SIZE,
-  verify: (req, res, buf) => {
-    if (RAW_BODY_ROUTE_RE.test(req.originalUrl.split('?')[0])) {
-      req.rawBody = buf;
-    }
-  },
-}));
+// Issue #2015 — no global `verify` hook: capturing req.rawBody for every
+// request kept a full copy of each body in memory (including bulk imports).
+// Signature-verifying webhook routes capture the raw bytes themselves with a
+// route-level express.json({ verify }) — see routes/emailRoutes.js.
+app.use(express.json({ limit: config.MAX_BODY_SIZE }));
 app.use(requestLogger());
 
 // ── Cache-Control: no-store on auth and sensitive data routes ─────────────────

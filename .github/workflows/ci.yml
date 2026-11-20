@@ -266,6 +266,38 @@ jobs:
       - name: Check deploy/ image references match the canonical registry
         run: node scripts/check-k8s-images.js
 
+  # ── #2016: Prometheus alert rules ──────────────────────────────────────────
+  # Three alert files were missing from rule_files and never loaded. The
+  # coverage script fails if any file in monitoring/alerts/ is not matched by
+  # the rule_files globs; promtool validates the config and every rule file.
+  prometheus-rules:
+    name: Prometheus alert rules (#2016)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      - name: Check every alert file is loaded by rule_files
+        run: node scripts/check-prometheus-rules.js
+      - name: Install promtool
+        run: |
+          set -euo pipefail
+          version="2.51.2"
+          curl -fsSL -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${version}/prometheus-${version}.linux-amd64.tar.gz"
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp
+          sudo install "/tmp/prometheus-${version}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+      - name: Validate prometheus.yml with promtool
+        run: promtool check config monitoring/prometheus.yml
+      - name: Validate every alert rule file with promtool
+        run: |
+          set -euo pipefail
+          for file in monitoring/alerts/*.yml; do
+            promtool check rules "$file"
+          done
+
   dead-code-backend:
     name: Detect dead/orphan backend modules (knip)
     runs-on: ubuntu-latest

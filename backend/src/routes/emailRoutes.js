@@ -12,6 +12,16 @@ const {
 } = require('../controllers/emailWebhookController');
 const { genericEmailWebhookAuth } = require('../middleware/genericEmailWebhookAuth');
 
+// Issue #2015 — the raw body is captured only here, on the routes that verify a
+// signature over the exact wire bytes. The global express.json() in app.js no
+// longer keeps a copy of every request body.
+const captureRawBody = express.json({
+  limit: '256kb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+});
+
 // Public provider webhooks (bounce/complaint). Authenticated inside the
 // controller (SNS / SendGrid signature verification or the X-Webhook-Token
 // shared secret — Issue #1537), not by admin auth. Amazon SNS posts with

@@ -253,6 +253,27 @@ const transactionQueueDepth = new client.Gauge({
   registers: [registry],
 });
 
+// Issue #2017 — the TransactionQueueBacklogSustained alert compares
+// transaction_queue_depth against transaction_queue_depth_alert_threshold, but
+// nothing exported that metric, so the alert could never fire. Export it as a
+// gauge set from config at startup (see setTransactionQueueAlertThreshold).
+const transactionQueueDepthAlertThreshold = new client.Gauge({
+  name: 'transaction_queue_depth_alert_threshold',
+  help: 'Configured transaction queue depth at which the backlog alert fires',
+  registers: [registry],
+});
+
+/**
+ * Publish the configured transaction queue alert threshold so the
+ * TransactionQueueBacklogSustained alert rule has something to compare against.
+ * @param {number} threshold
+ */
+function setTransactionQueueAlertThreshold(threshold) {
+  const value = Number(threshold);
+  if (!Number.isFinite(value) || value < 0) return;
+  transactionQueueDepthAlertThreshold.set(value);
+}
+
 // Payment limit rejections (#1117). Without this there is no signal telling
 // operators that the configured limits are being hit often enough to warrant
 // adjusting — the limits were previously a control nobody could observe.
@@ -316,6 +337,15 @@ const horizonRequestDurationSeconds = new client.Histogram({
   help: 'Duration of Horizon API requests in seconds',
   labelNames: ['operation'],
   buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  registers: [registry],
+});
+
+// horizon_up — 1 when the last Horizon probe succeeded, 0 when it failed (#2013).
+// Horizon is NOT part of readiness: an SDF Horizon outage must not mark pods
+// NotReady. Alert on `horizon_up == 0` instead.
+const horizonUp = new client.Gauge({
+  name: 'horizon_up',
+  help: 'Whether the last Horizon health probe succeeded (1 = up, 0 = unreachable)',
   registers: [registry],
 });
 
@@ -616,6 +646,8 @@ module.exports = {
   sendAdminAlertTotal,
   authIpBlocksTotal,
   transactionQueueDepth,
+  transactionQueueDepthAlertThreshold,
+  setTransactionQueueAlertThreshold,
   paymentLimitTriggeredTotal,
   paymentBatchTotal,
   paymentBatchItemsTotal,
@@ -623,6 +655,7 @@ module.exports = {
   stuckPaymentsGauge,
   paymentFunnelTotal,
   horizonRequestDurationSeconds,
+  horizonUp,
   webhookDeliveryTotal,
   notificationSentTotal,
   backupLastSuccessTimestamp,
