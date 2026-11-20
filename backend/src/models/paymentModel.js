@@ -497,6 +497,10 @@ paymentSchema.statics.computeCreditedAmount = computeCreditedAmount;
 // multi-operation transaction and must not exist (see migration 035).
 paymentSchema.index({ schoolId: 1, txHash: 1, opIndex: 1 }, { unique: true });
 
+// Issue #2002: cross-tenant stuck-payment reconciliation scans by status and
+// sorts by submittedAt.
+paymentSchema.index({ status: 1, submittedAt: 1 });
+
 const Payment = mongoose.model('Payment', paymentSchema);
 
 module.exports = Payment;

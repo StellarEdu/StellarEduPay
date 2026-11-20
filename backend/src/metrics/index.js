@@ -198,11 +198,12 @@ const stuckPaymentsGauge = new client.Gauge({
     try {
       const { STUCK_PAYMENT_THRESHOLD_MS } = require('../services/stuckPaymentReconciliation');
       const Payment = require('../models/paymentModel');
+      // Issue #2002: cross-tenant gauge — must bypass the tenantScope plugin.
       const count = await Payment.countDocuments({
         status: 'SUBMITTED',
         submittedAt: { $lt: new Date(Date.now() - STUCK_PAYMENT_THRESHOLD_MS) },
         deletedAt: null,
-      });
+      }).bypassTenantScope();
       this.set(count);
     } catch {
       // DB may not be ready yet — scrape still succeeds with stale/zero values
