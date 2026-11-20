@@ -3,10 +3,19 @@ kind: Ingress
 metadata:
   name: stellaredupay
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Defaults for every path (issue #2006). SSE-specific settings live on the
+    # dedicated `stellaredupay-sse` Ingress below so a slow SSE client can no
+    # longer hold a 1-hour connection on ordinary API routes.
+    #
+    # proxy-body-size mirrors MAX_BODY_SIZE in deploy/k8s/configmap.yaml (1mb).
+    # Keep the two in sync; /api/students/bulk has its own 2 MB rule below.
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    # Connection/rate limits for the public endpoints (issue #2006).
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
     # Enforce HTTPS by redirecting all HTTP traffic to HTTPS
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     # Issue TLS certificate using cert-manager and Let's Encrypt
@@ -57,6 +66,10 @@ spec:
           # forwarded to the backend, so they stay reachable solely on the
           # in-cluster Service for kubelet probes. Do not add a /health path.
           # Detailed diagnostics are at /api/admin/health/details (admin auth).
+          #
+          # Paths with their own Ingress (longest-prefix wins in NGINX):
+          #   /api/payments/events  -> stellaredupay-sse (SSE timeouts)
+          #   /api/students/bulk    -> stellaredupay-bulk (2 MB body)
           - path: /api
             pathType: Prefix
             backend:
@@ -72,3 +85,68 @@ spec:
                 name: frontend
                 port:
                   number: 3000
+---
+# SSE-only Ingress (issue #2006). Server-Sent Events need long-lived
+# connections and no response buffering, so these settings are scoped to
+# /api/payments/events instead of the whole /api prefix. NGINX picks the
+# longest matching path, so this rule wins over the /api rule above.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stellaredupay-sse
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - stellaredupay.example.com
+      secretName: stellaredupay-tls
+  rules:
+    - host: stellaredupay.example.com
+      http:
+        paths:
+          - path: /api/payments/events
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 5000
+---
+# Bulk student import Ingress (issue #2006). The CSV upload accepts up to
+# 2 MB, which is larger than the global MAX_BODY_SIZE (1mb) used by the
+# default /api rule.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stellaredupay-bulk
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - stellaredupay.example.com
+      secretName: stellaredupay-tls
+  rules:
+    - host: stellaredupay.example.com
+      http:
+        paths:
+          - path: /api/students/bulk
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 5000
