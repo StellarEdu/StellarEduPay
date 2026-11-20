@@ -29,9 +29,22 @@ const logger = require('../utils/logger');
 const { resolveCorrelationId } = require('../utils/correlationId');
 const { injectTraceContext } = require('../tracing');
 const { getRedisClient, isRedisReady } = require('../config/redisClient');
-const { transactionQueueProcessingDurationSeconds, transactionQueueFailedTotal, transactionQueueDepth } = require('../metrics');
+const {
+  transactionQueueProcessingDurationSeconds,
+  transactionQueueFailedTotal,
+  transactionQueueDepth,
+  setTransactionQueueAlertThreshold,
+} = require('../metrics');
 
 const QUEUE_NAME = 'transaction-processing';
+
+// Issue #2017 — depth at which the TransactionQueueBacklogSustained alert fires.
+// Exported as transaction_queue_depth_alert_threshold so the rule can compare
+// against it; mirrors monitoring/alerts/transaction_queue.yml.
+const TRANSACTION_QUEUE_ALERT_THRESHOLD =
+  parseInt(process.env.TRANSACTION_QUEUE_ALERT_THRESHOLD, 10) || 100;
+
+setTransactionQueueAlertThreshold(TRANSACTION_QUEUE_ALERT_THRESHOLD);
 
 // Retry/backoff tuning for recoverPendingJobsWithRetry() — see #1381.
 const RECOVERY_MAX_RETRIES = parseInt(process.env.JOB_RECOVERY_MAX_RETRIES, 10) || 5;
