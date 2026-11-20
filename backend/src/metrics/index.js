@@ -318,6 +318,15 @@ const horizonRequestDurationSeconds = new client.Histogram({
   registers: [registry],
 });
 
+// horizon_up — 1 when the last Horizon probe succeeded, 0 when it failed (#2013).
+// Horizon is NOT part of readiness: an SDF Horizon outage must not mark pods
+// NotReady. Alert on `horizon_up == 0` instead.
+const horizonUp = new client.Gauge({
+  name: 'horizon_up',
+  help: 'Whether the last Horizon health probe succeeded (1 = up, 0 = unreachable)',
+  registers: [registry],
+});
+
 // webhook_delivery_total{outcome} — counts webhook delivery attempts by outcome.
 // outcomes: 'success' (HTTP 2xx), 'failure' (error or non-2xx), 'retry' (queued for retry).
 const webhookDeliveryTotal = new client.Counter({
@@ -622,6 +631,7 @@ module.exports = {
   stuckPaymentsGauge,
   paymentFunnelTotal,
   horizonRequestDurationSeconds,
+  horizonUp,
   webhookDeliveryTotal,
   notificationSentTotal,
   backupLastSuccessTimestamp,

@@ -82,6 +82,19 @@ function reasonFor(dependency, message) {
 }
 
 async function checkStellar() {
+  const result = await probeStellar();
+  // #2013: Horizon is reported separately (health body + horizon_up metric) and
+  // is deliberately NOT part of readiness — an SDF Horizon outage must not take
+  // the admin API offline by marking every pod NotReady.
+  try {
+    require('../metrics').horizonUp.set(result.status === 'ok' ? 1 : 0);
+  } catch {
+    // metrics registry unavailable (e.g. during shutdown) — never fail the probe
+  }
+  return result;
+}
+
+async function probeStellar() {
   const start = Date.now();
   let timeoutHandle;
   try {
@@ -367,7 +380,9 @@ async function version(req, res) {
 /**
  * GET /health/ready
  * Readiness probe: returns 200 only when the service can handle traffic.
- * Checks DB, Horizon, and shutdown readiness; returns 503 if any is unavailable.
+ * Checks shutdown state, DB and (when configured) Redis only; returns 503 if
+ * any of those is unavailable. Horizon is reported separately (#2013) and never
+ * affects readiness, so a Horizon outage cannot take the admin API offline.
  */
 async function healthReady(req, res) {
   // Check if shutdown has started (readiness flag flipped)
@@ -394,7 +409,13 @@ async function healthReady(req, res) {
       ? stellarResult.value
       : { status: 'unreachable', error: stellarResult.reason?.message };
 
-  const ready = db.healthy === true && stellar.status === 'ok';
+  // #2013: Redis is only a readiness dependency when it is configured (the
+  // retry/queue pipeline needs it); without it the service runs on MongoDB.
+  const redisStatus = getRedisStatus();
+  const redisConfigured = Boolean(redisStatus.configured);
+  const redisReady = !redisConfigured || redisStatus.status === 'ready';
+
+  const ready = db.healthy === true && redisReady;
   const statusCode = ready ? 200 : 503;
 
   // #1540: this probe is unauthenticated — expose per-dependency status and a
@@ -407,7 +428,14 @@ async function healthReady(req, res) {
         status: db.healthy ? 'healthy' : 'unhealthy',
         ...(db.reason && { reason: reasonFor('database', db.reason) }),
       },
-      stellar: {
+      ...(redisConfigured && {
+        redis: {
+          status: redisStatus.status,
+          ...(redisStatus.reason && { reason: reasonFor('redis', redisStatus.reason) }),
+        },
+      }),
+      // Reported for observability only — never affects `status`/HTTP code.
+      horizon: {
         status: stellar.status,
         ...(stellar.error && { reason: reasonFor('stellar', stellar.error) }),
       },
