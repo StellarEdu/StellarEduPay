@@ -40,6 +40,15 @@ const logger = require('../utils/logger').child('HorizonStreamingService');
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 const STREAMING_ENABLED = process.env.HORIZON_STREAMING_ENABLED !== 'false';
+// Issue #1989: ingestion mode. 'stream' = SSE streams only (safety-net poll
+// still runs), 'poll' = no streams, polling only, 'hybrid' = streams plus the
+// regular poller. Streams are always leader-only so N replicas open exactly one
+// stream per active school across the cluster.
+const INGESTION_MODE = (process.env.INGESTION_MODE || 'hybrid').toLowerCase();
+const VALID_INGESTION_MODES = ['stream', 'poll', 'hybrid'];
+const EFFECTIVE_INGESTION_MODE = VALID_INGESTION_MODES.includes(INGESTION_MODE)
+  ? INGESTION_MODE
+  : 'hybrid';
 const RECONNECT_INITIAL_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_MS || '1000', 10);
 const RECONNECT_MAX_MS = parseInt(process.env.STREAM_RECONNECT_MAX_MS || '64000', 10);
 const SAFETY_NET_INTERVAL_MS = parseInt(process.env.STREAM_SAFETY_NET_INTERVAL_MS || '600000', 10);
@@ -66,6 +75,7 @@ function _isCursorAhead(next, current) {
 let _streamsOpen;
 let _streamReconnectsTotal;
 let _streamLag;
+let _horizonRequestsTotal;
 
 function _ensureMetrics() {
   let metrics;
