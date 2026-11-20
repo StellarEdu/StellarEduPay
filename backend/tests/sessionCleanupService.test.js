@@ -19,10 +19,23 @@ jest.mock('../src/utils/logger', () => ({
 
 // ── PaymentIntent mock setup ───────────────────────────────────────────────
 const mockUpdateMany = jest.fn();
+const mockFind = jest.fn();
 
 jest.mock('../src/models/paymentIntentModel', () => ({
   updateMany: (...args) => mockUpdateMany(...args),
+  find: (...args) => mockFind(...args),
 }));
+
+// Chainable query stub for PaymentIntent.find(...).select().limit().bypassTenantScope().lean()
+function mockFindQuery(docs) {
+  const query = {
+    select: () => query,
+    limit: () => query,
+    bypassTenantScope: () => query,
+    lean: () => Promise.resolve(docs),
+  };
+  return query;
+}
 
 // ── Helper: load a fresh isolated module ──────────────────────────────────
 function loadService() {
@@ -36,6 +49,7 @@ function loadService() {
 beforeEach(() => {
   jest.useFakeTimers();
   mockUpdateMany.mockResolvedValue({ modifiedCount: 0 });
+  mockFind.mockReturnValue(mockFindQuery([]));
 });
 
 afterEach(() => {
@@ -47,15 +61,54 @@ afterEach(() => {
 
 describe('cleanupExpiredSessions', () => {
   it('calls PaymentIntent.updateMany with the correct filter and update', async () => {
-    mockUpdateMany.mockResolvedValue({ modifiedCount: 0 });
+    mockFind.mockReturnValue(mockFindQuery([
+      { _id: 'intent-1', schoolId: 'school-1', studentId: 'STU001', expiresAt: new Date() },
+    ]));
+    mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
     const svc = loadService();
     await svc.cleanupExpiredSessions();
 
     expect(mockUpdateMany).toHaveBeenCalledTimes(1);
     const [filter, update] = mockUpdateMany.mock.calls[0];
     expect(filter).toMatchObject({ status: 'pending' });
-    expect(filter.expiresAt).toBeDefined();
+    expect(filter._id).toEqual({ $in: ['intent-1'] });
     expect(update).toEqual({ $set: { status: 'expired' } });
+  });
+
+  it('bypasses tenant scope on both cross-tenant queries', async () => {
+    const query = mockFindQuery([
+      { _id: 'intent-1', schoolId: 'school-1', studentId: 'STU001', expiresAt: new Date() },
+    ]);
+    const bypassSpy = jest.spyOn(query, 'bypassTenantScope');
+    mockFind.mockReturnValue(query);
+    mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
+
+    const svc = loadService();
+    await svc.cleanupExpiredSessions();
+
+    expect(bypassSpy).toHaveBeenCalled();
+    const [, , options] = mockUpdateMany.mock.calls[0];
+    expect(options).toMatchObject({ _bypassTenantScope: true });
+  });
+
+  it('processes expired intents in batches of 1000', async () => {
+    const batch = Array.from({ length: 1000 }, (_, i) => ({
+      _id: `intent-${i}`,
+      schoolId: 'school-1',
+      studentId: 'STU001',
+      expiresAt: new Date(),
+    }));
+    mockFind
+      .mockReturnValueOnce(mockFindQuery(batch))
+      .mockReturnValueOnce(mockFindQuery([]));
+    mockUpdateMany.mockResolvedValue({ modifiedCount: 1000 });
+
+    const svc = loadService();
+    await svc.cleanupExpiredSessions();
+
+    expect(mockFind).toHaveBeenCalledTimes(2);
+    expect(mockUpdateMany).toHaveBeenCalledTimes(1);
+    expect(mockUpdateMany.mock.calls[0][0]._id.$in).toHaveLength(1000);
   });
 
   it('logs when records are expired', async () => {

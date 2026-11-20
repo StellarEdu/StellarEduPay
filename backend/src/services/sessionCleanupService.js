@@ -5,6 +5,7 @@ const auditService = require('./auditService');
 const logger = require('../utils/logger').child('SessionCleanupService');
 
 const INTERVAL_MS = parseInt(process.env.SESSION_CLEANUP_INTERVAL_MS, 10) || 60 * 60 * 1000;
+const BATCH_SIZE = 1000;
 let _timer = null;
 let _running = false;
 
@@ -12,14 +13,31 @@ async function cleanupExpiredSessions() {
   if (_running) return;
   _running = true;
   try {
-    const expiredIntents = await PaymentIntent.find({ status: 'pending', expiresAt: { $lt: new Date() } }).select('_id schoolId studentId expiresAt').lean();
+    let totalModified = 0;
 
-    if (expiredIntents.length === 0) return;
+    // Process expired intents in bounded batches so a large backlog does not
+    // hold a single long-running query/update.
+    for (;;) {
+      // Cross-tenant infrastructure sweep: this job expires intents for every
+      // school, so it must bypass the tenantScope plugin (no schoolId filter).
+      const expiredIntents = await PaymentIntent.find({ status: 'pending', expiresAt: { $lt: new Date() } })
+        .select('_id schoolId studentId expiresAt')
+        .limit(BATCH_SIZE)
+        .bypassTenantScope()
+        .lean();
 
-    const result = await PaymentIntent.updateMany({ status: 'pending', expiresAt: { $lt: new Date() } }, { $set: { status: 'expired' } });
+      if (expiredIntents.length === 0) break;
 
-    if (result.modifiedCount > 0) {
-      logger.info('Expired sessions cleaned up', { count: result.modifiedCount });
+      const ids = expiredIntents.map((intent) => intent._id);
+
+      // Same cross-tenant bypass: the update spans all schools.
+      const result = await PaymentIntent.updateMany(
+        { _id: { $in: ids }, status: 'pending' },
+        { $set: { status: 'expired' } },
+        { _bypassTenantScope: true }
+      );
+
+      totalModified += result.modifiedCount || 0;
 
       // Group by schoolId and studentId for bulk audit logging
       const auditBySchoolStudent = {};
@@ -51,6 +69,14 @@ async function cleanupExpiredSessions() {
           result: 'success',
         });
       }
+
+      // Stop when the batch was not full, or when nothing was actually
+      // modified (avoids re-reading the same pending docs forever).
+      if (expiredIntents.length < BATCH_SIZE || !result.modifiedCount) break;
+    }
+
+    if (totalModified > 0) {
+      logger.info('Expired sessions cleaned up', { count: totalModified });
     }
   } catch (err) {
     logger.error('Session cleanup failed', { error: err.message });
