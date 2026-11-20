@@ -4,7 +4,14 @@ const Joi = require('joi');
 const PaymentPlan = require('../models/paymentPlanModel');
 const Student = require('../models/studentModel');
 const { logAudit } = require('../services/auditService');
+const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const money = require('../utils/money');
+
+// #1985 — Manual settlements above this amount require owner role and a
+// second approver (two-person rule) before the ledger entry is written.
+const MANUAL_SETTLEMENT_APPROVAL_THRESHOLD = Number(
+  process.env.MANUAL_SETTLEMENT_APPROVAL_THRESHOLD || 1000
+);
 
 const MAX_INSTALLMENTS = 24;
 
