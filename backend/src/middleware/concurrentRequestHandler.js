@@ -398,7 +398,15 @@ function createConcurrentRequestMiddleware(options = {}) {
     },
 
     // ── Request Queue Middleware ───────────────────────────────────────────────
+    // Long-lived responses (SSE, CSV/JSON exports) must not hold a global queue
+    // slot for their whole lifetime (Issue #2010). Routes mark themselves with
+    // `res.locals.longLived = true` (see markLongLived) and the slot is released
+    // as soon as the response headers are flushed. Streaming connections are
+    // capped separately by `maxLongLived` so they cannot exhaust the process.
     requestQueue: (options = {}) => {
+      const maxLongLived = options.maxLongLived || 200;
+      let longLivedActive = 0;
+
       return async (req, res, next) => {
         const timeoutMs = options.timeoutMs || 30000;
         const priority = options.priorityExtractor?.(req) || 0;
@@ -406,9 +414,54 @@ function createConcurrentRequestMiddleware(options = {}) {
         try {
           await requestQueue.enqueue(async () => {
             return new Promise((resolve) => {
-              req.queueDone = resolve;
-              res.on('finish', resolve);
-              res.on('close', resolve);
+              let released = false;
+              const release = () => {
+                if (released) return;
+                released = true;
+                resolve();
+              };
+
+              req.queueDone = release;
+              res.on('finish', release);
+              res.on('close', release);
+
+              if (res.locals && res.locals.longLived) {
+                if (longLivedActive >= maxLongLived) {
+                  res.set('Retry-After', '5');
+                  res.status(503).json({
+                    error: 'Too many streaming connections - please retry',
+                    code: 'STREAM_LIMIT_EXCEEDED',
+                  });
+                  return release();
+                }
+                longLivedActive++;
+                let counted = true;
+                const uncount = () => {
+                  if (!counted) return;
+                  counted = false;
+                  longLivedActive--;
+                };
+                res.on('finish', uncount);
+                res.on('close', uncount);
+                // Release the global slot once headers are on the wire; the
+                // connection itself stays open and is tracked by the cap above.
+                const originalWriteHead = res.writeHead;
+                res.writeHead = function writeHeadAndRelease() {
+                  const result = originalWriteHead.apply(this, arguments);
+                  release();
+                  return result;
+                };
+                const originalFlushHeaders = res.flushHeaders;
+                if (typeof originalFlushHeaders === 'function') {
+                  res.flushHeaders = function flushHeadersAndRelease() {
+                    const result = originalFlushHeaders.apply(this, arguments);
+                    release();
+                    return result;
+                  };
+                }
+                res.on('pipe', release);
+              }
+
               next();
             });
           }, priority, timeoutMs);
@@ -419,6 +472,13 @@ function createConcurrentRequestMiddleware(options = {}) {
           });
         }
       };
+    },
+
+    // ── Long-Lived Route Marker ────────────────────────────────────────────────
+    // Mount on SSE / export routes so requestQueue releases the slot on flush.
+    markLongLived: () => (req, res, next) => {
+      res.locals.longLived = true;
+      next();
     },
 
     // ── Request Deduplication Middleware ───────────────────────────────────────
