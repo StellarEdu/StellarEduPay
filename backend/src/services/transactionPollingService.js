@@ -129,18 +129,27 @@ async function processTransaction(tx, school, fencingToken) {
     return { processed: false, reason: 'invalid_payment', terminal: true };
   }
 
-  const { memo, memoType } = valid;
-  // #1973 — every creditable operation, each with its own asset and amount.
-  const creditableOps = extractCreditableOperations(valid);
-  if (creditableOps.length === 0) {
-    return { processed: false, reason: 'invalid_payment', terminal: true };
-  }
+  const { payOp, memo, asset } = valid;
+  // detectAsset returns { assetCode, assetType, assetIssuer } — the code lives
+  // on `assetCode`, never `asset.code` (#1555, #1970). Fall back to the
+  // operation's own asset code so per-asset limits are always applied.
+  const assetCode = asset?.assetCode || payOp?.asset?.assetCode || 'XLM';
+  // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
+  const paymentAmount = normalizeToNumber(payOp.amount);
 
-  // Validate each operation's amount against limits using its own asset.
-  for (const op of creditableOps) {
-    const limitValidation = await validatePaymentAmount(op.amount, {
+  // Validate payment amount is within configured limits for THIS asset
+  const limitValidation = await validatePaymentAmount(paymentAmount, {
+    schoolId,
+    asset: assetCode,
+  });
+  if (!limitValidation.valid) {
+    logger.warn('Payment outside limits', {
+      txHash: tx.hash,
+      correlationId,
       schoolId,
-      asset: op.assetCode,
+      amount: paymentAmount,
+      asset: assetCode,
+      error: limitValidation.error
     });
     if (!limitValidation.valid) {
       logger.warn('Payment outside limits', {
@@ -220,6 +229,39 @@ async function processTransaction(tx, school, fencingToken) {
 
   // Extract network fee
   const networkFee = parseFloat(tx.fee_paid || '0') / 10000000;
+
+  // Record payment
+  const paymentData = {
+    schoolId,
+    studentId: memo,
+    txHash: tx.hash,
+    transactionHash: tx.hash,
+    correlationId,
+    amount: paymentAmount,
+    feeAmount: student.feeAmount,
+    // feeValidationStatus and excessAmount are kept for the payment record so
+    // the UI can still show per-payment over/under flags; they do NOT drive
+    // the student balance (that is exclusively updateStudentBalance's job).
+    feeValidationStatus: cumulativeStatus,
+    excessAmount,
+    status: isSuspicious ? 'FAILED' : (isConfirmed ? 'SUCCESS' : 'PENDING'),
+    memo,
+    senderAddress,
+    isSuspicious,
+    suspicionReason,
+    receivedOnRetiredAddress: Boolean(school.receivedOnRetiredAddress),
+    ledger: txLedger,
+    ledgerSequence: txLedger,
+    confirmationStatus,
+    confirmationState: confirmation.state,
+    confirmedAt: txDate,
+    referenceCode: await generateReferenceCode(),
+    networkFee,
+    // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
+    fiatSnapshot: isConfirmed && !isSuspicious
+      ? await captureFiatSnapshot(paymentAmount, assetCode || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
+      : null,
+  };
 
   const session = await mongoose.connection.startSession();
   try {
@@ -401,14 +443,7 @@ async function processTransaction(tx, school, fencingToken) {
       });
     }
 
-    if (balanceLockContended) {
-      return { processed: recorded.length > 0, payments: recorded, reason: 'balance_lock_contended', transient: true };
-    }
-    if (recorded.length === 0) {
-      // Every operation was either a duplicate or rejected — terminal.
-      return { processed: false, reason: 'no_creditable_operations', terminal: true };
-    }
-    return { processed: true, payments: recorded, terminal: true };
+    return { processed: true, payment: paymentData, payments: [paymentData] };
   } catch (error) {
     if (error.code === 11000) {
       return { processed: false, reason: 'duplicate', terminal: true };
@@ -577,9 +612,14 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
           if (tx.paging_token) cursor = tx.paging_token;
           continue;
         }
+        // processTransaction records one row per creditable operation (#1760),
+        // so a single tx may yield several payments. Count each recorded row.
         const result = await processTransaction(tx, scope, fencingToken);
-        if (result.processed) {
-          processedCount++;
+        const recorded = result.processed
+          ? (Array.isArray(result.payments) ? result.payments.length : 1)
+          : 0;
+        if (recorded > 0) {
+          processedCount += recorded;
           if (retired) {
             logger.warn('Payment credited to a retired wallet address', {
               schoolId: school.schoolId,

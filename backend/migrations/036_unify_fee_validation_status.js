@@ -24,6 +24,11 @@
 
 const CANONICAL_STATUSES = ['valid', 'underpaid', 'overpaid', 'partial', 'unknown'];
 
+// Confirmation states at or above CONFIRMED. Mirrors
+// utils/confirmationState.js; duplicated here so the migration stays
+// self-contained and stable even if the enum is renamed later.
+const CONFIRMED_OR_ABOVE = ['confirmed', 'finalized'];
+
 module.exports = {
   async up(db) {
     const payments = db.collection('payments');
@@ -34,6 +39,7 @@ module.exports = {
       underpaidToPartial: 0,
       unknownNormalized: 0,
       underpaidKept: 0,
+      suspiciousFailedToSuccess: 0,
     };
 
     // 1. Normalize any non-canonical values to 'unknown'.
@@ -90,13 +96,34 @@ module.exports = {
       log.underpaidToPartial += result.modifiedCount || 0;
     }
 
+    // 4. Suspicious payments were historically stored as FAILED even though
+    //    the transaction succeeded on-chain. Treat suspicion as separate from
+    //    settlement: flip confirmed suspicious FAILED rows to SUCCESS and mark
+    //    them for review. Idempotent: the query only matches FAILED rows, so
+    //    re-running it changes nothing.
+    const suspiciousResult = await payments.updateMany(
+      {
+        status: 'FAILED',
+        isSuspicious: true,
+        confirmationState: { $in: CONFIRMED_OR_ABOVE },
+      },
+      {
+        $set: {
+          status: 'SUCCESS',
+          reviewStatus: 'pending_review',
+        },
+      }
+    );
+    log.suspiciousFailedToSuccess = suspiciousResult.modifiedCount || 0;
+
     // eslint-disable-next-line no-console
     console.log(
       `[migration 036] feeValidationStatus normalization complete: ` +
         `scanned=${log.scanned} ` +
         `underpaid->partial=${log.underpaidToPartial} ` +
         `underpaid kept (missed installment)=${log.underpaidKept} ` +
-        `normalized to unknown=${log.unknownNormalized}`
+        `normalized to unknown=${log.unknownNormalized} ` +
+        `suspicious FAILED->SUCCESS=${log.suspiciousFailedToSuccess}`
     );
 
     return log;

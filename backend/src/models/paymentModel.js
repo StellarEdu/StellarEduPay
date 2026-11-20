@@ -105,7 +105,28 @@ function isCountedAsPaid(paymentOrStatus) {
     typeof paymentOrStatus === 'string'
       ? paymentOrStatus
       : paymentOrStatus && paymentOrStatus.status;
+  // #1972 — A suspicious payment is still a settled payment: the funds
+  // arrived on-chain. It counts as received (reports, reconciliation) even
+  // while it awaits review; it is excluded from balances separately via the
+  // isSuspicious filter in updateStudentBalance.
   return status === 'SUCCESS' || status === 'REFUNDED';
+}
+
+/**
+ * #1972 — Predicate: is this payment received-but-pending-review?
+ * True when the payment settled on-chain (SUCCESS) but was flagged as
+ * suspicious and has not yet been cleared or refunded.
+ *
+ * @param {object} payment a Payment document/lean object
+ * @returns {boolean}
+ */
+function isPendingReview(payment) {
+  if (!payment) return false;
+  return (
+    payment.status === 'SUCCESS' &&
+    payment.isSuspicious === true &&
+    (payment.reviewStatus === 'pending_review' || payment.reviewStatus == null)
+  );
 }
 
 /**
@@ -285,6 +306,22 @@ const paymentSchema = new mongoose.Schema(
     // has rotated away from but is still draining. The school is notified.
     receivedOnRetiredAddress: { type: Boolean, default: false },
     suspicionReason: { type: String, default: null },
+    // #1972 — Suspicion is separate from settlement. A suspicious payment
+    // still succeeded on-chain (the school wallet holds the funds), so it is
+    // stored as SUCCESS + isSuspicious: true and enters review. This field
+    // tracks the review outcome:
+    //   'pending_review' — flagged, awaiting an admin decision
+    //   'cleared'        — false positive; the payment credits the balance
+    //   'refunded'       — confirmed problematic and refunded to the sender
+    // Suspicious rows are excluded from student balances (see
+    // updateStudentBalance) but included in "funds received" totals and
+    // wallet reconciliation.
+    reviewStatus: {
+      type: String,
+      enum: ['pending_review', 'cleared', 'refunded'],
+      default: null,
+      index: true,
+    },
     // Review workflow for flagged payments (issue #852). A flag starts as
     // 'flagged'; an admin clears it (false positive → 'cleared', restoring the
     // payment) or confirms it as fraud ('confirmed_fraud'). All transitions are
@@ -400,6 +437,9 @@ paymentSchema.pre('save', function syncDerivedLifecycleFields(next) {
 // independently.
 paymentSchema.statics.isCountedAsPaid = isCountedAsPaid;
 paymentSchema.statics.countedAsPaidFilter = countedAsPaidFilter;
+// #1972 — Suspicion is separate from settlement: expose the pending-review
+// predicate so services can distinguish received-but-unreviewed payments.
+paymentSchema.statics.isPendingReview = isPendingReview;
 paymentSchema.statics.deriveConfirmationState = deriveConfirmationState;
 paymentSchema.statics.deriveConfirmationStatus = deriveConfirmationStatus;
 // #1761 — Expose the rejection helpers so every idempotency / duplicate
@@ -459,6 +499,7 @@ const Payment = mongoose.model('Payment', paymentSchema);
 module.exports = Payment;
 module.exports.isCountedAsPaid = isCountedAsPaid;
 module.exports.countedAsPaidFilter = countedAsPaidFilter;
+module.exports.isPendingReview = isPendingReview;
 module.exports.deriveConfirmationState = deriveConfirmationState;
 module.exports.deriveConfirmationStatus = deriveConfirmationStatus;
 module.exports.existingPaymentFilter = existingPaymentFilter;

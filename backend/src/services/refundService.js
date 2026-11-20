@@ -117,6 +117,11 @@ function buildPrincipal(auditContext, admin) {
  *
  * #1565: principal must be a stable userId object; 'unknown' is rejected.
  *
+ * #1972: Suspicion is separate from settlement. A payment flagged as suspicious
+ * is still stored as SUCCESS (the funds arrived on-chain), so it is refundable
+ * like any other SUCCESS payment — but a reason is mandatory so the review trail
+ * records why the flagged payment was refunded.
+ *
  * @param {string}  schoolId
  * @param {string}  originalTxHash
  * @param {string}  studentId
@@ -147,6 +152,14 @@ async function initiateRefund(schoolId, originalTxHash, studentId, amount, reaso
     if (!payment) {
       const err = new Error('Original payment not found or not in SUCCESS status');
       err.code = 'PAYMENT_NOT_FOUND';
+      throw err;
+    }
+
+    // #1972 — Suspicious payments are stored as SUCCESS (funds received) and are
+    // refundable, but the reason is mandatory so the refund is auditable.
+    if (payment.isSuspicious && (!reason || !String(reason).trim())) {
+      const err = new Error('A reason is required to refund a payment flagged as suspicious');
+      err.code = 'REASON_REQUIRED';
       throw err;
     }
 

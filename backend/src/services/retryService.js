@@ -12,7 +12,8 @@
 const PendingVerification = require("../models/pendingVerificationModel");
 const Payment = require("../models/paymentModel");
 const School = require("../models/schoolModel");
-const { verifyTransaction, recordPayment } = require("./stellarService");
+const { verifyTransaction } = require("./stellarService");
+const { recordTransaction } = require("./paymentIngestion");
 const { server } = require("../config/stellarConfig");
 const config = require("../config/index");
 const { withStellarRetry } = require("../utils/withStellarRetry");
@@ -211,19 +212,10 @@ async function processPendingVerifications() {
           continue;
         }
 
-        await recordPayment({
-          schoolId: item.schoolId,
-          studentId: result.studentId || result.memo,
-          txHash: result.hash,
-          transactionHash: result.hash,
-          amount: result.amount,
-          feeAmount: result.expectedAmount || result.feeAmount,
-          feeValidationStatus: result.feeValidation.status,
-          excessAmount: result.feeValidation.excessAmount || 0,
-          status: "confirmed",
-          memo: result.memo,
-          confirmedAt: result.date ? new Date(result.date) : new Date(),
-        });
+        // Re-ingest through the shared ingestion module so retried
+        // transactions produce the same Payment rows and Student balance as
+        // sync, poller, stream and verify (Issue #1971).
+        await recordTransaction(result, school, { source: "retry" });
 
         await PendingVerification.findOneAndUpdate(
           { _id: item._id, schoolId: item.schoolId },

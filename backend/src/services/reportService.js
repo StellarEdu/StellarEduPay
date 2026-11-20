@@ -127,6 +127,8 @@ async function resolveFeeCurrency(schoolId) {
  * @returns {Promise<string>} ISO timestamp or '0' if no payments
  */
 async function getDataVersion(schoolId) {
+  // #1972 — suspicious payments are stored as SUCCESS (funds received) and
+  // must invalidate cached reports just like any other settled payment.
   const latest = await Payment.findOne(
     { schoolId, status: 'SUCCESS', deletedAt: null },
     'confirmedAt'
@@ -184,6 +186,23 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         underpaidCount:{ $sum: { $cond: [{ $eq: ['$feeValidationStatus', 'underpaid'] }, 1, 0] } },
         unknownCount:  { $sum: { $cond: [{ $in: ['$feeValidationStatus', ['valid', 'partial', 'underpaid', 'overpaid']] }, 0, 1] } },
         uniqueStudents:{ $addToSet: '$studentId' },
+        // #1972 — suspicious payments are real money received; count them in
+        // revenue totals but surface how many are still awaiting review.
+        suspiciousCount: { $sum: { $cond: [{ $eq: ['$isSuspicious', true] }, 1, 0] } },
+        pendingReviewCount: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$isSuspicious', true] },
+                  { $eq: [{ $ifNull: ['$reviewStatus', 'pending_review'] }, 'pending_review'] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
         // #1767 — never sum amounts across assets. Collect per-asset sums keyed
         // by assetCode so XLM and USDC stay in separate buckets.
         assetTotals: {
@@ -218,6 +237,8 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
         underpaidCount: 1,
         unknownCount: 1,
         uniqueStudentCount: { $size: '$uniqueStudents' },
+        suspiciousCount: 1,
+        pendingReviewCount: 1,
         // #1767 — fold the pushed (asset, amount) pairs into per-asset sums.
         assetTotals: {
           $arrayToObject: {
@@ -342,6 +363,10 @@ async function aggregateByDate({ schoolId, startDate, endDate, timezone = 'UTC',
       underpaidCount: row.underpaidCount,
       unknownCount: row.unknownCount,
       uniqueStudentCount: row.uniqueStudentCount,
+      // #1972 — flagged-but-received payments are included in totals above;
+      // these counters tell consumers how many still need review.
+      suspiciousCount: row.suspiciousCount || 0,
+      pendingReviewCount: row.pendingReviewCount || 0,
       totalFiatAmount: row.totalFiatAmount,
       fiatCurrency: row.fiatCurrency,
       fiatCoverage,
@@ -408,6 +433,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       acc.overpaidCount += row.overpaidCount;
       acc.underpaidCount+= row.underpaidCount;
       acc.unknownCount  += row.unknownCount;
+      acc.suspiciousCount += row.suspiciousCount || 0;
+      acc.pendingReviewCount += row.pendingReviewCount || 0;
       acc.totalFiatAmount = parseFloat((acc.totalFiatAmount + (row.totalFiatAmount || 0)).toFixed(2));
       acc.fiatSnapshotCount += Math.round(((row.fiatCoverage || 0) / 100) * row.paymentCount);
       return acc;
@@ -421,6 +448,8 @@ async function generateReport({ schoolId, startDate, endDate, timezone = 'UTC' }
       overpaidCount: 0,
       underpaidCount: 0,
       unknownCount: 0,
+      suspiciousCount: 0,
+      pendingReviewCount: 0,
       totalFiatAmount: 0,
       fiatSnapshotCount: 0,
     }
@@ -616,10 +645,14 @@ function reportToCsv(report) {
   lines.push(`Overpaid,${csvEscape(report.summary.overpaidCount)}`);
   lines.push(`Underpaid,${csvEscape(report.summary.underpaidCount)}`);
   lines.push(`Unknown,${csvEscape(report.summary.unknownCount)}`);
+  // #1972 — suspicious payments are included in the totals above (funds
+  // received) but flagged so reviewers know how many need attention.
+  lines.push(`Suspicious Payments,${csvEscape(report.summary.suspiciousCount || 0)}`);
+  lines.push(`Pending Review,${csvEscape(report.summary.pendingReviewCount || 0)}`);
   lines.push(`Fully Paid Students,${csvEscape(report.summary.fullyPaidStudentCount)}`);
   lines.push('');
   lines.push('--- Daily Breakdown ---');
-  lines.push('Date,Asset,Total Amount,Credited Amount,Credited Currency,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students');
+  lines.push('Date,Asset,Total Amount,Payment Count,Valid,Partial,Overpaid,Underpaid,Unknown,Unique Students,Suspicious,Pending Review');
   for (const row of report.byDate) {
     const assets = Object.entries(row.totals || {});
     // #1974 — credited totals are keyed by fee currency; render them alongside.
@@ -638,6 +671,8 @@ function reportToCsv(report) {
         csvEscape(row.underpaidCount),
         csvEscape(row.unknownCount),
         csvEscape(row.uniqueStudentCount),
+        csvEscape(row.suspiciousCount || 0),
+        csvEscape(row.pendingReviewCount || 0),
       ].join(','));
       continue;
     }
@@ -655,6 +690,8 @@ function reportToCsv(report) {
         csvEscape(row.underpaidCount),
         csvEscape(row.unknownCount),
         csvEscape(row.uniqueStudentCount),
+        csvEscape(row.suspiciousCount || 0),
+        csvEscape(row.pendingReviewCount || 0),
       ].join(','));
     }
   }
@@ -759,11 +796,13 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
       { $sort: { class: 1 } },
     ], { maxTimeMS: POOL_CONFIG.reportAggregationMaxTimeMS }),
 
-    // 5 most recent successful payments (small bounded query, always fast)
+    // 5 most recent successful payments (small bounded query, always fast).
+    // #1972 — suspicious payments are SUCCESS (funds received) and are shown
+    // with their review status rather than hidden.
     Payment.find({ schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null })
       .sort({ confirmedAt: -1 })
       .limit(5)
-      .select('txHash studentId amount assetCode feeCurrency creditedAmount feeValidationStatus confirmedAt')
+      .select('txHash studentId amount feeValidationStatus confirmedAt isSuspicious reviewStatus')
       .lean(),
 
     Student.aggregate([
@@ -810,4 +849,156 @@ async function getDashboardMetrics({ schoolId, timezone = 'UTC' } = {}) {
 }
 
 /**
- * #884 — Versioned accounting
+ * #884 — Versioned accounting export.
+ *
+ * Produces a flat transaction-level CSV with a stable, documented schema
+ * that accounting systems (QuickBooks, Xero, custom) can import reliably.
+ *
+ * Schema version 1 columns (never removed; new columns added at the end):
+ *   schema_version, exported_at, school_id, tx_hash, student_id, class,
+ *   confirmed_at, asset_code, asset_type, crypto_amount, fee_amount,
+ *   fee_validation_status, excess_amount, fiat_amount_at_payment,
+ *   fiat_currency_at_payment, fiat_rate_at_payment, reference_code, status
+ *
+ * The schema_version column and the X-Export-Schema-Version response header
+ * let consumers pin to a specific version and detect breaking changes.
+ */
+
+// Current accounting export schema version — increment when columns change shape.
+// #1972 — bumped to 2: added is_suspicious / review_status columns so flagged
+// payments (which are real funds received) are visible to accounting.
+const ACCOUNTING_SCHEMA_VERSION = 2;
+
+const ACCOUNTING_HEADERS_V1 = [
+  'schema_version', 'exported_at', 'school_id', 'tx_hash', 'student_id', 'class',
+  'confirmed_at', 'asset_code', 'asset_type', 'crypto_amount', 'fee_amount',
+  'fee_validation_status', 'excess_amount',
+  'fiat_amount_at_payment', 'fiat_currency_at_payment', 'fiat_rate_at_payment',
+  'reference_code', 'status',
+  // #1972 — suspicion is separate from settlement; these columns flag rows
+  // that are received but still awaiting review.
+  'is_suspicious', 'review_status',
+];
+
+/**
+ * Build the accounting CSV for a school, pulling transaction-level rows
+ * directly from the payments collection so every payment appears as one line.
+ *
+ * @param {{ schoolId: string, startDate?: string, endDate?: string }} options
+ * @returns {{ csv: string, schemaVersion: number }}
+ */
+// Build the $match / $lookup / $sort pipeline shared by the buffered and
+// streaming accounting exports.
+function buildAccountingPipeline({ schoolId, startDate, endDate }) {
+  const match = { schoolId, status: 'SUCCESS', studentDeleted: { $ne: true }, deletedAt: null };
+  if (startDate || endDate) {
+    match.confirmedAt = {};
+    if (startDate) match.confirmedAt.$gte = new Date(startDate + 'T00:00:00.000Z');
+    if (endDate)   match.confirmedAt.$lte = new Date(endDate   + 'T23:59:59.999Z');
+  }
+
+  return [
+    { $match: match },
+    {
+      $lookup: {
+        from: 'students',
+        let: { sid: '$studentId', scid: '$schoolId' },
+        pipeline: [
+          { $match: { $expr: { $and: [{ $eq: ['$studentId', '$$sid'] }, { $eq: ['$schoolId', '$$scid'] }] } } },
+          { $project: { class: 1 } },
+        ],
+        as: '_student',
+      },
+    },
+    { $sort: { confirmedAt: 1 } },
+  ];
+}
+
+// Format a single aggregation row as one CSV line (no trailing newline).
+function formatAccountingRow(r, exportedAt) {
+  const studentClass = r._student?.[0]?.class ?? '';
+  // #883 — use stored fiat snapshot when available, else leave blank
+  const fiatAmount   = r.fiatSnapshot?.fiatAmount   ?? '';
+  const fiatCurrency = r.fiatSnapshot?.fiatCurrency ?? '';
+  const fiatRate     = r.fiatSnapshot?.fiatRate     ?? '';
+
+  return [
+    ACCOUNTING_SCHEMA_VERSION,
+    exportedAt,
+    csvEscape(r.schoolId),
+    csvEscape(r.txHash),
+    csvEscape(r.studentId),
+    csvEscape(studentClass),
+    r.confirmedAt ? new Date(r.confirmedAt).toISOString() : '',
+    csvEscape(r.assetCode ?? 'XLM'),
+    csvEscape(r.assetType ?? 'crypto'),
+    r.amount,
+    r.feeAmount ?? '',
+    csvEscape(r.feeValidationStatus ?? ''),
+    r.excessAmount ?? 0,
+    fiatAmount,
+    csvEscape(fiatCurrency),
+    fiatRate,
+    csvEscape(r.referenceCode ?? ''),
+    csvEscape(r.status),
+    r.isSuspicious ? 'true' : 'false',
+    csvEscape(r.reviewStatus ?? ''),
+  ].map(v => csvEscape(v)).join(',');
+}
+
+async function generateAccountingCsv({ schoolId, startDate, endDate } = {}) {
+  // Enrich with student class via a $lookup
+  const rows = await Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate }));
+
+  const exportedAt = new Date().toISOString();
+  const lines = [ACCOUNTING_HEADERS_V1.map(csvEscape).join(',')];
+
+  for (const r of rows) {
+    lines.push(formatAccountingRow(r, exportedAt));
+  }
+
+  return { csv: lines.join('\n'), schemaVersion: ACCOUNTING_SCHEMA_VERSION };
+}
+
+/**
+ * Streaming variant of {@link generateAccountingCsv} (Issue #70).
+ *
+ * Reads the payments collection with an aggregation cursor and writes each
+ * row to `res` as it arrives, so the full result set is never buffered in
+ * memory. Writes the header row first, then one line per payment, then ends
+ * the response.
+ *
+ * @param {{ schoolId: string, startDate?: string, endDate?: string, res: object }} options
+ */
+async function generateAccountingCsvStream({ schoolId, startDate, endDate, res } = {}) {
+  const cursor = Payment.aggregate(buildAccountingPipeline({ schoolId, startDate, endDate })).cursor();
+  const exportedAt = new Date().toISOString();
+
+  res.write(ACCOUNTING_HEADERS_V1.map(csvEscape).join(',') + '\n');
+
+  for await (const r of cursor) {
+    res.write(formatAccountingRow(r, exportedAt) + '\n');
+  }
+
+  res.end();
+  return { schemaVersion: ACCOUNTING_SCHEMA_VERSION };
+}
+
+module.exports = {
+  generateReport,
+  aggregateByDate,
+  reportToCsv,
+  generateAccountingCsv,
+  generateAccountingCsvStream,
+  ACCOUNTING_SCHEMA_VERSION,
+  REPORT_CSV_SCHEMA_VERSION,
+  getDashboardMetrics,
+  getDataVersion,
+  // Exported for testing (Issue #1572)
+  localDayStartUTC,
+  localDayEndUTC,
+  buildDateRangeFilter,
+  // Exported for testing (Issue #1767)
+  toExactAmountString,
+  mergeAssetTotals,
+};
