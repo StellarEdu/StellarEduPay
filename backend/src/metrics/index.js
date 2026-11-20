@@ -554,10 +554,49 @@ const schoolWalletWarningGauge = new client.Gauge({
   registers: [registry],
 });
 
+// sync_horizon_calls_total{school_id, outcome} — Horizon requests issued by a
+// single manual sync run, labelled by outcome (success, error, rate_limited).
+// #1976: with a persisted cursor this must grow with the number of *new*
+// transactions, not with everything since the last recorded payment. A flat
+// line here while wallet activity grows is the signal the fix is working.
+const syncHorizonCallsTotal = new client.Counter({
+  name: 'sync_horizon_calls_total',
+  help: 'Horizon requests issued by manual payment syncs, by school and outcome',
+  labelNames: ['school_id', 'outcome'],
+  registers: [registry],
+});
+
+// sync_horizon_calls_per_run{school_id} — distribution of Horizon requests per
+// sync run. The histogram (rather than only the counter) makes the O(new
+// transactions) property directly observable: a wallet with 500 outgoing
+// transactions after the last payment should still show a small per-run count.
+const syncHorizonCallsPerRun = new client.Histogram({
+  name: 'sync_horizon_calls_per_run',
+  help: 'Number of Horizon requests issued per manual sync run, by school',
+  labelNames: ['school_id'],
+  buckets: [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000],
+  registers: [registry],
+});
+
+// sync_skipped_total{school_id, reason} — transactions a sync run saw but did
+// not record, grouped by why (#1975): amount_out_of_limits, wrong_destination,
+// unmatched_memo, student_not_found, balance_lock_contended, transient_error.
+// Retryable reasons must be revisited on the next run; a persistent non-zero
+// value for a retryable reason means the cursor is not advancing past it.
+const syncSkippedTotal = new client.Counter({
+  name: 'sync_skipped_total',
+  help: 'Transactions skipped by manual syncs, by school and reason',
+  labelNames: ['school_id', 'reason'],
+  registers: [registry],
+});
+
 module.exports = {
   registry,
   buildInfoGauge,
   schoolWalletWarningGauge,
+  syncHorizonCallsTotal,
+  syncHorizonCallsPerRun,
+  syncSkippedTotal,
   mongoConnectionState,
   mongoConnectionErrorsTotal,
   horizonPollBudgetRemaining,

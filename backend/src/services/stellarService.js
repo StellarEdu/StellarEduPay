@@ -12,6 +12,62 @@ function isCreditableOpType(type) {
   return CREDITABLE_OP_TYPES.has(type);
 }
 
+/**
+ * #1973 — amounts of different assets must never be added together. This
+ * helper is the single place that turns raw Horizon operations into the
+ * per-operation creditable list used by verify, sync and the poller. Each
+ * entry carries its own assetCode and amount; callers persist one row per
+ * entry (unique key `{ schoolId, txHash, opIndex }`).
+ *
+ * `aggregateByAsset` is the only sanctioned way to produce a total: it groups
+ * by assetCode and refuses (throws) if asked to sum across assets.
+ */
+function extractCreditableOperations(tx, operations) {
+  return operations.map((o) => ({
+    opIndex: o.opIndex,
+    assetCode: o.asset.assetCode,
+    assetType: o.asset.assetType,
+    assetIssuer: o.asset.assetIssuer,
+    amount: o.amount,
+    amountStroops: toStroops(o.amount),
+    payOp: o.payOp,
+    senderAddress: o.payOp ? o.payOp.from || null : null,
+  }));
+}
+
+/**
+ * Aggregate per-operation entries into `{ assetCode: total }`.
+ * #1973 — refuses to produce a single scalar across mixed assets.
+ */
+function aggregateByAsset(entries) {
+  const totals = {};
+  for (const e of entries) {
+    if (!e || !e.assetCode) {
+      throw new Error("aggregateByAsset: entry missing assetCode");
+    }
+    totals[e.assetCode] = parseFloat(
+      ((totals[e.assetCode] || 0) + e.amount).toFixed(7),
+    );
+  }
+  return totals;
+}
+
+/**
+ * #1973 — guard for any legacy caller that still wants a single scalar.
+ * Throws when the entries span more than one assetCode.
+ */
+function sumSameAsset(entries) {
+  const codes = new Set(entries.map((e) => e.assetCode));
+  if (codes.size > 1) {
+    throw new Error(
+      `Refusing to sum amounts across assets: ${[...codes].join(", ")}`,
+    );
+  }
+  return parseFloat(
+    entries.reduce((sum, e) => sum + e.amount, 0).toFixed(7),
+  );
+}
+
 const { Operation } = require("@stellar/stellar-sdk");
 const {
   server,
@@ -688,12 +744,10 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
     throw err;
   }
 
-  // #1760 — a single memo covers every operation in the transaction, so the
-  // credited amount is the sum of all creditable operations (attribution is
-  // per-transaction until per-operation memos/muxed accounts are supported).
-  const amount = parseFloat(
-    operations.reduce((sum, o) => sum + o.amount, 0).toFixed(7),
-  );
+  // #1973 — never sum across assets. Each operation keeps its own asset and
+  // amount; the per-asset aggregate is provided for callers that need a total.
+  const creditableOps = extractCreditableOperations(tx, operations);
+  const amountByAsset = aggregateByAsset(creditableOps);
 
   // 5. Validate payment amount is within configured limits
   // #1555 — detectAsset returns { assetCode, assetType, assetIssuer }.
@@ -718,40 +772,63 @@ async function verifyTransaction(txHash, walletAddress, schoolId = null) {
   const student = await Student.findOne(studentQuery);
   const feeAmount = student ? student.feeAmount : null;
 
-  const feeValidation =
-    feeAmount != null
-      ? validatePaymentAgainstFee(amount, feeAmount)
-      : {
-        status: "unknown",
-        excessAmount: 0,
-        message: "Student not found, cannot validate fee",
-      };
+  // #1973 — fee validation is only meaningful for a single-asset payment. When
+  // the transaction credits several assets, report per-asset validation rather
+  // than comparing a meaningless cross-asset sum against the fee.
+  const assetCodes = Object.keys(amountByAsset);
+  let feeValidation;
+  if (feeAmount == null) {
+    feeValidation = {
+      status: "unknown",
+      excessAmount: 0,
+      message: "Student not found, cannot validate fee",
+    };
+  } else if (assetCodes.length === 1) {
+    feeValidation = validatePaymentAgainstFee(amountByAsset[assetCodes[0]], feeAmount);
+  } else {
+    feeValidation = {
+      status: "unknown",
+      excessAmount: 0,
+      message: "Mixed-asset transaction — fee validation is per-asset",
+      byAsset: Object.fromEntries(
+        assetCodes.map((code) => [
+          code,
+          validatePaymentAgainstFee(amountByAsset[code], feeAmount),
+        ]),
+      ),
+    };
+  }
 
   // Extract network fee from transaction
   const networkFee = parseFloat(tx.fee_paid || "0") / 10000000; // Convert stroops to XLM
 
-  const primary = operations[0];
+  const primary = creditableOps[0];
 
   return {
     hash: tx.hash,
     innerHash,
     memo: memo,
     studentId: memo,
-    amount: amount,
-    assetCode: primary.asset.assetCode,
-    assetType: primary.asset.assetType,
+    // #1973 — `amount`/`assetCode` describe the first operation only; callers
+    // that persist payments must use `operations` (one row per op). The
+    // per-asset aggregate is exposed as `amountByAsset`.
+    amount: primary.amount,
+    assetCode: primary.assetCode,
+    assetType: primary.assetType,
+    amountByAsset,
     feeAmount,
     feeValidation,
     networkFee,
     date: tx.created_at,
     ledger: tx.ledger_attr || tx.ledger || null,
     senderAddress: primary.senderAddress,
-    // #1760 — every creditable operation, each with its opIndex and amount.
-    operations: operations.map((o) => ({
+    // #1760/#1973 — every creditable operation, each with its own asset/amount.
+    operations: creditableOps.map((o) => ({
       opIndex: o.opIndex,
       amount: o.amount,
-      assetCode: o.asset.assetCode,
-      assetType: o.asset.assetType,
+      amountStroops: o.amountStroops,
+      assetCode: o.assetCode,
+      assetType: o.assetType,
       senderAddress: o.senderAddress,
     })),
   };
@@ -1279,6 +1356,9 @@ module.exports = {
   detectAsset,
   normalizeAmount,
   extractValidPayment,
+  extractCreditableOperations,
+  aggregateByAsset,
+  sumSameAsset,
   fetchAllOperations,
   detectMemoCollision,
   detectCrossSchoolMemoCollision,

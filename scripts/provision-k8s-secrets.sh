@@ -24,7 +24,15 @@
 # Required env vars:
 #   JWT_SECRET                    — HS256 signing key for session JWTs.
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-#   MONGO_URI                     — MongoDB connection string (including credentials).
+#   MONGO_APP_USERNAME            — Least-privilege MongoDB application user (readWrite on
+#                                   the stellaredupay database only). The script derives
+#                                   MONGO_URI from this user; do not use the root user.
+#   MONGO_APP_PASSWORD            — Password for MONGO_APP_USERNAME.
+#                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#   MONGO_BACKUP_USERNAME         — MongoDB user with the built-in `backup` role, used by
+#                                   the backup CronJob.
+#   MONGO_BACKUP_PASSWORD         — Password for MONGO_BACKUP_USERNAME.
+#                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   ADMIN_USERNAME                — Initial admin username for bootstrap login.
 #   ADMIN_PASSWORD_HASH           — bcrypt hash of the admin password.
 #                                   Generate: node scripts/hash-admin-password.js
@@ -49,6 +57,14 @@
 #                                   have been re-encrypted with the current key.
 #                                   Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   SCHOOL_WALLET_ADDRESS         — School's Stellar public key (G...).
+#   MONGO_HOSTS                   — Comma-separated host:port list used to build MONGO_URI
+#                                   (default: mongodb-0.mongodb:27017,mongodb-1.mongodb:27017,mongodb-2.mongodb:27017).
+#   MONGO_REPLICA_SET             — Replica set name used in MONGO_URI (default: rs0).
+#   MONGO_DATABASE                — Application database name (default: stellaredupay).
+#   MONGO_KEYFILE_SECRET_NAME     — Name of the Secret holding the replica-set keyFile
+#                                   (default: mongodb-keyfile).
+#   MONGO_KEYFILE                 — Pre-generated keyFile contents. When unset the script
+#                                   generates one with `openssl rand -base64 756`.
 #   REDIS_PASSWORD                — Redis auth password (if Redis requires auth).
 #   BACKUP_NOTIFY_TOKEN           — Shared secret for backup heartbeat endpoint.
 #   EMAIL_WEBHOOK_SECRET          — Shared secret for email bounce/complaint webhooks.
@@ -72,7 +88,9 @@ DRY_RUN="${DRY_RUN:-0}"
 
 missing=()
 
-for required_var in JWT_SECRET MONGO_URI ADMIN_USERNAME ADMIN_PASSWORD_HASH \
+for required_var in JWT_SECRET MONGO_APP_USERNAME MONGO_APP_PASSWORD \
+                    MONGO_BACKUP_USERNAME MONGO_BACKUP_PASSWORD \
+                    ADMIN_USERNAME ADMIN_PASSWORD_HASH \
                     METRICS_BEARER_TOKEN WEBHOOK_SECRET_ENCRYPTION_KEY \
                     STUDENT_PII_ENCRYPTION_KEY \
                     RECEIPT_SIGNATURE_SECRET AUDIT_HMAC_KEY; do
@@ -98,6 +116,48 @@ if [[ -z "${SIGNER_MASTER_KEY:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Derive the least-privilege MongoDB connection string
+# ---------------------------------------------------------------------------
+
+MONGO_HOSTS="${MONGO_HOSTS:-mongodb-0.mongodb:27017,mongodb-1.mongodb:27017,mongodb-2.mongodb:27017}"
+MONGO_REPLICA_SET="${MONGO_REPLICA_SET:-rs0}"
+MONGO_DATABASE="${MONGO_DATABASE:-stellaredupay}"
+MONGO_KEYFILE_SECRET_NAME="${MONGO_KEYFILE_SECRET_NAME:-mongodb-keyfile}"
+
+# URL-encode the credentials so passwords containing reserved characters
+# (@, :, /, ?, #, %, etc.) do not corrupt the URI.
+urlencode() {
+  local string="$1" out="" char i
+  for (( i = 0; i < ${#string}; i++ )); do
+    char="${string:i:1}"
+    case "$char" in
+      [a-zA-Z0-9.~_-]) out+="$char" ;;
+      *) out+=$(printf '%%%02X' "'$char") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+MONGO_URI="mongodb://$(urlencode "${MONGO_APP_USERNAME}"):$(urlencode "${MONGO_APP_PASSWORD}")@${MONGO_HOSTS}/${MONGO_DATABASE}?authSource=${MONGO_DATABASE}&replicaSet=${MONGO_REPLICA_SET}"
+
+# ---------------------------------------------------------------------------
+# Generate the replica-set keyFile (required for auth on a replica set)
+# ---------------------------------------------------------------------------
+
+if [[ -z "${MONGO_KEYFILE:-}" ]]; then
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "ERROR: openssl is required to generate the MongoDB keyFile." >&2
+    exit 1
+  fi
+  MONGO_KEYFILE="$(openssl rand -base64 756)"
+fi
+
+if [[ "$(printf '%s' "${MONGO_KEYFILE}" | wc -c)" -lt 6 ]]; then
+  echo "ERROR: MONGO_KEYFILE must be at least 6 characters (MongoDB requirement)." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Build the kubectl command
 # ---------------------------------------------------------------------------
 
@@ -113,6 +173,10 @@ KUBECTL_ARGS=(
   create secret generic "${SECRET_NAME}"
   "--from-literal=JWT_SECRET=${JWT_SECRET}"
   "--from-literal=MONGO_URI=${MONGO_URI}"
+  "--from-literal=MONGO_APP_USERNAME=${MONGO_APP_USERNAME}"
+  "--from-literal=MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD}"
+  "--from-literal=MONGO_BACKUP_USERNAME=${MONGO_BACKUP_USERNAME}"
+  "--from-literal=MONGO_BACKUP_PASSWORD=${MONGO_BACKUP_PASSWORD}"
   "--from-literal=ADMIN_USERNAME=${ADMIN_USERNAME}"
   "--from-literal=ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}"
   "--from-literal=METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN}"
@@ -160,19 +224,41 @@ KUBECTL_ARGS+=(
   "-o" "yaml"
 )
 
+# The keyFile Secret is created separately so it can be mounted with mode 0400
+# by the MongoDB StatefulSet. It is never written to the application Secret.
+KEYFILE_KUBECTL_ARGS=(
+  create secret generic "${MONGO_KEYFILE_SECRET_NAME}"
+  "--from-literal=keyfile=${MONGO_KEYFILE}"
+  "--namespace=${NAMESPACE}"
+  "--dry-run=client"
+  "-o" "yaml"
+)
+
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "[DRY RUN] Would run:"
+  echo "  kubectl ${KEYFILE_KUBECTL_ARGS[*]} | kubectl apply -f -"
   echo "  kubectl ${KUBECTL_ARGS[*]} | kubectl apply -f -"
   exit 0
 fi
 
+kubectl "${KEYFILE_KUBECTL_ARGS[@]}" | kubectl apply --namespace="${NAMESPACE}" -f -
 kubectl "${KUBECTL_ARGS[@]}" | kubectl apply --namespace="${NAMESPACE}" -f -
 
 echo ""
-echo "Secret provisioned successfully."
+echo "Secrets provisioned successfully."
 echo "Record this run in your change-management or incident log:"
 echo "  Secret   : ${SECRET_NAME}"
+echo "  KeyFile  : ${MONGO_KEYFILE_SECRET_NAME}"
 echo "  Namespace: ${NAMESPACE}"
 echo "  Context  : ${CLUSTER_CONTEXT}"
 echo "  Operator : ${USER:-unknown}"
 echo "  Time     : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo ""
+echo "Next steps:"
+echo "  1. Bootstrap the MongoDB users (run once against the primary):"
+echo "       mongosh \"mongodb://<root>:<root-password>@\${MONGO_HOSTS}/admin?authSource=admin&replicaSet=\${MONGO_REPLICA_SET}\" \\"
+echo "         --eval 'db.getSiblingDB(\"${MONGO_DATABASE}\").createUser({user:\"${MONGO_APP_USERNAME}\",pwd:\"<password>\",roles:[{role:\"readWrite\",db:\"${MONGO_DATABASE}\"}]})'"
+echo "       mongosh \"mongodb://<root>:<root-password>@\${MONGO_HOSTS}/admin?authSource=admin&replicaSet=\${MONGO_REPLICA_SET}\" \\"
+echo "         --eval 'db.getSiblingDB(\"admin\").createUser({user:\"${MONGO_BACKUP_USERNAME}\",pwd:\"<password>\",roles:[\"backup\"]})'"
+echo "  2. Verify unauthenticated access is rejected:"
+echo "       mongosh mongodb://mongodb-0.mongodb:27017 --eval 'db.adminCommand({listDatabases:1})'  # expect Unauthorized"

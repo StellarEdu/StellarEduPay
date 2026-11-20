@@ -9,6 +9,17 @@ const feeStructureSchema = new mongoose.Schema(
     schoolId:     { type: String, required: true, index: true },
     className:    { type: String, required: true },
     feeAmount:    { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    /**
+     * Currency/asset `feeAmount` is denominated in (Issue #1974).
+     * Either an accepted asset code (e.g. 'USDC', 'XLM') or an ISO fiat code.
+     * Defaults from `school.feeCurrency` when not supplied.
+     */
+    feeCurrency: {
+      type: String,
+      default: null,
+      trim: true,
+      uppercase: true,
+    },
     description:  { type: String, default: '' },
     academicYear: { type: String, default: () => new Date().getUTCFullYear().toString() },
     /**

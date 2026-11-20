@@ -39,3 +39,34 @@ groups:
             unstable even though mongodb_connection_state still reads
             "connected". Check application logs for "[MongoDB] Connection
             error" entries.
+
+  - name: redis
+    interval: 60s
+    rules:
+      # ── Warning: Redis memory approaching maxmemory ───────────────────────
+      # Redis runs with maxmemory-policy noeviction (required by BullMQ: with
+      # eviction, job keys silently disappear). That means once used memory
+      # reaches maxmemory, Redis rejects all writes with OOM errors instead of
+      # evicting keys — the BullMQ retry/dead-letter queues, distributed locks,
+      # fencing counters, rate-limit counters, session revocations and
+      # idempotency keys all stop being written. Alert well before the limit so
+      # there is time to raise maxmemory or shed load.
+      # Runbook: docs/runbooks/redis.md (sizing guide: keys per school and per
+      # payment; raise maxmemory or scale out before the limit is hit).
+      - alert: RedisMemoryUsageHigh
+        expr: >
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is above 80% of maxmemory"
+          description: >
+            Redis is using {{ $value | humanizePercentage }} of its configured
+            maxmemory (redis_memory_used_bytes / redis_memory_max_bytes) for
+            over 10 minutes. Eviction is disabled (maxmemory-policy
+            noeviction), so at maxmemory Redis will reject writes and the
+            BullMQ queues, locks, rate-limit counters and idempotency keys will
+            stop accepting writes. Raise maxmemory, review the sizing guide in
+            docs/runbooks/redis.md, and check for unbounded key growth (e.g.
+            fencing counters).

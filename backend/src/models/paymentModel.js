@@ -105,7 +105,28 @@ function isCountedAsPaid(paymentOrStatus) {
     typeof paymentOrStatus === 'string'
       ? paymentOrStatus
       : paymentOrStatus && paymentOrStatus.status;
+  // #1972 — A suspicious payment is still a settled payment: the funds
+  // arrived on-chain. It counts as received (reports, reconciliation) even
+  // while it awaits review; it is excluded from balances separately via the
+  // isSuspicious filter in updateStudentBalance.
   return status === 'SUCCESS' || status === 'REFUNDED';
+}
+
+/**
+ * #1972 — Predicate: is this payment received-but-pending-review?
+ * True when the payment settled on-chain (SUCCESS) but was flagged as
+ * suspicious and has not yet been cleared or refunded.
+ *
+ * @param {object} payment a Payment document/lean object
+ * @returns {boolean}
+ */
+function isPendingReview(payment) {
+  if (!payment) return false;
+  return (
+    payment.status === 'SUCCESS' &&
+    payment.isSuspicious === true &&
+    (payment.reviewStatus === 'pending_review' || payment.reviewStatus == null)
+  );
 }
 
 /**
@@ -285,6 +306,22 @@ const paymentSchema = new mongoose.Schema(
     // has rotated away from but is still draining. The school is notified.
     receivedOnRetiredAddress: { type: Boolean, default: false },
     suspicionReason: { type: String, default: null },
+    // #1972 — Suspicion is separate from settlement. A suspicious payment
+    // still succeeded on-chain (the school wallet holds the funds), so it is
+    // stored as SUCCESS + isSuspicious: true and enters review. This field
+    // tracks the review outcome:
+    //   'pending_review' — flagged, awaiting an admin decision
+    //   'cleared'        — false positive; the payment credits the balance
+    //   'refunded'       — confirmed problematic and refunded to the sender
+    // Suspicious rows are excluded from student balances (see
+    // updateStudentBalance) but included in "funds received" totals and
+    // wallet reconciliation.
+    reviewStatus: {
+      type: String,
+      enum: ['pending_review', 'cleared', 'refunded'],
+      default: null,
+      index: true,
+    },
     // Review workflow for flagged payments (issue #852). A flag starts as
     // 'flagged'; an admin clears it (false positive → 'cleared', restoring the
     // payment) or confirms it as fraud ('confirmed_fraud'). All transitions are
@@ -349,6 +386,28 @@ const paymentSchema = new mongoose.Schema(
       rateSource:   { type: String, default: null },  // 'coingecko' | 'coinbase' | etc.
       rateTimestamp:{ type: Date,   default: null },  // when the rate was fetched
     },
+
+    // #1974 — The currency/asset the school's fees are denominated in (e.g.
+    // 'USDC', 'XLM' or an ISO fiat code). Snapshotted on the payment at write
+    // time so historical balances stay meaningful even if the school later
+    // changes its fee currency.
+    feeCurrency: { type: String, default: null },
+
+    // #1974 — The payment amount converted into `feeCurrency`, using the rate
+    // snapshot captured at confirmation time (fiatSnapshot). Student balances
+    // (totalPaid / remainingBalance / feePaid) sum ONLY this field, never the
+    // raw `amount`, so amounts in different assets are never added together.
+    // Null when no conversion could be recorded (e.g. no rate available).
+    creditedAmount: {
+      type: Number,
+      default: null,
+      validate: [
+        {
+          validator: (v) => v === null || v === undefined || (Number.isFinite(v) && v >= 0),
+          message: 'creditedAmount must be a finite non-negative number or null',
+        },
+      ],
+    },
   },
   {
     timestamps: true,
@@ -381,6 +440,9 @@ paymentSchema.pre('save', function syncDerivedLifecycleFields(next) {
 // independently.
 paymentSchema.statics.isCountedAsPaid = isCountedAsPaid;
 paymentSchema.statics.countedAsPaidFilter = countedAsPaidFilter;
+// #1972 — Suspicion is separate from settlement: expose the pending-review
+// predicate so services can distinguish received-but-unreviewed payments.
+paymentSchema.statics.isPendingReview = isPendingReview;
 paymentSchema.statics.deriveConfirmationState = deriveConfirmationState;
 paymentSchema.statics.deriveConfirmationStatus = deriveConfirmationStatus;
 // #1761 — Expose the rejection helpers so every idempotency / duplicate
@@ -388,6 +450,43 @@ paymentSchema.statics.deriveConfirmationStatus = deriveConfirmationStatus;
 paymentSchema.statics.existingPaymentFilter = existingPaymentFilter;
 paymentSchema.statics.isRejected = isRejected;
 paymentSchema.statics.REJECTION_STATUSES = REJECTION_STATUSES;
+
+/**
+ * #1974 — Compute the amount credited toward the school's fee currency from a
+ * payment's recorded rate snapshot.
+ *
+ * Returns null when no conversion can be derived (missing amount, missing
+ * snapshot rate, or a snapshot currency that does not match the fee currency),
+ * so callers can apply their own policy (reject, or leave uncredited) rather
+ * than silently crediting a wrong number.
+ *
+ * @param {object} payment a Payment document/lean object (or plain object)
+ * @param {string} [feeCurrency] the target fee currency; defaults to payment.feeCurrency
+ * @returns {number|null}
+ */
+function computeCreditedAmount(payment, feeCurrency) {
+  if (!payment) return null;
+  const target = feeCurrency || payment.feeCurrency || null;
+  if (!target) return null;
+
+  const amount = Number(payment.amount);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+
+  // Same asset as the fee currency: no conversion needed.
+  if (payment.assetCode && payment.assetCode === target) {
+    return parseFloat(amount.toFixed(7));
+  }
+
+  const snapshot = payment.fiatSnapshot || {};
+  const fiatAmount = Number(snapshot.fiatAmount);
+  const fiatCurrency = snapshot.fiatCurrency || null;
+  if (!Number.isFinite(fiatAmount) || fiatAmount < 0) return null;
+  if (!fiatCurrency || fiatCurrency !== target) return null;
+
+  return parseFloat(fiatAmount.toFixed(7));
+}
+
+paymentSchema.statics.computeCreditedAmount = computeCreditedAmount;
 
 // Indexes
 // Compound unique index enforces per-school, per-operation uniqueness: the same
@@ -403,8 +502,10 @@ const Payment = mongoose.model('Payment', paymentSchema);
 module.exports = Payment;
 module.exports.isCountedAsPaid = isCountedAsPaid;
 module.exports.countedAsPaidFilter = countedAsPaidFilter;
+module.exports.isPendingReview = isPendingReview;
 module.exports.deriveConfirmationState = deriveConfirmationState;
 module.exports.deriveConfirmationStatus = deriveConfirmationStatus;
 module.exports.existingPaymentFilter = existingPaymentFilter;
 module.exports.isRejected = isRejected;
 module.exports.REJECTION_STATUSES = REJECTION_STATUSES;
+module.exports.computeCreditedAmount = computeCreditedAmount;

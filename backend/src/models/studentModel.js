@@ -9,6 +9,9 @@ const feeCategorySchema = new mongoose.Schema(
   {
     category: { type: String, required: true },
     amount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    // #1974 — unit in which `amount`/`totalPaid`/`remainingBalance` are denominated.
+    // Defaults from the school's feeCurrency when not supplied.
+    feeCurrency: { type: String, default: null, trim: true, uppercase: true },
     paid: { type: Boolean, default: false },
     totalPaid: { type: Number, default: 0 },
     remainingBalance: { type: Number, default: null },
@@ -25,6 +28,9 @@ const studentSchema = new mongoose.Schema(
     class: { type: String, required: true, index: true },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
+    // #1974 — currency/asset in which feeAmount and the fees[] amounts are denominated.
+    // Defaults from school.feeCurrency; never mix currencies in a single balance.
+    feeCurrency: { type: String, default: null, trim: true, uppercase: true },
     // #1937 — bumped by POST /students/:id/pay-link/revoke. Pay-link tokens carry
     // the version they were issued at and are rejected once it moves on.
     linkVersion: { type: Number, default: 0, min: 0 },
@@ -106,18 +112,54 @@ studentSchema.virtual('isOverdue').get(function () {
   return !this.feePaid && this.paymentDeadline != null && new Date() > this.paymentDeadline;
 });
 
-// Virtual to compute total fee amount from fees array
+// Resolve the currency a fee entry is denominated in, falling back to the
+// student-level currency. Returns null when unknown.
+function resolveFeeCurrency(fee, studentCurrency) {
+  return (fee && fee.feeCurrency) || studentCurrency || null;
+}
+
+// Virtual to compute total fee amount from fees array.
+// Asset-aware (#1974): amounts in different currencies are never summed.
+// Returns a number when all entries share one currency (or none is set),
+// otherwise an object keyed by currency.
 studentSchema.virtual('totalFeeAmount').get(function () {
   if (this.fees && this.fees.length > 0) {
-    return this.fees.reduce((sum, fee) => sum + (fee.amount || 0), 0);
+    const totals = {};
+    let hasCurrency = false;
+    for (const fee of this.fees) {
+      const currency = resolveFeeCurrency(fee, this.feeCurrency);
+      if (currency) hasCurrency = true;
+      const key = currency || '__none__';
+      totals[key] = (totals[key] || 0) + (fee.amount || 0);
+    }
+    const keys = Object.keys(totals);
+    if (!hasCurrency || keys.length === 1) {
+      return keys.length === 1 ? totals[keys[0]] : 0;
+    }
+    return totals;
   }
   return this.feeAmount || 0;
 });
 
-// Virtual to compute total paid from fees array
+// Virtual to compute total paid from fees array.
+// Asset-aware (#1974): amounts in different currencies are never summed.
+// Returns a number when all entries share one currency (or none is set),
+// otherwise an object keyed by currency.
 studentSchema.virtual('totalPaidFromFees').get(function () {
   if (this.fees && this.fees.length > 0) {
-    return this.fees.reduce((sum, fee) => sum + (fee.totalPaid || 0), 0);
+    const totals = {};
+    let hasCurrency = false;
+    for (const fee of this.fees) {
+      const currency = resolveFeeCurrency(fee, this.feeCurrency);
+      if (currency) hasCurrency = true;
+      const key = currency || '__none__';
+      totals[key] = (totals[key] || 0) + (fee.totalPaid || 0);
+    }
+    const keys = Object.keys(totals);
+    if (!hasCurrency || keys.length === 1) {
+      return keys.length === 1 ? totals[keys[0]] : 0;
+    }
+    return totals;
   }
   return this.totalPaid || 0;
 });
@@ -189,6 +231,12 @@ studentSchema.pre('save', async function () {
 
   // Sync feeAmount with fees array for backward compatibility
   if (this.fees && this.fees.length > 0) {
+    // #1974 — default each fee entry's currency from the student/school currency
+    // so per-student fee amounts always carry a unit.
+    this.fees.forEach(fee => {
+      if (!fee.feeCurrency) fee.feeCurrency = this.feeCurrency || null;
+    });
+
     this.feeAmount = this.fees.reduce((sum, fee) => sum + (fee.amount || 0), 0);
 
     // Update individual fee remaining balances

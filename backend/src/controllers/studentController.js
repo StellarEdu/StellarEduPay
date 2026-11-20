@@ -13,6 +13,7 @@ const { logAudit } = require('../services/auditService');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
 const { withStudentQuota, studentQuotaError } = require('../services/studentQuota');
 const { maskEmail, maskPhone } = require('../utils/piiRedaction');
+const { parsePagination } = require('../utils/pagination');
 
 // Creates one student only if the school still has a free seat (#1801).
 function createStudentWithinQuota(schoolId, maxStudents, data) {
@@ -150,9 +151,7 @@ async function registerStudent(req, res, next) {
 
 async function getAllStudents(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit, 10) || 50);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req, { defaultLimit: 50, maxLimit: 200 });
 
     const filter = { schoolId: req.schoolId };
 
@@ -585,13 +584,22 @@ async function getPaymentSummary(req, res, next) {
 
     const [students, payments] = await Promise.all([
       Student.find({ schoolId: req.schoolId }).lean(),
+      // #1974 — sum the fee-currency credit, not the raw asset amount.
       Payment.aggregate([
-        { $match: { schoolId: req.schoolId, status: 'SUCCESS', isSuspicious: { $ne: true }, deletedAt: null } },
-        { $group: { _id: '$studentId', totalPaid: { $sum: '$amount' } } },
+        {
+          $match: {
+            schoolId: req.schoolId,
+            status: 'SUCCESS',
+            isSuspicious: { $ne: true },
+            deletedAt: null,
+            creditedAmount: { $ne: null },
+          },
+        },
+        { $group: { _id: '$studentId', totalPaid: { $sum: { $toDecimal: '$creditedAmount' } } } },
       ]),
     ]);
 
-    const paidMap = Object.fromEntries(payments.map(p => [p._id, p.totalPaid]));
+    const paidMap = Object.fromEntries(payments.map(p => [p._id, Number(p.totalPaid)]));
 
     const summary = students.map(s => {
       const totalPaid = parseFloat((paidMap[s.studentId] || 0).toFixed(7));
@@ -606,6 +614,7 @@ async function getPaymentSummary(req, res, next) {
         name: s.name,
         class: s.class,
         feeAmount: s.feeAmount,
+        feeCurrency: s.feeCurrency || null,
         totalPaid,
         remaining,
         status,
@@ -1022,6 +1031,7 @@ async function resetPayment(req, res, next) {
         feePaid: student.feePaid,
         totalPaid: student.totalPaid,
         remainingBalance: student.remainingBalance,
+        feeCurrency: student.feeCurrency || null,
       },
       paymentsDeleted: deletePayments,
     });
@@ -1043,13 +1053,25 @@ async function reconcileStudent(req, res, next) {
     }
 
     const Payment = require('../models/paymentModel');
+    // #1974 — only payments credited in the student's fee currency count toward
+    // the balance. Raw `amount` mixes assets (100 USDC and 100 XLM are not the
+    // same money), so rows without a `creditedAmount` are excluded.
     const result = await Payment.aggregate([
-      { $match: { schoolId, studentId, status: 'SUCCESS', deletedAt: null } },
-      { $group: { _id: null, computedTotal: { $sum: '$amount' } } },
+      {
+        $match: {
+          schoolId,
+          studentId,
+          status: 'SUCCESS',
+          deletedAt: null,
+          creditedAmount: { $ne: null },
+        },
+      },
+      { $group: { _id: null, computedTotal: { $sum: { $toDecimal: '$creditedAmount' } } } },
     ]);
 
-    const computedTotal = result.length > 0 ? result[0].computedTotal : 0;
+    const computedTotal = result.length > 0 ? Number(result[0].computedTotal) : 0;
     const storedTotal = student.totalPaid || 0;
+    const feeCurrency = student.feeCurrency || null;
 
     if (Math.abs(computedTotal - storedTotal) > 0.0000001) {
       const logger = require('../utils/logger');
@@ -1092,6 +1114,7 @@ async function reconcileStudent(req, res, next) {
         diff: computedTotal - storedTotal,
         feePaid: student.feePaid,
         remainingBalance: student.remainingBalance,
+        feeCurrency,
       });
     }
 
@@ -1121,6 +1144,7 @@ async function reconcileStudent(req, res, next) {
       diff: 0,
       feePaid: student.feePaid,
       remainingBalance: student.remainingBalance,
+      feeCurrency,
     });
   } catch (err) {
     next(err);
@@ -1172,7 +1196,7 @@ async function exportStudents(req, res, next) {
     res.setHeader('Content-Disposition', `attachment; filename="students-${date}.csv"`);
     res.setHeader('Transfer-Encoding', 'chunked');
 
-    const baseColumns = ['studentId', 'name', 'class', 'feeAmount', 'totalPaid', 'remainingBalance', 'feePaid', 'createdAt'];
+    const baseColumns = ['studentId', 'name', 'class', 'feeAmount', 'feeCurrency', 'totalPaid', 'remainingBalance', 'feePaid', 'createdAt'];
     const columns = includeDeleted ? [...baseColumns, 'deletedAt'] : baseColumns;
 
     res.write(columns.join(',') + '\n');

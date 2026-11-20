@@ -100,6 +100,21 @@ function SuspicionReviewForm({ payment, onDone }) {
   return (
     <div data-testid="suspicion-review-form">
       <p className="text-muted">{t("payments.suspicionReason")}: {payment.suspicionReason || "—"}</p>
+      <p className="text-muted" data-testid="review-amount">
+        {t("payments.paymentAmount", {
+          amount: payment.amount,
+          asset: payment.assetCode || "",
+        })}
+        {payment.creditedAmount != null && (
+          <>
+            {" — "}
+            {t("payments.creditedAmount", {
+              amount: payment.creditedAmount,
+              currency: payment.feeCurrency || payment.assetCode || "",
+            })}
+          </>
+        )}
+      </p>
       <InlineAlert>{error}</InlineAlert>
       <div className="form-group">
         <label className="form-label" htmlFor={`review-note-${txOf(payment)}`}>{t("payments.reviewNote")}</label>
@@ -147,6 +162,21 @@ function StatusOverrideForm({ payment, onDone }) {
   return (
     <form onSubmit={handleSubmit} data-testid="status-override-form">
       <InlineAlert>{error}</InlineAlert>
+      <p className="text-muted" data-testid="override-amount">
+        {t("payments.paymentAmount", {
+          amount: payment.amount,
+          asset: payment.assetCode || "",
+        })}
+        {payment.creditedAmount != null && (
+          <>
+            {" — "}
+            {t("payments.creditedAmount", {
+              amount: payment.creditedAmount,
+              currency: payment.feeCurrency || payment.assetCode || "",
+            })}
+          </>
+        )}
+      </p>
       <div className="admin-grid-2">
         <div className="form-group">
           <label className="form-label" htmlFor={`override-status-${txOf(payment)}`}>{t("payments.newStatus")}</label>
@@ -191,6 +221,21 @@ function RefundForm({ payment, onDone }) {
   return (
     <form onSubmit={handleSubmit} data-testid="refund-form">
       <InlineAlert>{error}</InlineAlert>
+      <p className="text-muted" data-testid="refund-amount">
+        {t("payments.paymentAmount", {
+          amount: payment.amount,
+          asset: payment.assetCode || "",
+        })}
+        {payment.creditedAmount != null && (
+          <>
+            {" — "}
+            {t("payments.creditedAmount", {
+              amount: payment.creditedAmount,
+              currency: payment.feeCurrency || payment.assetCode || "",
+            })}
+          </>
+        )}
+      </p>
       <div className="form-group">
         <label className="form-label" htmlFor={`refund-reason-${txOf(payment)}`}>{t("payments.refundReason")}</label>
         <input id={`refund-reason-${txOf(payment)}`} className="form-input" value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -368,6 +413,14 @@ export default function PaymentsPage() {
                     <td>
                       {p.amount} {p.assetCode || ""}
                       {tab === "overpayments" && p.excessAmount ? ` (+${p.excessAmount})` : ""}
+                      {p.creditedAmount != null && (
+                        <div className="text-muted" data-testid="credited-amount">
+                          {t("payments.creditedAmount", {
+                            amount: p.creditedAmount,
+                            currency: p.feeCurrency || p.assetCode || "",
+                          })}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span className={`badge ${STATUS_BADGE[p.status] || "badge-neutral"}`}>{p.status}</span>
