@@ -114,6 +114,65 @@ async function sumCanonicalPayments(schoolId, studentId, options = {}) {
 }
 
 /**
+ * Issue #1983: single-aggregation per-category paid totals.
+ *
+ * Returns `{ total, byCategory }` where `total` is the canonical paid sum for
+ * the student and `byCategory` maps fee category -> Decimal total. Uncategorised
+ * payments (no `feeCategory`) are attributed to every category of the student
+ * according to the documented allocation policy (see
+ * docs/issues/1983-student-balance-allocation.md):
+ *
+ *   - a payment carrying a `feeCategory` counts only toward that category;
+ *   - a payment without a `feeCategory` counts toward every category
+ *     (full attribution), so a full uncategorised payment marks every
+ *     category paid;
+ *   - `total` is the sum of all qualifying payments (categorised +
+ *     uncategorised), independent of the per-category attribution.
+ *
+ * One `$group` on `feeCategory` replaces the previous N+1 loop.
+ *
+ * @param {string} schoolId
+ * @param {string} studentId
+ * @param {Object} [options]
+ * @param {Object} [options.session]
+ * @param {string} [options.feeCurrency]
+ * @returns {Promise<{ total: Object, byCategory: Map<string, Object> }>}
+ */
+async function sumCanonicalPaymentsByCategory(schoolId, studentId, options = {}) {
+  const { session = null, feeCurrency } = options;
+  const match = canonicalPaidMatch(schoolId, studentId);
+  match.creditedAmount = { $ne: null };
+  if (feeCurrency !== undefined && feeCurrency !== null) {
+    match.feeCurrency = feeCurrency;
+  }
+
+  const agg = await Payment.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: '$feeCategory',
+        total: { $sum: { $toDecimal: '$creditedAmount' } },
+      },
+    },
+  ]).session(session);
+
+  let total = toMoney(0);
+  let uncategorised = toMoney(0);
+  const byCategory = new Map();
+  for (const row of agg) {
+    const amount = decimalFromMongo(row.total);
+    total = toMoney(total.plus(amount));
+    if (row._id === null || row._id === undefined || row._id === '') {
+      uncategorised = toMoney(uncategorised.plus(amount));
+    } else {
+      byCategory.set(row._id, amount);
+    }
+  }
+
+  return { total, byCategory, uncategorised };
+}
+
+/**
  * Compute the canonical balance fields for a student without persisting them.
  * Used by reminders and other read-only consumers so they never diverge from
  * the stored balance written by `updateStudentBalance`.
@@ -180,10 +239,12 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
   // Summed via $toDecimal (#1123 money-representation fix) so MongoDB adds
   // the amounts in exact Decimal128 space instead of accumulating float
   // error across every installment for the life of the account.
-  const paymentTotal = await sumCanonicalPayments(schoolId, studentId, {
-    session,
-    feeCurrency: student.feeCurrency,
-  });
+  // Issue #1983: one aggregation for the total and every category total.
+  const { total: paymentTotal, byCategory, uncategorised } =
+    await sumCanonicalPaymentsByCategory(schoolId, studentId, {
+      session,
+      feeCurrency: student.feeCurrency,
+    });
 
   // Include creditAdjustments in the cumulative total (Issue #1473).
   // creditAdjustments represent manual partial-credit overrides applied by admins
@@ -207,11 +268,11 @@ async function updateStudentBalance(schoolId, studentId, options = {}) {
     for (let i = 0; i < feesUpdated.length; i++) {
       const category = feesUpdated[i].category;
 
-      const categoryTotalDecimal = await sumCanonicalPayments(schoolId, studentId, {
-        session,
-        feeCategory: category,
-        feeCurrency: feesUpdated[i].feeCurrency || student.feeCurrency,
-      });
+      // Allocation policy (#1983): categorised payments count toward their own
+      // category; uncategorised payments count toward every category.
+      const categoryTotalDecimal = toMoney(
+        (byCategory.get(category) || toMoney(0)).plus(uncategorised)
+      );
       const categoryClassification = classifyFeePayment(categoryTotalDecimal, feesUpdated[i].amount);
 
       feesUpdated[i].totalPaid = categoryClassification.cumulativeTotal;
