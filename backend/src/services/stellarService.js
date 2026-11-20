@@ -102,6 +102,7 @@ const logger = require("../utils/logger").child("StellarService");
 const { getEngineForSchool } = require("./feeAdjustmentEngine");
 const { recordUnmatchedPayment } = require("./unmatchedPaymentService");
 const { updateStudentBalance } = require("../utils/studentBalanceUpdater");
+const { isBeforeIngestStart } = require("../utils/ingestWindow");
 
 // TTL for the per-student balance lock (#1026), shared with paymentController's
 // verifyPayment. Guards the read-aggregate-then-write sequence that computes
@@ -904,6 +905,18 @@ async function resolvePaymentReference(schoolId, memo) {
  */
 async function recordIncomingTransaction(tx, school, { source = "unknown" } = {}) {
   const { schoolId, stellarAddress } = school;
+
+  // #1986 — enforce the school's ingest window in every ingestion path (sync,
+  // poller, stream, verify) so a rotated wallet's earlier history is never
+  // credited as fees.
+  if (isBeforeIngestStart(tx, school)) {
+    logger.debug("Transaction skipped — before ingestStartsAt", {
+      txHash: tx.hash,
+      schoolId,
+      source,
+    });
+    return { outcome: "before_ingest_window", txHash: tx.hash };
+  }
 
   const existing = await Payment.findOne({
     txHash: tx.hash,
