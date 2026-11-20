@@ -181,6 +181,32 @@ function validateFeeStructure(req, res, next) {
   return next();
 }
 
+// Issue #1961: installmentIndex is a path param used to index into
+// plan.installments. Validate it as a non-negative integer and write the
+// converted number back so "abc" / "1.5" cannot reach the controller.
+const installmentIndexSchema = Joi.number().integer().min(0).required();
+
+function validateInstallmentIndexParam(req, res, next) {
+  const { error, value } = installmentIndexSchema.validate(req.params.installmentIndex, {
+    abortEarly: false,
+    convert: true,
+  });
+
+  if (error) {
+    return res.status(400).json({
+      error: error.details[0].message,
+      code: 'VALIDATION_ERROR',
+      errors: error.details.map(detail => ({
+        field: 'installmentIndex',
+        message: detail.message,
+      })),
+    });
+  }
+
+  req.params.installmentIndex = value;
+  return next();
+}
+
 function validateGetAllStudentsQuery(req, res, next) {
   const { error, value } = getAllStudentsQuerySchema.validate(req.query, {
     abortEarly: false,
@@ -265,4 +291,5 @@ module.exports = {
   validateGetAllStudentsQuery,
   validateExportStudentsQuery,
   validateGetStudentFeeHistoryQuery,
+  validateInstallmentIndexParam,
 };

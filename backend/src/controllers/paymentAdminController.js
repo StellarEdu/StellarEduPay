@@ -17,6 +17,7 @@ const { initiateRefund, approveRefund, rejectRefund, completeRefund, buildPrinci
 const { generateReconciliationReport } = require('../services/reconciliationService');
 const lock = require('../services/distributedLock');
 const { ADMIN_PAYMENT_STATUS_TRANSITIONS, PAYMENT_STATUS } = require('../constants/paymentStatus');
+const { parsePagination } = require('../utils/pagination');
 
 // TTL for the per-school distributed sync lock (60 s — long enough to complete
 // a full blockchain sync while short enough to auto-expire after a crash).
@@ -894,11 +895,14 @@ async function verifyReceipt(req, res, next) {
 async function getReconciliationReports(req, res, next) {
   try {
     const { schoolId } = req;
-    const { limit = 30 } = req.query;
+
+    // parsePagination rejects non-numeric / out-of-range values with a 400
+    // instead of letting NaN reach the driver (which surfaced as a 500).
+    const { limit } = parsePagination(req, { defaultLimit: 50, maxLimit: 200 });
 
     const reports = await ReconciliationReport.find({ schoolId })
       .sort({ reportedAt: -1 })
-      .limit(Math.min(parseInt(limit), 100))
+      .limit(limit)
       .lean();
 
     res.json({ reports, count: reports.length });

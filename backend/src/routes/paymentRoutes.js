@@ -63,7 +63,12 @@ const {
 const { resolveSchool } = require('../middleware/schoolContext');
 const idempotencyMiddleware = require('../middleware/idempotency');
 const { auditContext } = require('../middleware/auditContext');
-const { strictLimiter, verifyLimiter, syncLimiter } = require('../middleware/rateLimiter');
+const {
+  strictLimiter,
+  verifyLimiter,
+  syncLimiter,
+  publicStudentLimiter,
+} = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -111,7 +116,9 @@ const idempotency = idempotencyMiddleware({ criticalPaymentEndpoints: true });
  *       400:
  *         description: VALIDATION_ERROR - feeCategory is malformed
  *       404:
- *         description: Student not found
+ *         description: STUDENT_NOT_FOUND - student does not exist, is deleted, or belongs to another school
+ *       429:
+ *         description: RATE_LIMITED - too many requests from this IP
  */
 
 /**
@@ -210,6 +217,18 @@ router.post(
   resolveSchool,
   idempotency,
   submitTransaction,
+);
+
+// Public payment instructions. Rate-limited per IP (publicStudentLimiter) to
+// prevent enumeration of student IDs, and school context is resolved before
+// the handler runs so the lookup is tenant-scoped (#1962).
+router.get(
+  "/instructions/:studentId",
+  publicStudentLimiter,
+  validateStudentIdParam,
+  validatePaymentInstructionsQuery,
+  resolveSchool,
+  getPaymentInstructions,
 );
 
 // All remaining routes require school context

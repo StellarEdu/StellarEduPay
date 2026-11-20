@@ -13,6 +13,7 @@ const { logAudit } = require('../services/auditService');
 const { encryptStudentPii, decryptStudentPii, hashParentEmail } = require('../services/studentPiiEncryption');
 const { withStudentQuota, studentQuotaError } = require('../services/studentQuota');
 const { maskEmail, maskPhone } = require('../utils/piiRedaction');
+const { parsePagination } = require('../utils/pagination');
 
 // Creates one student only if the school still has a free seat (#1801).
 function createStudentWithinQuota(schoolId, maxStudents, data) {
@@ -150,9 +151,7 @@ async function registerStudent(req, res, next) {
 
 async function getAllStudents(req, res, next) {
   try {
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit, 10) || 50);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req, { defaultLimit: 50, maxLimit: 200 });
 
     const filter = { schoolId: req.schoolId };
 
