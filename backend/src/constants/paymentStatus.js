@@ -43,18 +43,21 @@
  * FAILED         — Payment failed (bad destination, wrong asset, etc.).
  * DISPUTED       — Payment marked as disputed by an admin or parent.
  * REFUND_PENDING — A refund has been initiated and is awaiting approval/execution.
- * REFUNDED       — Payment has been fully or partially refunded and confirmed on-chain.
+ * REFUNDED       — Payment has been fully refunded and confirmed on-chain.
+ * PARTIALLY_REFUNDED — Payment has been partially refunded (#1982); the
+ *                  remaining amount (amount − refundedAmount) is still credited.
  * INVALID        — Payment is structurally invalid (missing memo, etc.).
  */
 const PAYMENT_STATUS = Object.freeze({
-  PENDING:        'PENDING',
-  SUBMITTED:      'SUBMITTED',
-  SUCCESS:        'SUCCESS',
-  FAILED:         'FAILED',
-  DISPUTED:       'DISPUTED',
-  REFUND_PENDING: 'REFUND_PENDING',
-  REFUNDED:       'REFUNDED',
-  INVALID:        'INVALID',
+  PENDING:            'PENDING',
+  SUBMITTED:          'SUBMITTED',
+  SUCCESS:            'SUCCESS',
+  FAILED:             'FAILED',
+  DISPUTED:           'DISPUTED',
+  REFUND_PENDING:     'REFUND_PENDING',
+  REFUNDED:           'REFUNDED',
+  PARTIALLY_REFUNDED: 'PARTIALLY_REFUNDED',
+  INVALID:            'INVALID',
 });
 
 /**
