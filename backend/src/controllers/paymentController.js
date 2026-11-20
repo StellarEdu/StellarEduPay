@@ -269,22 +269,41 @@ async function createPaymentIntent(req, res, next) {
     const limitValidation = await validatePaymentAmount(feeAmount, { schoolId });
     if (!limitValidation.valid) return res.status(400).json({ error: limitValidation.error, code: limitValidation.code });
 
-    const memo = crypto.randomBytes(4).toString('hex').toUpperCase();
     const ttlMs = parseInt(process.env.PAYMENT_INTENT_TTL_MS, 10) || 24 * 60 * 60 * 1000;
 
     const feeCurrency = student.feeCurrency || req.school.feeCurrency || 'XLM';
 
-    const intent = await PaymentIntent.create({
-      schoolId,
-      studentId,
-      amount: feeAmount,
-      feeCurrency,
-      feeCategory: feeCategory || null,
-      memo,
-      status: 'pending',
-      expiresAt: new Date(Date.now() + ttlMs),
-      startedAt: new Date(),
-    });
+    // #1978 — one memo scheme: a 10-char base32 code derived from the intent
+    // _id. Retry on the (schoolId, memo) unique index instead of returning 409.
+    let intent = null;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3 && !intent; attempt += 1) {
+      const memo = generateIntentMemo();
+      try {
+        intent = await PaymentIntent.create({
+          schoolId,
+          studentId,
+          amount: feeAmount,
+          feeCurrency,
+          feeCategory: feeCategory || null,
+          memo,
+          status: 'pending',
+          expiresAt: new Date(Date.now() + ttlMs),
+          startedAt: new Date(),
+        });
+      } catch (err) {
+        if (err.code !== 11000) throw err;
+        lastErr = err;
+      }
+    }
+
+    if (!intent) {
+      return res.status(503).json({
+        error: 'Could not allocate a unique payment memo, please retry',
+        code: 'MEMO_ALLOCATION_FAILED',
+        detail: lastErr ? lastErr.message : undefined,
+      });
+    }
 
     const intentObj = intent.toObject();
     res.status(201).json({
