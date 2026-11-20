@@ -11,6 +11,11 @@
  *
  *   node scripts/migrate.js           # run all pending migrations
  *   node scripts/migrate.js rollback  # roll back the last applied migration
+ *   node scripts/migrate.js check     # read-only schema-version check (no writes)
+ *
+ * In Kubernetes the write commands run once per release in the migration Job
+ * (deploy/k8s/backend-migrate-job.yaml). The backend Deployment only runs
+ * `check`, so pod restarts and HPA scale-outs never apply migrations.
  *
  * It reuses the application's own database connection configuration so pool,
  * timeout and write-concern behaviour matches the running service exactly.
@@ -28,13 +33,13 @@ if (!process.env.MONGO_URI) {
     '[migrate] Missing required configuration. The migration step needs:\n' +
     '  - MONGO_URI  (MongoDB connection string)\n' +
     'Set it in the environment (or via the Kubernetes Secret referenced by the ' +
-    'migrate initContainer) and re-run `node scripts/migrate.js`.',
+    'migration Job) and re-run `node scripts/migrate.js`.',
   );
   process.exit(1);
 }
 
 const db = require('../src/config/database');
-const { runMigrations, rollback } = require('../src/services/migrationRunner');
+const { runMigrations, rollback, checkSchemaVersion } = require('../src/services/migrationRunner');
 
 async function main() {
   await db.connect();
@@ -42,6 +47,20 @@ async function main() {
   const command = process.argv[2];
   if (command === 'rollback') {
     await rollback();
+  } else if (command === 'check') {
+    // Read-only: verify the migration Job already applied this image's schema.
+    const result = await checkSchemaVersion();
+    if (!result.ok) {
+      console.error(
+        '[migrate] Schema is behind this image. Pending migrations:\n' +
+        result.pending.map(v => `  - ${v}`).join('\n') +
+        '\nRun the migration Job (kubectl apply -f deploy/k8s/backend-migrate-job.yaml) ' +
+        'before rolling out the backend Deployment.'
+      );
+      await db.disconnect();
+      process.exit(1);
+    }
+    console.log(`[migrate] Schema up to date (${result.applied.length} migrations applied).`);
   } else {
     await runMigrations();
   }

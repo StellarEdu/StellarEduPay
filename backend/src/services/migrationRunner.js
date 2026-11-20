@@ -176,4 +176,48 @@ async function rollback(_require = require, _db = null) {
   logger.info(`Rolled back: ${last.version}`);
 }
 
-module.exports = { runMigrations, rollback };
+/**
+ * Read-only schema-version check.
+ *
+ * Used by the backend Deployment's initContainer (and by the readiness path)
+ * to verify that the once-per-release migration Job has already applied every
+ * migration shipped in this image. It never writes to the database, so it is
+ * safe to run in every pod on every rollout and on every HPA scale-out.
+ *
+ * @param {Function} [_require] - injectable require for testing
+ * @param {object} [_db] - injectable database handle for testing
+ * @returns {Promise<{ok: boolean, expected: string[], applied: string[], pending: string[]}>}
+ */
+async function checkSchemaVersion(_require = require, _db = null) {
+  if (!fs.existsSync(MIGRATIONS_DIR)) {
+    throw new Error(
+      `[Migration] Migrations directory not found at "${MIGRATIONS_DIR}". ` +
+      'The production image must include the migrations/ directory ' +
+      '(see backend/Dockerfile). Refusing to continue.'
+    );
+  }
+
+  let db = _db;
+  if (!db) {
+    const databaseConfig = require('../config/database');
+    const connection = databaseConfig.getConnection();
+    db = connection.db;
+  }
+
+  const expected = fs.readdirSync(MIGRATIONS_DIR)
+    .filter(f => f.endsWith('.js'))
+    .sort()
+    .map(f => path.basename(f, '.js'));
+
+  const records = await Migration.find({ appliedAt: { $exists: true } })
+    .select({ version: 1 })
+    .lean();
+  const applied = records.map(r => r.version).sort();
+
+  const appliedSet = new Set(applied);
+  const pending = expected.filter(v => !appliedSet.has(v));
+
+  return { ok: pending.length === 0, expected, applied, pending };
+}
+
+module.exports = { runMigrations, rollback, checkSchemaVersion };
