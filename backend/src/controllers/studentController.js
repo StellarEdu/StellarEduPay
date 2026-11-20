@@ -742,7 +742,7 @@ async function insertValidatedRows(validatedRows, results) {
         if (results.details.length < BULK_IMPORT_MAX_FAILURES) {
           const originalRow = chunk.find(r => r.studentId === student.studentId);
           results.details.push({
-            row: originalRow.index + 2,
+            row: originalRow.rowNumber,
             studentId: student.studentId,
             status: 'created',
             _id: student._id,
@@ -757,7 +757,7 @@ async function insertValidatedRows(validatedRows, results) {
           if (results.details.length < BULK_IMPORT_MAX_FAILURES) {
             const originalRow = chunk.find(r => r.studentId === student.studentId);
             results.details.push({
-              row: originalRow.index + 2,
+              row: originalRow.rowNumber,
               studentId: student.studentId,
               status: 'created',
               _id: student._id,
@@ -774,7 +774,7 @@ async function insertValidatedRows(validatedRows, results) {
               ? 'Student ID already exists in this school'
               : writeErr.err.message;
             results.details.push({
-              row: failedRow.index + 2,
+              row: failedRow.rowNumber,
               studentId: failedRow.studentId,
               error: message,
               code: writeErr.err.code === 11000 ? 'DUPLICATE_STUDENT_ID' : 'INSERT_ERROR',
@@ -806,6 +806,18 @@ async function bulkImportStudents(req, res, next) {
       return res.status(400).json({ error: 'No student records found in input', code: 'VALIDATION_ERROR' });
     }
 
+    // #1995 — the JSON body path must honour the same row cap as the CSV path.
+    if (rows.length > CSV_MAX_ROWS) {
+      return res.status(400).json({
+        error: `Import exceeds maximum row limit of ${CSV_MAX_ROWS}`,
+        code: 'CSV_TOO_MANY_ROWS',
+      });
+    }
+
+    // #1995 — JSON rows are 0-based array indexes, CSV rows are file lines
+    // (header on line 1). Report the number the user can actually find.
+    const rowNumber = req.parsedRows ? (i) => i + 2 : (i) => i + 1;
+
     const results = { total: rows.length, created: 0, failed: 0, details: [] };
 
     // Pre-fetch fee structures for all unique class names (one query per unique class, not per row)
@@ -832,7 +844,7 @@ async function bulkImportStudents(req, res, next) {
         results.failed++;
         if (results.details.length < BULK_IMPORT_MAX_FAILURES) {
           results.details.push({
-            row: i + 2,
+            row: rowNumber(i),
             studentId: row.studentId || null,
             error: validationErrors[0],
             field: fieldErrors[0]?.field || null,
@@ -851,7 +863,7 @@ async function bulkImportStudents(req, res, next) {
         results.failed++;
         if (results.details.length < BULK_IMPORT_MAX_FAILURES) {
           results.details.push({
-            row: i + 2,
+            row: rowNumber(i),
             studentId: row.studentId,
             error: `No feeAmount provided and no fee structure found for class "${row.class}"`,
             field: 'class',
@@ -865,6 +877,7 @@ async function bulkImportStudents(req, res, next) {
       const rawParentPhone = row.parentPhone ? row.parentPhone.trim() : null;
       validatedRows.push({
         index: i,
+        rowNumber: rowNumber(i),
         schoolId,
         studentId: row.studentId.trim(),
         name: normaliseName(row.name),
@@ -893,7 +906,7 @@ async function bulkImportStudents(req, res, next) {
           preview.failed++;
           if (preview.details.length < BULK_IMPORT_MAX_FAILURES) {
             preview.details.push({
-              row: row.index + 2,
+              row: row.rowNumber,
               studentId: row.studentId,
               error: 'Student ID already exists in this school',
               code: 'DUPLICATE_STUDENT_ID',
@@ -902,7 +915,7 @@ async function bulkImportStudents(req, res, next) {
         } else {
           preview.wouldCreate++;
           if (preview.details.length < BULK_IMPORT_MAX_FAILURES) {
-            preview.details.push({ row: row.index + 2, studentId: row.studentId, status: 'valid' });
+            preview.details.push({ row: row.rowNumber, studentId: row.studentId, status: 'valid' });
           }
         }
       }
@@ -917,7 +930,7 @@ async function bulkImportStudents(req, res, next) {
         results.failed++;
         if (results.details.length < BULK_IMPORT_MAX_FAILURES) {
           results.details.push({
-            row: row.index + 2,
+            row: row.rowNumber,
             studentId: row.studentId,
             error: `School has reached maximum student quota of ${maxStudents}`,
             code: 'STUDENT_QUOTA_EXCEEDED',
