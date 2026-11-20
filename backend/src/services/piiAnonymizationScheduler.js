@@ -57,7 +57,9 @@ async function anonymizeExpiredPii() {
       cutoffDate,
     });
 
-    // Find all soft-deleted students whose retention window has expired
+    // Find all soft-deleted students whose retention window has expired.
+    // This is a cross-tenant retention job, so the tenantScope plugin must be
+    // bypassed explicitly — the filter intentionally spans every school.
     const result = await Student.updateMany(
       {
         deletedAt: {
@@ -83,7 +85,8 @@ async function anonymizeExpiredPii() {
           contactNumber: null,
           parentPhone: null,
         },
-      }
+      },
+      { _bypassTenantScope: true }
     );
 
     _lastRunAt = new Date();
