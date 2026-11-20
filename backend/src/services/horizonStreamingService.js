@@ -139,6 +139,10 @@ class SchoolStream {
     this.schoolId = school.schoolId;
     this.stellarAddress = school.stellarAddress;
     this.syncCursor = school.syncCursor || null;
+    // #1987: cursors are stored per address so a rotation cannot make the old
+    // address's paging token overwrite the new address's position.
+    this._cursors = new Map();
+    if (this.stellarAddress) this._cursors.set(this.stellarAddress, this.syncCursor);
 
     this._closeStream = null;   // function returned by .stream() to stop it
     this._reconnectTimer = null;

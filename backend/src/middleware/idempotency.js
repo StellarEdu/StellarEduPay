@@ -84,12 +84,53 @@ async function refreshVolatileFields(body) {
   }
 }
 
+/**
+ * Derive a fallback idempotency key from the request body when the client did
+ * not supply an `Idempotency-Key` header (#1992).
+ *
+ * `/payments/submit` is keyed by the transaction hash: the same signed XDR
+ * always hashes to the same value, so a retry without a header replays the
+ * first response instead of relaying to Horizon twice (#1561). The hash is
+ * computed from the XDR itself (no network call) and falls back to the raw XDR
+ * when it cannot be decoded, so the key is still stable.
+ *
+ * @param {object} req express request
+ * @returns {string|null} derived client key, or null when none can be derived
+ */
+function deriveFallbackKey(req) {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return null;
+
+  const xdr = typeof body.xdr === 'string' ? body.xdr.trim() : '';
+  if (!xdr) return null;
+
+  try {
+    const StellarSdk = require('@stellar/stellar-sdk');
+    const { networkPassphrase } = require('../config/stellarConfig');
+    const tx = new StellarSdk.Transaction(xdr, networkPassphrase);
+    return `txhash:${tx.hash().toString('hex')}`;
+  } catch (err) {
+    logger.warn('Could not derive idempotency key from XDR, using raw XDR', {
+      error: err.message,
+    });
+    return `xdr:${xdr}`;
+  }
+}
+
+module.exports = idempotency;
+module.exports.deriveFallbackKey = deriveFallbackKey;
+
 function idempotency(opts = {}) {
   const failClosed = opts.failClosed ?? false; // Default to fail-open for backwards compatibility
   const criticalPaymentEndpoints = opts.criticalPaymentEndpoints ?? false;
+  const deriveKey = opts.deriveKey ?? null;
 
   return function idempotencyMiddleware(req, res, next) {
-    const rawKey = req.headers['idempotency-key'];
+    let rawKey = req.headers['idempotency-key'];
+
+    if ((!rawKey || typeof rawKey !== 'string' || !rawKey.trim()) && deriveKey) {
+      rawKey = deriveKey(req);
+    }
 
     if (!rawKey || typeof rawKey !== 'string' || !rawKey.trim()) {
       return res.status(400).json({
