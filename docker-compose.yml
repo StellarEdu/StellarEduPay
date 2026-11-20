@@ -26,6 +26,10 @@ services:
       - SCHOOL_WALLET_ADDRESS=${SCHOOL_WALLET_ADDRESS}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      # REDIS_PASSWORD — required: Redis runs with --requirepass, so the backend
+      # cannot connect without it. No default: fail loudly at compose up rather
+      # than crash-looping the backend on auth errors. See issue #1963.
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       - NODE_OPTIONS=--max-old-space-size=400
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=8h
@@ -112,18 +116,42 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # ── Authentication + memory policy (issue #1963) ──────────────────────────
+    # --requirepass: without it any container on backend-db could FLUSHALL,
+    #   delete revoked:sid:* keys to un-revoke sessions, steal/extend locks, or
+    #   inject fake BullMQ jobs the worker would execute.
+    # --maxmemory + --maxmemory-policy noeviction: BullMQ requires noeviction
+    #   (with eviction, job keys silently disappear). A bounded maxmemory keeps
+    #   Redis from growing until the kernel OOM-kills the container, which would
+    #   drop every in-flight lock and queue state. Keep maxmemory below
+    #   REDIS_MEM_LIMIT so Redis rejects writes (OOM error) instead of dying.
+    # TLS is intentionally not enabled: Redis is only reachable on the internal
+    #   backend-db network, never published to the host.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-100mb}
+      - --maxmemory-policy
+      - noeviction
     volumes:
       - redis_data:/data
     networks:
       - backend-db
     mem_limit: ${REDIS_MEM_LIMIT:-128m}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Authenticated probe: an unauthenticated PING returns NOAUTH, so this
+      # also verifies requirepass is actually in effect.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     restart: unless-stopped
 
   mongo:
