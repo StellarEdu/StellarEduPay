@@ -2,12 +2,18 @@ import { useState, useEffect } from "react";
 import { getReport } from "../services/api";
 import api from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
+// Issue #1998: report history is scoped per user + school in sessionStorage.
+import {
+  loadReportHistory as readReportHistory,
+  saveReportHistory,
+} from "../utils/reportHistory";
 import {
   IconCalendar, IconDownload, IconBarChart, IconAlertTriangle,
   IconCheck, IconTrendingUp, IconClock, IconX,
 } from "./Icons";
 import PageHero, { StatCard } from "./PageHero";
 import { useTranslation } from "react-i18next";
+import { useAdminAuthContext } from "../hooks/AdminAuthContext";
 // Issue #1585: import CSS module so the @keyframes spin is defined in the
 // stylesheet rather than injected as a global inline <style> block.
 import _styles from "../styles/ReportDownload.module.css"; // eslint-disable-line no-unused-vars
@@ -27,19 +33,8 @@ export default function ReportDownload() {
   const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
-    loadReportHistory();
-  }, []);
-
-  async function loadReportHistory() {
-    try {
-      const storedHistory = localStorage.getItem("reportHistory");
-      if (storedHistory) {
-        setReportHistory(JSON.parse(storedHistory));
-      }
-    } catch (err) {
-      console.error("Failed to load report history:", err);
-    }
-  }
+    setReportHistory(readReportHistory(userId, schoolId));
+  }, [userId, schoolId]);
 
   function saveReportToHistory(reportData, params) {
     const newEntry = {
@@ -53,9 +48,7 @@ export default function ReportDownload() {
         paymentCount: reportData.summary.paymentCount,
       },
     };
-    const updated = [newEntry, ...reportHistory.slice(0, 9)];
-    setReportHistory(updated);
-    localStorage.setItem("reportHistory", JSON.stringify(updated));
+    setReportHistory((prev) => saveReportHistory(userId, schoolId, newEntry, prev));
   }
 
   async function handleGenerate(e) {
