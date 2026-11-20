@@ -106,11 +106,12 @@ const MAX_CONCURRENT_SCHOOL_POLLS = Math.max(1, parseInt(
  * caller advance the cursor past the transaction; transient outcomes
  * (`transient: true`) must stop cursor advancement so the tx is retried.
  */
-async function processTransaction(tx, school, fencingToken) {
-  const { schoolId, stellarAddress } = school;
-  const correlationId = deriveCorrelationId(tx.hash);
+async function recordIncomingTransaction(tx, school, operation, meta = {}) {
+  const { schoolId } = school;
+  const { payOp, opIndex, amount, asset } = operation;
+  const { memo, memoType, correlationId = deriveCorrelationId(tx.hash), fencingToken } = meta;
 
-  // Cheap optimisation only: skip work for transactions we've clearly already
+  // Cheap optimisation only: skip work for operations we've clearly already
   // recorded. This is NOT the dedup guarantee — it is a read-then-write race
   // (two workers can both miss the row). The authoritative guard is the unique
   // index on Payment { schoolId, txHash, opIndex }, which makes the insert
@@ -135,7 +136,7 @@ async function processTransaction(tx, school, fencingToken) {
   // operation's own asset code so per-asset limits are always applied.
   const assetCode = asset?.assetCode || payOp?.asset?.assetCode || 'XLM';
   // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
-  const paymentAmount = normalizeToNumber(payOp.amount);
+  const paymentAmount = normalizeToNumber(amount ?? payOp.amount);
 
   // Validate payment amount is within configured limits for THIS asset
   const limitValidation = await validatePaymentAmount(paymentAmount, {
@@ -236,6 +237,7 @@ async function processTransaction(tx, school, fencingToken) {
     studentId: memo,
     txHash: tx.hash,
     transactionHash: tx.hash,
+    opIndex: opIndex ?? 0,
     correlationId,
     amount: paymentAmount,
     feeAmount: student.feeAmount,
@@ -454,6 +456,65 @@ async function processTransaction(tx, school, fencingToken) {
   } finally {
     await session.endSession();
   }
+}
+
+/**
+ * Process a single transaction for a school.
+ *
+ * extractValidPayment returns { operations, memo, memoType, innerHash } where
+ * each operation is { payOp, opIndex, amount, asset }. We record one payment
+ * row per creditable operation, exactly as syncPaymentsForSchool does.
+ *
+ * Errors are re-thrown so the caller (poller / stream) can decide not to
+ * advance its cursor past a transaction that was not fully recorded.
+ */
+async function processTransaction(tx, school, fencingToken) {
+  const { schoolId, stellarAddress } = school;
+  const correlationId = deriveCorrelationId(tx.hash);
+
+  // Funnel: transaction received by the poller
+  _incFunnel('received', schoolId);
+
+  // Extract and validate payment
+  const valid = await extractValidPayment(tx, stellarAddress);
+  if (!valid) {
+    return { processed: false, reason: 'invalid_payment' };
+  }
+
+  const { operations, memo, memoType } = valid;
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return { processed: false, reason: 'invalid_payment' };
+  }
+
+  const recorded = [];
+  let skipped = 0;
+  let lastReason = null;
+
+  for (const operation of operations) {
+    const result = await recordIncomingTransaction(tx, school, operation, {
+      memo,
+      memoType,
+      correlationId,
+      fencingToken,
+    });
+    if (result.processed) {
+      recorded.push(result.payment);
+    } else {
+      skipped++;
+      lastReason = result.reason;
+    }
+  }
+
+  if (recorded.length === 0) {
+    return { processed: false, reason: lastReason || 'invalid_payment' };
+  }
+
+  return {
+    processed: true,
+    payment: recorded[0],
+    payments: recorded,
+    skipped,
+  };
 }
 
 /**
@@ -1065,6 +1126,7 @@ module.exports = {
   pollSchoolTransactions,
   pollSchoolWithDrainingAddresses,
   processTransaction,
+  recordIncomingTransaction,
   isBeforeIngestStart,
   // Exposed for testing
   _getBackoffState: () => ({ consecutiveErrors, currentIntervalMs }),

@@ -199,6 +199,7 @@ class SchoolStream {
       };
     }
 
+    let result;
     try {
       // Honour ingestStartsAt exactly like the poll loop so the stream never
       // ingests transactions that predate the configured ingestion window.
@@ -235,29 +236,35 @@ class SchoolStream {
         logger.info('Stream: payment detected and recorded', {
           schoolId: this.schoolId,
           txHash: tx.hash,
+          paymentsRecorded: result.paymentsRecorded,
         });
-      }
-
-      // Advance and persist cursor after every message (processed or skipped).
-      if (tx.paging_token && tx.paging_token !== this.syncCursor) {
-        this.syncCursor = tx.paging_token;
-        await School.updateOne(
-          { schoolId: this.schoolId },
-          { $set: { syncCursor: this.syncCursor } }
-        ).catch((err) =>
-          logger.warn('Failed to persist stream cursor', {
-            schoolId: this.schoolId,
-            error: err.message,
-          })
-        );
       }
     } catch (err) {
       // A processing error must not kill the stream — log and continue.
-      logger.error('Stream: error processing transaction', {
+      // Crucially, do NOT advance the cursor: the transaction was neither
+      // recorded nor definitively classified, so it must be retried (by the
+      // reconnect replay or the safety-net poll) rather than skipped forever.
+      logger.error('Stream: error processing transaction — cursor not advanced', {
         schoolId: this.schoolId,
         txHash: tx.hash,
         error: err.message,
       });
+      return;
+    }
+
+    // Advance and persist cursor only after the transaction has been
+    // successfully recorded or definitively classified as invalid/duplicate.
+    if (tx.paging_token && tx.paging_token !== this.syncCursor) {
+      this.syncCursor = tx.paging_token;
+      await School.updateOne(
+        { schoolId: this.schoolId },
+        { $set: { syncCursor: this.syncCursor } }
+      ).catch((err) =>
+        logger.warn('Failed to persist stream cursor', {
+          schoolId: this.schoolId,
+          error: err.message,
+        })
+      );
     }
   }
 

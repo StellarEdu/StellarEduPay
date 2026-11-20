@@ -303,6 +303,71 @@ async function createPaymentIntent(req, res, next) {
   }
 }
 
+// ====================== PAYMENT REFERENCE RESOLUTION ======================
+/**
+ * Resolve a transaction memo to the student it belongs to (#1967).
+ *
+ * A memo is either a payment-intent code (random 8-hex, created by
+ * createPaymentIntent) or, for backward compatibility, a raw student ID.
+ * Every path that maps memo -> student (submit, verify, sync, poller) must use
+ * this helper so the two flows can never diverge.
+ *
+ * Returns { intent, studentId, student } or null when nothing matches.
+ */
+async function resolvePaymentReference(schoolId, memo) {
+  if (!memo) return null;
+  const memoStr = memo.toString();
+
+  const intent = await PaymentIntent.findOne({ schoolId, memo: memoStr, status: 'pending' });
+  if (intent) {
+    const student = await Student.findOne({ schoolId, studentId: intent.studentId });
+    return { intent, studentId: intent.studentId, student: student || null };
+  }
+
+  // Backward compatibility: the memo may be the student ID itself.
+  const student = await Student.findOne({ schoolId, studentId: memoStr });
+  if (student) {
+    return { intent: null, studentId: student.studentId, student };
+  }
+
+  return null;
+}
+
+/**
+ * Locally inspect the operations of a parsed transaction (#1966).
+ * Returns the list of operations that pay `schoolAddress` in an accepted
+ * asset. Empty list means the transaction is not a school payment.
+ */
+function findSchoolPaymentOps(tx, schoolAddress) {
+  const acceptedCodes = new Set(Object.keys(ACCEPTED_ASSETS));
+  const matches = [];
+
+  const ops = tx.operations || [];
+  ops.forEach((op, index) => {
+    let destination = null;
+    let asset = null;
+
+    if (op.type === 'payment') {
+      destination = op.destination;
+      asset = op.asset;
+    } else if (op.type === 'pathPaymentStrictReceive' || op.type === 'pathPaymentStrictSend') {
+      destination = op.destination;
+      asset = op.destAsset || op.sendAsset;
+    } else {
+      return;
+    }
+
+    if (destination !== schoolAddress) return;
+
+    const assetCode = asset && asset.code ? asset.code : null;
+    if (!assetCode || !acceptedCodes.has(assetCode)) return;
+
+    matches.push({ index, type: op.type, assetCode, amount: op.amount || op.destAmount || op.sendAmount });
+  });
+
+  return matches;
+}
+
 // ====================== SUBMIT XDR TRANSACTION ======================
 async function submitTransaction(req, res, next) {
   try {
@@ -323,44 +388,62 @@ async function submitTransaction(req, res, next) {
     const memo = tx.memo.value ? tx.memo.value.toString() : null;
     if (!memo) return res.status(400).json({ error: 'Transaction must include the student ID as a memo' });
 
-    // Issue #1035: Match the specific PENDING record via paymentIntentId when provided
-    // to avoid misattribution if multiple PENDING records exist for the same memo.
-    // When paymentIntentId is not provided, fall back to matching by memo (backward compatibility).
-    let paymentRecord;
+    // #1966: never relay a transaction that does not actually pay this school.
+    // Checked locally before submission so the endpoint cannot be used as a
+    // generic free relay for arbitrary signed transactions.
+    const schoolAddress = req.school.stellarAddress;
+    const schoolOps = findSchoolPaymentOps(tx, schoolAddress);
+    if (schoolOps.length === 0) {
+      return res.status(400).json({
+        error: 'Transaction does not contain a payment to this school wallet in an accepted asset',
+        code: 'NO_SCHOOL_PAYMENT',
+      });
+    }
+
+    // #1967: resolve memo -> intent -> student through the shared helper.
+    const reference = await resolvePaymentReference(req.schoolId, memo);
+    if (!reference) {
+      return res.status(404).json({ error: 'Associated student not found in the database. Cannot process transaction.' });
+    }
+
+    // Issue #1035: when paymentIntentId is supplied it must match the intent
+    // the memo resolves to, so a submission cannot be attributed to another
+    // student's intent.
     if (paymentIntentId) {
       const intent = await PaymentIntent.findOne({ _id: paymentIntentId, schoolId: req.schoolId });
       if (!intent) {
         return res.status(404).json({ error: 'Payment intent not found', code: 'INTENT_NOT_FOUND' });
       }
-      if (intent.schoolId !== req.schoolId) {
-        return res.status(403).json({ error: 'Payment intent does not belong to this school', code: 'INTENT_MISMATCH' });
-      }
       if (intent.status !== 'pending') {
         return res.status(400).json({ error: `Payment intent is not in pending status (status: ${intent.status})`, code: 'INTENT_NOT_PENDING' });
       }
-
-      // Look for a PENDING payment record that corresponds to this intent
-      paymentRecord = await Payment.findOne({
-        schoolId: req.schoolId,
-        studentId: intent.studentId,
-        memo: intent.memo,
-        status: 'PENDING',
-      });
-    } else {
-      // Backward compatibility: match by memo alone (highest risk path)
-      paymentRecord = await Payment.findOne({ schoolId: req.schoolId, memo, status: 'PENDING' }).sort({ createdAt: -1 });
+      if (!reference.intent || reference.intent._id.toString() !== intent._id.toString()) {
+        return res.status(400).json({ error: 'Transaction memo does not match the supplied payment intent', code: 'INTENT_MISMATCH' });
+      }
     }
 
-    if (!paymentRecord) {
-      const studentObj = await Student.findOne({ schoolId: req.schoolId, studentId: memo });
-      if (!studentObj) return res.status(404).json({ error: 'Associated student not found in the database. Cannot process transaction.' });
-      paymentRecord = new Payment({ schoolId: req.schoolId, studentId: studentObj.studentId || memo, memo, amount: 0 });
-    }
-
-    paymentRecord.transactionHash = normalizedHash;
-    paymentRecord.status = 'SUBMITTED';
-    paymentRecord.submittedAt = new Date();
-    await paymentRecord.save();
+    // Upsert a SUBMITTED record keyed by the transaction hash. The record is
+    // never marked SUCCESS here — only verification against the on-chain
+    // operations may do that (#1966).
+    const submittedAt = new Date();
+    const paymentRecord = await Payment.findOneAndUpdate(
+      { schoolId: req.schoolId, txHash: normalizedHash, opIndex: 0 },
+      {
+        $set: {
+          studentId: reference.studentId,
+          memo,
+          status: 'SUBMITTED',
+          submittedAt,
+        },
+        $setOnInsert: {
+          schoolId: req.schoolId,
+          txHash: normalizedHash,
+          opIndex: 0,
+          amount: 0,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
 
     let txResponse;
     try {
@@ -380,33 +463,99 @@ async function submitTransaction(req, res, next) {
       return res.status(400).json({ error: 'Transaction was included in the ledger but failed on-chain', code: 'TX_FAILED', hash: transactionHash });
     }
 
-    paymentRecord.status = 'SUCCESS';
-    paymentRecord.confirmedAt = new Date();
-    paymentRecord.ledgerSequence = txResponse.ledger;
-    await paymentRecord.save();
+    // Hand the hash to the same verification pipeline as verifyPayment. It
+    // re-checks destination, asset/issuer, amount limits and memo against the
+    // on-chain operations before anything is recorded as SUCCESS.
+    let result = null;
+    try {
+      result = await verifyTransaction(normalizedHash, schoolAddress, req.schoolId);
+    } catch (verifyErr) {
+      logger.warn('[PaymentController] post-submit verification failed; leaving record SUBMITTED for the poller', {
+        schoolId: req.schoolId,
+        txHash: normalizedHash,
+        code: verifyErr.code,
+        error: verifyErr.message,
+      });
+    }
+
+    if (!result) {
+      // Verification could not confirm the payment (network hiccup or the tx
+      // does not pay this school). Leave the record SUBMITTED so the poller can
+      // pick it up; never claim SUCCESS from the submit response alone.
+      return res.status(202).json({
+        verified: false,
+        hash: normalizedHash,
+        ledger: txResponse.ledger,
+        status: 'SUBMITTED',
+        explorerUrl: getExplorerUrl(normalizedHash),
+      });
+    }
+
+    const studentStrId = result.studentId || result.memo || reference.studentId;
+    const studentObj = reference.student || await Student.findOne({ schoolId: req.schoolId, studentId: studentStrId });
+    if (!studentObj) {
+      return res.status(404).json({ error: 'Associated student not found. Cannot record transaction.' });
+    }
+
+    const now = new Date();
+    const confirmation = await determineConfirmationState(result.ledger || txResponse.ledger || null, undefined, false);
+
+    let recorded;
+    try {
+      recorded = await recordPayment({
+        schoolId: req.schoolId,
+        studentId: studentStrId,
+        txHash: result.hash,
+        opIndex: 0,
+        amount: result.amount,
+        feeAmount: result.feeAmount || studentObj.feeAmount,
+        feeValidationStatus: 'PENDING',
+        networkFee: result.networkFee,
+        status: 'SUCCESS',
+        memo: result.memo,
+        senderAddress: result.senderAddress || null,
+        ledgerSequence: result.ledger || txResponse.ledger || null,
+        confirmationStatus: confirmation.confirmationStatus,
+        confirmationState: confirmation.state,
+        confirmedAt: result.date ? new Date(result.date) : now,
+        verifiedAt: now,
+      });
+    } catch (recordErr) {
+      if (recordErr.code !== 'DUPLICATE_TX') throw recordErr;
+      recorded = await Payment.findOne({ schoolId: req.schoolId, txHash: normalizedHash, status: { $ne: 'REJECTED' } });
+    }
+
+    // Mark the linked intent completed and link it to the payment (#1967).
+    const linkedIntent = reference.intent || await PaymentIntent.findOne({ schoolId: req.schoolId, memo: result.memo, status: 'pending' });
+    if (linkedIntent) {
+      await PaymentIntent.findOneAndUpdate(
+        { _id: linkedIntent._id, schoolId: req.schoolId },
+        { status: 'completed', completedAt: now, ...(recorded?._id ? { paymentId: recorded._id } : {}) },
+      );
+    }
 
     // Issue #1034: Update student balance fields using the unified balance updater.
-    // This ensures submitTransaction produces the same Student state updates as
-    // verifyPayment and syncPaymentsForSchool, eliminating divergence.
     const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
     try {
-      await updateStudentBalance(req.schoolId, paymentRecord.studentId, {});
+      await updateStudentBalance(req.schoolId, studentStrId, {});
     } catch (balanceErr) {
       logger.error('Failed to update student balance after submitTransaction', {
         schoolId: req.schoolId,
-        studentId: paymentRecord.studentId,
+        studentId: studentStrId,
         txHash: normalizedHash,
         error: balanceErr.message,
       });
     }
 
-    const network = process.env.STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
     res.json({
       verified: true,
       hash: normalizedHash,
-      ledger: txResponse.ledger,
+      ledger: result.ledger || txResponse.ledger,
       status: 'SUCCESS',
-      explorerUrl: `https://stellar.expert/explorer/${network}/tx/${transactionHash}`,
+      amount: result.amount,
+      assetCode: result.assetCode,
+      studentId: studentStrId,
+      explorerUrl: getExplorerUrl(normalizedHash),
     });
   } catch (err) {
     next(err);
@@ -814,6 +963,8 @@ module.exports = {
   wrapStellarError,
   computeRemainingBalance,
   recordVerificationAttempt,
+  resolvePaymentReference,
+  findSchoolPaymentOps,
   // Re-export from split controllers so tests importing paymentController still work
   ...require('./paymentQueryController'),
   ...require('./paymentAdminController'),
