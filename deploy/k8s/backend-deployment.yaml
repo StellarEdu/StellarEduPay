@@ -28,18 +28,21 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        - name: migrate
+        # Read-only schema-version check. Migrations are applied exactly once
+        # per release by the backend-migrate Job (deploy/k8s/backend-migrate-job.yaml);
+        # this container only verifies the Job already ran for this image, so
+        # rollouts and HPA scale-outs never write to the database.
+        - name: schema-check
           image: ghcr.io/stellaredu/stellaredupay-backend:placeholder
           imagePullPolicy: IfNotPresent
-          command: ["node", "scripts/migrate.js"]
+          command: ["node", "scripts/migrate.js", "check"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          # Give the migration CLI the same configuration surface as the app
-          # container so it never drifts. The migration step only needs
-          # MONGO_URI (and NODE_ENV); the remaining keys are harmless here.
+          # Give the check the same configuration surface as the app
+          # container so it never drifts. It only needs MONGO_URI (and NODE_ENV).
           envFrom:
             - configMapRef:
                 name: stellaredupay
@@ -62,11 +65,11 @@ spec:
               mountPath: /tmp
           resources:
             requests:
-              cpu: "100m"
-              memory: "128Mi"
+              cpu: "50m"
+              memory: "64Mi"
             limits:
-              cpu: "500m"
-              memory: "256Mi"
+              cpu: "200m"
+              memory: "128Mi"
       containers:
         - name: backend
           image: ghcr.io/stellaredu/stellaredupay-backend:placeholder

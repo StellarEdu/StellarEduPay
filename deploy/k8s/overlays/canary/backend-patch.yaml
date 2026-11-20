@@ -11,7 +11,7 @@ spec:
   template:
     spec:
       initContainers:
-        - name: migrate
+        - name: schema-check
           image: ghcr.io/stellaredu/stellaredupay-backend:sha-PLACEHOLDER
           env:
             - name: MONGO_URI
