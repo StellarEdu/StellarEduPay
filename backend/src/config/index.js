@@ -155,6 +155,17 @@ const schema = Joi.object({
       }),
     }),
 
+  // ── Redis (issue #1963) ─────────────────────────────────────────────────────
+  // Redis backs BullMQ queues, distributed locks, rate-limit counters, session
+  // revocations and SSE pub/sub. It must be password-protected: without auth any
+  // workload on the network can FLUSHALL, un-revoke sessions or inject jobs.
+  // REDIS_URL may carry credentials inline (redis://:pass@host:6379); otherwise
+  // REDIS_PASSWORD is used. In production at least one of the two is required.
+  // REDIS_PASSWORD is resolved from REDIS_PASSWORD_FILE by resolveFileSecrets()
+  // so Kubernetes Secret volumes work.
+  REDIS_URL: Joi.string().uri({ scheme: ["redis", "rediss"] }).allow(null, "").default(null),
+  REDIS_PASSWORD: Joi.string().allow(null, "").default(null).meta({ sensitive: true }),
+
   // ── SMTP ────────────────────────────────────────────────────────────────────
   SMTP_HOST: Joi.string().allow(null, "").default(null),
   SMTP_PORT: Joi.number().integer().min(0).max(65535).default(587),
@@ -192,6 +203,30 @@ function validateEnv() {
       `[Config] Invalid environment configuration:\n${details}\n` +
         "Check your .env file against .env.example.",
     );
+  }
+
+  // Redis authentication (issue #1963). A password may be supplied directly via
+  // REDIS_PASSWORD or embedded in REDIS_URL (redis://:pass@host:6379). In
+  // production one of the two is mandatory — an unauthenticated Redis lets any
+  // workload on the network flush queues, un-revoke sessions or inject jobs.
+  if (process.env.NODE_ENV === "production") {
+    const hasPassword = Boolean(process.env.REDIS_PASSWORD);
+    const urlHasCredentials = (() => {
+      if (!process.env.REDIS_URL) return false;
+      try {
+        const parsed = new URL(process.env.REDIS_URL);
+        return Boolean(parsed.password || parsed.username);
+      } catch {
+        return false;
+      }
+    })();
+    if (!hasPassword && !urlHasCredentials) {
+      throw new Error(
+        "[Config] REDIS_PASSWORD (or credentials in REDIS_URL) is required in " +
+          "production. Redis holds BullMQ queues, locks and session revocations " +
+          "and must not run without authentication.",
+      );
+    }
   }
 }
 
@@ -396,6 +431,13 @@ if (env.NODE_ENV === "production") {
   }
 }
 
+// ── Redis (issue #1963) ───────────────────────────────────────────────────────
+// Connection settings consumed by config/redisClient.js. REDIS_URL may embed
+// credentials; REDIS_PASSWORD is used when the URL does not. Both are optional
+// outside production (local dev typically runs Redis without auth).
+const REDIS_URL = env.REDIS_URL || null;
+const REDIS_PASSWORD = env.REDIS_PASSWORD || null;
+
 // ── Fee Reminders ─────────────────────────────────────────────────────────────
 // How often the scheduler checks for unpaid fees (default: 1 hour).
 // Schools are only processed during their configured send window, so a shorter
@@ -490,6 +532,8 @@ const config = {
   JWT_SECRET_MIN_LENGTH,
   JWT_EXPIRES_IN,
   APP_URL,
+  REDIS_URL,
+  REDIS_PASSWORD,
   REMINDER_INTERVAL_MS,
   REMINDER_COOLDOWN_HOURS,
   REMINDER_MAX_COUNT,

@@ -34,7 +34,7 @@
  */
 
 const School = require('../models/schoolModel');
-const { processTransaction } = require('./transactionPollingService');
+const { recordTransaction } = require('./paymentIngestion');
 const { server: defaultServer } = require('../config/stellarConfig');
 const logger = require('../utils/logger').child('HorizonStreamingService');
 
@@ -177,15 +177,8 @@ class SchoolStream {
     this._lastMessageAt = Date.now();
     _setLag(0);
 
-    const schoolForProcess = {
-      schoolId: this.schoolId,
-      stellarAddress: this.stellarAddress,
-      feeAmount: undefined, // processTransaction reads from Student
-      suspiciousPaymentMultiplier: undefined,
-      suspiciousAmountConfig: undefined,
-    };
-
     // Re-fetch the school so we always have fresh config (multiplier, etc.)
+    let schoolForProcess;
     try {
       const freshSchool = await School.findOne({ schoolId: this.schoolId, isActive: true }).lean();
       if (!freshSchool) {
@@ -194,44 +187,84 @@ class SchoolStream {
         this.stop();
         return;
       }
-      Object.assign(schoolForProcess, freshSchool);
+      schoolForProcess = freshSchool;
     } catch (err) {
       logger.warn('Could not refresh school config; using stale data', {
         schoolId: this.schoolId,
         error: err.message,
       });
+      schoolForProcess = {
+        schoolId: this.schoolId,
+        stellarAddress: this.stellarAddress,
+      };
     }
 
+    let result;
     try {
-      const result = await processTransaction(tx, schoolForProcess, this._fencingToken);
+      // Honour ingestStartsAt exactly like the poll loop so the stream never
+      // ingests transactions that predate the configured ingestion window.
+      const ingestStartsAt = schoolForProcess.ingestStartsAt
+        ? new Date(schoolForProcess.ingestStartsAt)
+        : null;
+      if (ingestStartsAt && !Number.isNaN(ingestStartsAt.getTime())) {
+        const txTime = tx.created_at ? new Date(tx.created_at) : null;
+        if (txTime && !Number.isNaN(txTime.getTime()) && txTime < ingestStartsAt) {
+          logger.debug('Stream: skipping transaction before ingestStartsAt', {
+            schoolId: this.schoolId,
+            txHash: tx.hash,
+          });
+          // Still advance the cursor so we don't replay it forever.
+          if (tx.paging_token && tx.paging_token !== this.syncCursor) {
+            this.syncCursor = tx.paging_token;
+            await School.updateOne(
+              { schoolId: this.schoolId },
+              { $set: { syncCursor: this.syncCursor } }
+            ).catch((err) =>
+              logger.warn('Failed to persist stream cursor', {
+                schoolId: this.schoolId,
+                error: err.message,
+              })
+            );
+          }
+          return;
+        }
+      }
 
-      if (result.processed) {
+      const result = await recordTransaction(tx, schoolForProcess, { source: 'stream' });
+
+      if (result && result.processed) {
         logger.info('Stream: payment detected and recorded', {
           schoolId: this.schoolId,
           txHash: tx.hash,
+          paymentsRecorded: result.paymentsRecorded,
         });
-      }
-
-      // Advance and persist cursor after every message (processed or skipped).
-      if (tx.paging_token && tx.paging_token !== this.syncCursor) {
-        this.syncCursor = tx.paging_token;
-        await School.updateOne(
-          { schoolId: this.schoolId },
-          { $set: { syncCursor: this.syncCursor } }
-        ).catch((err) =>
-          logger.warn('Failed to persist stream cursor', {
-            schoolId: this.schoolId,
-            error: err.message,
-          })
-        );
       }
     } catch (err) {
       // A processing error must not kill the stream — log and continue.
-      logger.error('Stream: error processing transaction', {
+      // Crucially, do NOT advance the cursor: the transaction was neither
+      // recorded nor definitively classified, so it must be retried (by the
+      // reconnect replay or the safety-net poll) rather than skipped forever.
+      logger.error('Stream: error processing transaction — cursor not advanced', {
         schoolId: this.schoolId,
         txHash: tx.hash,
         error: err.message,
       });
+      return;
+    }
+
+    // Advance and persist cursor only after the transaction has been
+    // successfully recorded or definitively classified as invalid/duplicate.
+    if (tx.paging_token && tx.paging_token !== this.syncCursor) {
+      this.syncCursor = tx.paging_token;
+      await School.updateOne(
+        { schoolId: this.schoolId },
+        { $set: { syncCursor: this.syncCursor } }
+      ).catch((err) =>
+        logger.warn('Failed to persist stream cursor', {
+          schoolId: this.schoolId,
+          error: err.message,
+        })
+      );
     }
   }
 

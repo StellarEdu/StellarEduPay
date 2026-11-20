@@ -121,18 +121,30 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
           getPublicStudent(id, { signal }),
           getPaymentInstructions(id, { signal }),
         ]);
-        if (stuRes.status === "rejected") {
-          const err = stuRes.reason;
-          if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") return;
+        // #1962 — an unknown/deleted/foreign student ID must stop the payment
+        // flow entirely: no QR code, no memo, no wallet address. The backend
+        // answers 404 STUDENT_NOT_FOUND for these, so treat it as a hard stop.
+        const isNotFound = (reason) =>
+          reason?.response?.status === 404 ||
+          reason?.response?.data?.code === "STUDENT_NOT_FOUND";
+        if (stuRes.status === "rejected" || instrRes.status === "rejected") {
+          const reason =
+            stuRes.status === "rejected" ? stuRes.reason : instrRes.reason;
+          if (reason?.name === "CanceledError" || reason?.code === "ERR_CANCELED") return;
+          setStudent(null);
+          setInstructions(null);
+          setPayments(null);
           setError(
-            getErrorMessage(err.response?.data?.code, err.response?.data?.error) ||
-            t("paymentForm.studentNotFound")
+            isNotFound(reason)
+              ? t("paymentForm.studentNotFound")
+              : getErrorMessage(reason?.response?.data?.code, reason?.response?.data?.error) ||
+                t("paymentForm.studentNotFound")
           );
           errorRef.current?.focus();
           return;
         }
         setStudent(stuRes.value?.data ?? null);
-        setInstructions(instrRes.status === "fulfilled" ? instrRes.value?.data : null);
+        setInstructions(instrRes.value?.data ?? null);
         setPayments([]);
       } else {
         const [stuRes, instrRes, payRes, balRes, planRes] = await Promise.allSettled([
@@ -147,8 +159,12 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
           }),
           getPaymentPlan(id, { signal }).catch(() => null),
         ]);
+        // #1962 — authenticated callers still receive the per-category fee
+        // breakdown (paid/totalPaid/remainingBalance); the public response
+        // omits it. Only render the breakdown when the backend sent it.
+        const instrData = instrRes.value?.data ?? null;
         setStudent(stuRes.value?.data ?? null);
-        setInstructions(instrRes.value?.data ?? null);
+        setInstructions(instrData);
         const paymentsList = payRes.value?.data?.payments ?? payRes.value?.data ?? [];
         setPayments(paymentsList);
         setHasDeletedPayments(balRes?.value?.data?.hasDeletedPayments === true);
@@ -392,22 +408,65 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
               <InfoRow label={t("paymentForm.class")}>{student.class}</InfoRow>
               <InfoRow label={t("paymentForm.fee")}>
                 {instructions.feeAmount ?? student.feeAmount}
-                <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
-              </InfoRow>
-              <InfoRow label={t("actions.status")}>
-                <span className={student.feePaid ? "badge badge-success" : "badge badge-danger"}>
-                  {student.feePaid ? t("paymentForm.paid") : t("paymentForm.unpaid")}
+                <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                  {instructions.feeCurrency || student.feeCurrency || "XLM"}
                 </span>
               </InfoRow>
+              {/* #1962 — paid status and the per-category breakdown are only
+                  returned to authenticated callers; anonymous responses omit
+                  them, so only render what the backend actually sent. */}
+              {typeof student.feePaid === "boolean" && (
+                <InfoRow label={t("actions.status")}>
+                  <span className={student.feePaid ? "badge badge-success" : "badge badge-danger"}>
+                    {student.feePaid ? t("paymentForm.paid") : t("paymentForm.unpaid")}
+                  </span>
+                </InfoRow>
+              )}
+              {Array.isArray(instructions.fees) && instructions.fees.length > 0 && (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <span className="pf-section-label" style={{ display: "block", marginBottom: "0.375rem" }}>
+                    {t("paymentForm.feeBreakdown")}
+                  </span>
+                  {instructions.fees.map((fee, i) => (
+                    <InfoRow key={fee.category ?? fee.name ?? i} label={fee.category ?? fee.name ?? ""}>
+                      <span style={{ marginRight: "0.5rem" }}>
+                        {fee.amount}
+                        <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                      </span>
+                      {typeof fee.paid === "boolean" && (
+                        <span className={fee.paid ? "badge badge-success" : "badge badge-danger"}>
+                          {fee.paid ? t("paymentForm.paid") : t("paymentForm.unpaid")}
+                        </span>
+                      )}
+                    </InfoRow>
+                  ))}
+                  {instructions.totalPaid != null && (
+                    <InfoRow label={t("paymentForm.totalPaid")}>
+                      {instructions.totalPaid}
+                      <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    </InfoRow>
+                  )}
+                  {instructions.remainingBalance != null && (
+                    <InfoRow label={t("paymentForm.remainingBalance")}>
+                      {instructions.remainingBalance}
+                      <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    </InfoRow>
+                  )}
+                </div>
+              )}
               {instructions.paymentLimits && (
                 <>
                   <InfoRow label={t("paymentForm.minAmount")}>
                     {instructions.paymentLimits.min}
-                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                      {instructions.feeCurrency || student.feeCurrency || "XLM"}
+                    </span>
                   </InfoRow>
                   <InfoRow label={t("paymentForm.maxAmount")}>
                     {instructions.paymentLimits.max}
-                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>XLM</span>
+                    <span style={{ marginLeft: "0.25rem", fontSize: "0.72rem", color: "var(--text-muted)", fontWeight: 600 }}>
+                      {instructions.feeCurrency || student.feeCurrency || "XLM"}
+                    </span>
                   </InfoRow>
                 </>
               )}
@@ -486,7 +545,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 const activeMemoType = memoTypes.includes(memoType) ? memoType : "MEMO_TEXT";
                 const paymentUri = generateStellarPaymentUri({
                   destination: instructions.walletAddress,
-                  amount: instructions.feeAmount ?? student.feeAmount ?? 0,
+                  amount: instructions.amountDue ?? instructions.feeAmount ?? student.feeAmount ?? 0,
                   memo: instructions.memo,
                   memoType: activeMemoType,
                   assetCode: nonNative?.code,
@@ -494,6 +553,7 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                 });
                 const encodedMemo = encodeMemo(instructions.memo, activeMemoType);
                 const qrAmount = instructions.feeAmount ?? student.feeAmount ?? 0;
+                const feeCurrency = instructions.feeCurrency || student.feeCurrency || "XLM";
                 const downloadFilename = `stellar-payment-${instructions.memo}.png`;
                 return (
                   <div style={{ textAlign: "center", marginTop: "1.25rem", padding: "1.25rem", background: "var(--bg-subtle, var(--bg))", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
@@ -511,11 +571,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         value={paymentUri}
                         size={200}
                         role="img"
-                        aria-label={t("paymentForm.qrPayAria", { amount: qrAmount, memo: instructions.memo })}
+                        aria-label={t("paymentForm.qrPayAria", { amount: qrAmount, currency: feeCurrency, memo: instructions.memo })}
                       />
                     </div>
                     <p style={{ marginTop: "0.625rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       {t("paymentForm.walletCompatibility")}
+                    </p>
+                    <p style={{ marginTop: "0.375rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                      {t("paymentForm.feeCurrencyNote", { currency: feeCurrency })}
                     </p>
 
                     {/* Memo type — for wallets that require a numeric or hash memo (#1118) */}
@@ -636,6 +699,14 @@ export default function PaymentForm({ initialStudentId = "", publicMode = false 
                         <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
                           {p.assetCode || "XLM"}
                         </span>
+                        {p.creditedAmount != null && (
+                          <span style={{ marginLeft: "0.35rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)" }}>
+                            {t("paymentForm.creditedAs", {
+                              amount: p.creditedAmount,
+                              currency: p.feeCurrency || instructions?.feeCurrency || student?.feeCurrency || "XLM",
+                            })}
+                          </span>
+                        )}
                       </strong>
                       <div style={{ display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
                           <span className={badge.cls}>{t(badge.key)}</span>

@@ -38,6 +38,49 @@ function _updateStatus(newStatus, reason = null) {
   };
 }
 
+function _isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
+
+/**
+ * Resolve the Redis password from REDIS_URL (when it carries credentials) or
+ * REDIS_PASSWORD. Never log the value.
+ */
+function _getRedisPassword() {
+  if (process.env.REDIS_URL) {
+    try {
+      const parsed = new URL(process.env.REDIS_URL);
+      if (parsed.password) {
+        return decodeURIComponent(parsed.password);
+      }
+      if (parsed.username && !parsed.password) {
+        // Redis 6+ ACL style: redis://user:pass@host — password is required.
+        return undefined;
+      }
+    } catch (_) {
+      // Malformed URL is reported by ioredis; fall through to REDIS_PASSWORD.
+    }
+  }
+  return process.env.REDIS_PASSWORD || undefined;
+}
+
+/**
+ * Issue #1963: Redis must be authenticated. In production, refuse to start
+ * without a password rather than silently running unauthenticated.
+ */
+function assertRedisAuthConfigured() {
+  const hasTarget = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST);
+  if (!hasTarget) return;
+  if (_getRedisPassword()) return;
+  if (!_isProduction()) {
+    _throttleRedisWarning('Redis is configured without a password (allowed outside production)');
+    return;
+  }
+  throw new Error(
+    'Redis authentication is required in production: set REDIS_PASSWORD or REDIS_URL with credentials',
+  );
+}
+
 /**
  * Shared reconnection policy used by every Redis consumer (queue, SSE pub/sub,
  * distributed locks, rate limiter, refresh-token store). Centralising it here
@@ -50,10 +93,21 @@ function _updateStatus(newStatus, reason = null) {
  * @param {object} [overrides] Merged over the shared defaults.
  */
 function getRedisConnectionOptions(overrides = {}) {
+  const password = _getRedisPassword();
+  const base = process.env.REDIS_URL
+    ? {
+        // ioredis accepts a URL string; credentials are parsed from it.
+        // Keep the URL intact so TLS (rediss://) and db index are honoured.
+        ...(password ? { password } : {}),
+      }
+    : {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+        ...(password ? { password } : {}),
+      };
+
   return {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
+    ...base,
     lazyConnect: true,
     enableOfflineQueue: false,
     // Must be null: this single shared client is also handed to BullMQ
@@ -83,8 +137,20 @@ function getRedisConfig() {
   return getRedisConnectionOptions();
 }
 
+function _describeTarget() {
+  if (process.env.REDIS_URL) {
+    try {
+      const parsed = new URL(process.env.REDIS_URL);
+      return { host: parsed.hostname, port: parsed.port || 6379, tls: parsed.protocol === 'rediss:' };
+    } catch (_) {
+      return { host: 'invalid-redis-url' };
+    }
+  }
+  return { host: process.env.REDIS_HOST, port: process.env.REDIS_PORT || 6379 };
+}
+
 function createRedisClient() {
-  if (!process.env.REDIS_HOST) {
+  if (!process.env.REDIS_HOST && !process.env.REDIS_URL) {
     return null;
   }
 
@@ -92,16 +158,17 @@ function createRedisClient() {
     return client;
   }
 
+  assertRedisAuthConfigured();
+
   try {
     const Redis = require('ioredis');
-    client = new Redis(getRedisConfig());
+    client = process.env.REDIS_URL
+      ? new Redis(process.env.REDIS_URL, getRedisConfig())
+      : new Redis(getRedisConfig());
 
     client.on('connect', () => {
       _updateStatus('connecting');
-      logger.info('[RedisClient] connecting', {
-        host: process.env.REDIS_HOST,
-        port: process.env.REDIS_PORT || 6379,
-      });
+      logger.info('[RedisClient] connecting', _describeTarget());
     });
 
     client.on('ready', () => {
@@ -114,25 +181,18 @@ function createRedisClient() {
       _updateStatus('unavailable', err.message);
       _throttleRedisWarning('Redis unavailable', {
         error: err.message,
-        host: process.env.REDIS_HOST,
-        port: process.env.REDIS_PORT || 6379,
+        ..._describeTarget(),
       });
     });
 
     client.on('close', () => {
       _updateStatus('closed', 'connection closed');
-      _throttleRedisWarning('Redis connection closed', {
-        host: process.env.REDIS_HOST,
-        port: process.env.REDIS_PORT || 6379,
-      });
+      _throttleRedisWarning('Redis connection closed', _describeTarget());
     });
 
     client.on('end', () => {
       _updateStatus('ended', 'connection ended');
-      _throttleRedisWarning('Redis connection ended', {
-        host: process.env.REDIS_HOST,
-        port: process.env.REDIS_PORT || 6379,
-      });
+      _throttleRedisWarning('Redis connection ended', _describeTarget());
     });
 
     client.on('reconnecting', (delay) => {
@@ -207,9 +267,9 @@ function resetRedisClient() {
   client = null;
   lastRedisWarningAt = 0;
   status = {
-    configured: Boolean(process.env.REDIS_HOST),
+    configured: Boolean(process.env.REDIS_HOST || process.env.REDIS_URL),
     connected: false,
-    status: process.env.REDIS_HOST ? 'unavailable' : 'disabled',
+    status: process.env.REDIS_HOST || process.env.REDIS_URL ? 'unavailable' : 'disabled',
     reason: null,
     lastUpdatedAt: new Date().toISOString(),
   };
@@ -231,6 +291,7 @@ async function closeRedisClients() {
 }
 
 module.exports = {
+  assertRedisAuthConfigured,
   createRedisClient,
   getRedisClient,
   getRedisSubscriber,

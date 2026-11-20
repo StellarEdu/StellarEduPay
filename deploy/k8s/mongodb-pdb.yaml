@@ -5,12 +5,13 @@ metadata:
   labels:
     app: mongodb
 spec:
-  # mongodb-statefulset.yaml runs replicas: 1 (single-node replica set) — require
-  # the pod to stay available during any voluntary disruption (node drain, cluster
-  # autoscaler scale-down, managed-cluster upgrade) so routine maintenance can
-  # never take the payment database offline.
-  # Once a three-node replica set overlay is available, update minAvailable to 2.
-  minAvailable: 1
+  # mongodb-statefulset.yaml runs a 3-member replica set (1 primary, 2 secondaries).
+  # The readiness probe accepts both PRIMARY and SECONDARY members, so all three
+  # pods count as available. Allow one member to be evicted at a time (node drain,
+  # cluster autoscaler scale-down, managed-cluster upgrade) while keeping a
+  # majority (2 of 3) available so the replica set retains quorum and routine
+  # maintenance can never take the payment database offline.
+  minAvailable: 2
   selector:
     matchLabels:
       app: mongodb

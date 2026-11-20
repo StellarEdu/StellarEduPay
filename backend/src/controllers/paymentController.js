@@ -112,6 +112,47 @@ function wrapStellarError(err) {
 }
 
 // ====================== PAYMENT INSTRUCTIONS ======================
+
+/**
+ * Mask a student's name for anonymous payers (#1962). Only the first letter of
+ * each name part is kept so a parent can confirm they are paying for the right
+ * child without exposing the full name to anyone who guesses a student ID.
+ */
+function maskStudentName(student) {
+  const raw = student?.name || [student?.firstName, student?.lastName].filter(Boolean).join(' ');
+  if (!raw || typeof raw !== 'string') return null;
+  return raw
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${'*'.repeat(Math.max(part.length - 1, 0))}`)
+    .join(' ');
+}
+
+/**
+ * Whether the caller is allowed to see the per-category fee breakdown
+ * (paid / totalPaid / remainingBalance). Only authenticated users or callers
+ * presenting a valid pay-link token qualify; anonymous callers get the amount
+ * due only (#1962).
+ */
+async function canSeeFeeBreakdown(req) {
+  if (req.user || req.auth || req.isAuthenticated?.()) return true;
+  const token = req.query?.token || req.params?.token || req.headers?.['x-pay-link-token'];
+  if (!token) return false;
+  try {
+    const { verifyPayLinkToken } = require('../services/payLinkService');
+    if (typeof verifyPayLinkToken !== 'function') return false;
+    const result = await verifyPayLinkToken(token, {
+      schoolId: req.schoolId,
+      studentId: req.params.studentId,
+    });
+    return Boolean(result && (result.valid === undefined || result.valid));
+  } catch (err) {
+    logger.debug('[PaymentController] pay-link token rejected', { error: err.message });
+    return false;
+  }
+}
+
 async function getPaymentInstructions(req, res, next) {
   try {
     const targetCurrency = req.school.localCurrency || 'USD';
@@ -125,19 +166,31 @@ async function getPaymentInstructions(req, res, next) {
       }
     }
 
+    // Resolve the student first: an unknown, soft-deleted or cross-school ID
+    // must never receive a wallet address or memo (#1962). The soft-delete
+    // plugin already filters deletedAt, but the explicit filter keeps the
+    // intent obvious and survives plugin changes.
+    const student = await Student.findOne({
+      schoolId: req.schoolId,
+      studentId: req.params.studentId,
+      deletedAt: null,
+    });
+
+    if (!student) {
+      return res.status(404).json({ error: 'Student not found', code: 'STUDENT_NOT_FOUND' });
+    }
+
     // Resolved after the asset is known so per-asset limits apply (#1117).
     const limits = await getPaymentLimits({
       schoolId: req.schoolId,
       asset: asset ? asset.split(':')[0] : undefined,
     });
 
-    const student = await Student.findOne({ schoolId: req.schoolId, studentId: req.params.studentId });
-
-    let feeAmount = student ? student.feeAmount : null;
+    let feeAmount = student.feeAmount;
     let feeConversion = null;
     let categoryInfo = null;
 
-    if (feeCategory && student?.fees?.length > 0) {
+    if (feeCategory && student.fees?.length > 0) {
       const fee = student.fees.find((f) => f.category === feeCategory);
       if (fee) {
         feeAmount = fee.amount;
@@ -145,25 +198,31 @@ async function getPaymentInstructions(req, res, next) {
       }
     }
 
+    // #1974 — convert the fee using the fee currency, not always XLM, so the
+    // displayed local equivalent agrees with the ledger's credited amounts.
+    const feeCurrency = student?.feeCurrency || req.school.feeCurrency || 'XLM';
     if (feeAmount) {
-      feeConversion = await convertToLocalCurrency(feeAmount, 'XLM', targetCurrency);
+      feeConversion = await convertToLocalCurrency(feeAmount, feeCurrency, targetCurrency);
     }
 
-    const fees = student?.fees?.length > 0
+    const includeBreakdown = await canSeeFeeBreakdown(req);
+
+    const fees = includeBreakdown && student.fees?.length > 0
       ? student.fees.map((f) => ({ category: f.category, amount: f.amount, paid: f.paid, totalPaid: f.totalPaid || 0, remainingBalance: computeRemainingBalance(f) }))
       : [];
 
-    res.json({
+    const response = {
       walletAddress: req.school.stellarAddress,
-      memo: req.params.studentId,
+      memo: student.studentId || req.params.studentId,
+      maskedName: maskStudentName(student),
       acceptedAssets: Object.values(ACCEPTED_ASSETS).map((a) => ({ code: a.code, type: a.type, displayName: a.displayName, issuer: a.issuer ?? null })),
       paymentLimits: { min: limits.min, max: limits.max },
       minAmount: limits.min,
       maxAmount: limits.max,
+      amountDue: feeAmount,
       feeAmount,
+      feeCurrency,
       feeCategory: feeCategory || null,
-      categoryInfo,
-      fees,
       feeLocalEquivalent: feeConversion?.available
         ? { amount: feeConversion.localAmount, currency: feeConversion.currency, rate: feeConversion.rate, rateTimestamp: feeConversion.rateTimestamp }
         : null,
@@ -173,7 +232,16 @@ async function getPaymentInstructions(req, res, next) {
       // directly. New clients should read `supportedMemoTypes` (#1118).
       memoType: 'text',
       supportedMemoTypes: SUPPORTED_MEMO_TYPES,
-    });
+    };
+
+    // Per-category breakdown (paid / totalPaid / remainingBalance) is only
+    // disclosed to authenticated or pay-link callers (#1962).
+    if (includeBreakdown) {
+      response.categoryInfo = categoryInfo;
+      response.fees = fees;
+    }
+
+    res.json(response);
   } catch (err) {
     next(err);
   }
@@ -204,10 +272,13 @@ async function createPaymentIntent(req, res, next) {
     const memo = crypto.randomBytes(4).toString('hex').toUpperCase();
     const ttlMs = parseInt(process.env.PAYMENT_INTENT_TTL_MS, 10) || 24 * 60 * 60 * 1000;
 
+    const feeCurrency = student.feeCurrency || req.school.feeCurrency || 'XLM';
+
     const intent = await PaymentIntent.create({
       schoolId,
       studentId,
       amount: feeAmount,
+      feeCurrency,
       feeCategory: feeCategory || null,
       memo,
       status: 'pending',
@@ -221,6 +292,7 @@ async function createPaymentIntent(req, res, next) {
       // Issue #1035: Include intentId in response so client can pass it back in submitTransaction
       // to ensure the submission is matched to the correct PENDING record
       intentId: intent._id.toString(),
+      feeCurrency,
       categoryInfo,
     });
   } catch (err) {
@@ -229,6 +301,71 @@ async function createPaymentIntent(req, res, next) {
     }
     next(err);
   }
+}
+
+// ====================== PAYMENT REFERENCE RESOLUTION ======================
+/**
+ * Resolve a transaction memo to the student it belongs to (#1967).
+ *
+ * A memo is either a payment-intent code (random 8-hex, created by
+ * createPaymentIntent) or, for backward compatibility, a raw student ID.
+ * Every path that maps memo -> student (submit, verify, sync, poller) must use
+ * this helper so the two flows can never diverge.
+ *
+ * Returns { intent, studentId, student } or null when nothing matches.
+ */
+async function resolvePaymentReference(schoolId, memo) {
+  if (!memo) return null;
+  const memoStr = memo.toString();
+
+  const intent = await PaymentIntent.findOne({ schoolId, memo: memoStr, status: 'pending' });
+  if (intent) {
+    const student = await Student.findOne({ schoolId, studentId: intent.studentId });
+    return { intent, studentId: intent.studentId, student: student || null };
+  }
+
+  // Backward compatibility: the memo may be the student ID itself.
+  const student = await Student.findOne({ schoolId, studentId: memoStr });
+  if (student) {
+    return { intent: null, studentId: student.studentId, student };
+  }
+
+  return null;
+}
+
+/**
+ * Locally inspect the operations of a parsed transaction (#1966).
+ * Returns the list of operations that pay `schoolAddress` in an accepted
+ * asset. Empty list means the transaction is not a school payment.
+ */
+function findSchoolPaymentOps(tx, schoolAddress) {
+  const acceptedCodes = new Set(Object.keys(ACCEPTED_ASSETS));
+  const matches = [];
+
+  const ops = tx.operations || [];
+  ops.forEach((op, index) => {
+    let destination = null;
+    let asset = null;
+
+    if (op.type === 'payment') {
+      destination = op.destination;
+      asset = op.asset;
+    } else if (op.type === 'pathPaymentStrictReceive' || op.type === 'pathPaymentStrictSend') {
+      destination = op.destination;
+      asset = op.destAsset || op.sendAsset;
+    } else {
+      return;
+    }
+
+    if (destination !== schoolAddress) return;
+
+    const assetCode = asset && asset.code ? asset.code : null;
+    if (!assetCode || !acceptedCodes.has(assetCode)) return;
+
+    matches.push({ index, type: op.type, assetCode, amount: op.amount || op.destAmount || op.sendAmount });
+  });
+
+  return matches;
 }
 
 // ====================== SUBMIT XDR TRANSACTION ======================
@@ -251,44 +388,62 @@ async function submitTransaction(req, res, next) {
     const memo = tx.memo.value ? tx.memo.value.toString() : null;
     if (!memo) return res.status(400).json({ error: 'Transaction must include the student ID as a memo' });
 
-    // Issue #1035: Match the specific PENDING record via paymentIntentId when provided
-    // to avoid misattribution if multiple PENDING records exist for the same memo.
-    // When paymentIntentId is not provided, fall back to matching by memo (backward compatibility).
-    let paymentRecord;
+    // #1966: never relay a transaction that does not actually pay this school.
+    // Checked locally before submission so the endpoint cannot be used as a
+    // generic free relay for arbitrary signed transactions.
+    const schoolAddress = req.school.stellarAddress;
+    const schoolOps = findSchoolPaymentOps(tx, schoolAddress);
+    if (schoolOps.length === 0) {
+      return res.status(400).json({
+        error: 'Transaction does not contain a payment to this school wallet in an accepted asset',
+        code: 'NO_SCHOOL_PAYMENT',
+      });
+    }
+
+    // #1967: resolve memo -> intent -> student through the shared helper.
+    const reference = await resolvePaymentReference(req.schoolId, memo);
+    if (!reference) {
+      return res.status(404).json({ error: 'Associated student not found in the database. Cannot process transaction.' });
+    }
+
+    // Issue #1035: when paymentIntentId is supplied it must match the intent
+    // the memo resolves to, so a submission cannot be attributed to another
+    // student's intent.
     if (paymentIntentId) {
       const intent = await PaymentIntent.findOne({ _id: paymentIntentId, schoolId: req.schoolId });
       if (!intent) {
         return res.status(404).json({ error: 'Payment intent not found', code: 'INTENT_NOT_FOUND' });
       }
-      if (intent.schoolId !== req.schoolId) {
-        return res.status(403).json({ error: 'Payment intent does not belong to this school', code: 'INTENT_MISMATCH' });
-      }
       if (intent.status !== 'pending') {
         return res.status(400).json({ error: `Payment intent is not in pending status (status: ${intent.status})`, code: 'INTENT_NOT_PENDING' });
       }
-
-      // Look for a PENDING payment record that corresponds to this intent
-      paymentRecord = await Payment.findOne({
-        schoolId: req.schoolId,
-        studentId: intent.studentId,
-        memo: intent.memo,
-        status: 'PENDING',
-      });
-    } else {
-      // Backward compatibility: match by memo alone (highest risk path)
-      paymentRecord = await Payment.findOne({ schoolId: req.schoolId, memo, status: 'PENDING' }).sort({ createdAt: -1 });
+      if (!reference.intent || reference.intent._id.toString() !== intent._id.toString()) {
+        return res.status(400).json({ error: 'Transaction memo does not match the supplied payment intent', code: 'INTENT_MISMATCH' });
+      }
     }
 
-    if (!paymentRecord) {
-      const studentObj = await Student.findOne({ schoolId: req.schoolId, studentId: memo });
-      if (!studentObj) return res.status(404).json({ error: 'Associated student not found in the database. Cannot process transaction.' });
-      paymentRecord = new Payment({ schoolId: req.schoolId, studentId: studentObj.studentId || memo, memo, amount: 0 });
-    }
-
-    paymentRecord.transactionHash = normalizedHash;
-    paymentRecord.status = 'SUBMITTED';
-    paymentRecord.submittedAt = new Date();
-    await paymentRecord.save();
+    // Upsert a SUBMITTED record keyed by the transaction hash. The record is
+    // never marked SUCCESS here — only verification against the on-chain
+    // operations may do that (#1966).
+    const submittedAt = new Date();
+    const paymentRecord = await Payment.findOneAndUpdate(
+      { schoolId: req.schoolId, txHash: normalizedHash, opIndex: 0 },
+      {
+        $set: {
+          studentId: reference.studentId,
+          memo,
+          status: 'SUBMITTED',
+          submittedAt,
+        },
+        $setOnInsert: {
+          schoolId: req.schoolId,
+          txHash: normalizedHash,
+          opIndex: 0,
+          amount: 0,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
 
     let txResponse;
     try {
@@ -308,33 +463,99 @@ async function submitTransaction(req, res, next) {
       return res.status(400).json({ error: 'Transaction was included in the ledger but failed on-chain', code: 'TX_FAILED', hash: transactionHash });
     }
 
-    paymentRecord.status = 'SUCCESS';
-    paymentRecord.confirmedAt = new Date();
-    paymentRecord.ledgerSequence = txResponse.ledger;
-    await paymentRecord.save();
+    // Hand the hash to the same verification pipeline as verifyPayment. It
+    // re-checks destination, asset/issuer, amount limits and memo against the
+    // on-chain operations before anything is recorded as SUCCESS.
+    let result = null;
+    try {
+      result = await verifyTransaction(normalizedHash, schoolAddress, req.schoolId);
+    } catch (verifyErr) {
+      logger.warn('[PaymentController] post-submit verification failed; leaving record SUBMITTED for the poller', {
+        schoolId: req.schoolId,
+        txHash: normalizedHash,
+        code: verifyErr.code,
+        error: verifyErr.message,
+      });
+    }
+
+    if (!result) {
+      // Verification could not confirm the payment (network hiccup or the tx
+      // does not pay this school). Leave the record SUBMITTED so the poller can
+      // pick it up; never claim SUCCESS from the submit response alone.
+      return res.status(202).json({
+        verified: false,
+        hash: normalizedHash,
+        ledger: txResponse.ledger,
+        status: 'SUBMITTED',
+        explorerUrl: getExplorerUrl(normalizedHash),
+      });
+    }
+
+    const studentStrId = result.studentId || result.memo || reference.studentId;
+    const studentObj = reference.student || await Student.findOne({ schoolId: req.schoolId, studentId: studentStrId });
+    if (!studentObj) {
+      return res.status(404).json({ error: 'Associated student not found. Cannot record transaction.' });
+    }
+
+    const now = new Date();
+    const confirmation = await determineConfirmationState(result.ledger || txResponse.ledger || null, undefined, false);
+
+    let recorded;
+    try {
+      recorded = await recordPayment({
+        schoolId: req.schoolId,
+        studentId: studentStrId,
+        txHash: result.hash,
+        opIndex: 0,
+        amount: result.amount,
+        feeAmount: result.feeAmount || studentObj.feeAmount,
+        feeValidationStatus: 'PENDING',
+        networkFee: result.networkFee,
+        status: 'SUCCESS',
+        memo: result.memo,
+        senderAddress: result.senderAddress || null,
+        ledgerSequence: result.ledger || txResponse.ledger || null,
+        confirmationStatus: confirmation.confirmationStatus,
+        confirmationState: confirmation.state,
+        confirmedAt: result.date ? new Date(result.date) : now,
+        verifiedAt: now,
+      });
+    } catch (recordErr) {
+      if (recordErr.code !== 'DUPLICATE_TX') throw recordErr;
+      recorded = await Payment.findOne({ schoolId: req.schoolId, txHash: normalizedHash, status: { $ne: 'REJECTED' } });
+    }
+
+    // Mark the linked intent completed and link it to the payment (#1967).
+    const linkedIntent = reference.intent || await PaymentIntent.findOne({ schoolId: req.schoolId, memo: result.memo, status: 'pending' });
+    if (linkedIntent) {
+      await PaymentIntent.findOneAndUpdate(
+        { _id: linkedIntent._id, schoolId: req.schoolId },
+        { status: 'completed', completedAt: now, ...(recorded?._id ? { paymentId: recorded._id } : {}) },
+      );
+    }
 
     // Issue #1034: Update student balance fields using the unified balance updater.
-    // This ensures submitTransaction produces the same Student state updates as
-    // verifyPayment and syncPaymentsForSchool, eliminating divergence.
     const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
     try {
-      await updateStudentBalance(req.schoolId, paymentRecord.studentId, {});
+      await updateStudentBalance(req.schoolId, studentStrId, {});
     } catch (balanceErr) {
       logger.error('Failed to update student balance after submitTransaction', {
         schoolId: req.schoolId,
-        studentId: paymentRecord.studentId,
+        studentId: studentStrId,
         txHash: normalizedHash,
         error: balanceErr.message,
       });
     }
 
-    const network = process.env.STELLAR_NETWORK === 'mainnet' ? 'public' : 'testnet';
     res.json({
       verified: true,
       hash: normalizedHash,
-      ledger: txResponse.ledger,
+      ledger: result.ledger || txResponse.ledger,
       status: 'SUCCESS',
-      explorerUrl: `https://stellar.expert/explorer/${network}/tx/${transactionHash}`,
+      amount: result.amount,
+      assetCode: result.assetCode,
+      studentId: studentStrId,
+      explorerUrl: getExplorerUrl(normalizedHash),
     });
   } catch (err) {
     next(err);
@@ -463,6 +684,14 @@ async function verifyPayment(req, res, next) {
         return res.status(404).json({ error: 'Associated student not found. Cannot record transaction.' });
       }
 
+      // #1973 — verifyTransaction returns one entry per creditable operation, each
+      // with its own assetCode and amount. Never sum amounts across assets: a tx
+      // paying 50 XLM + 100 USDC must produce two Payment rows, not "150 XLM".
+      const operations = Array.isArray(result.operations) && result.operations.length
+        ? result.operations
+        : [result];
+      const feeCurrency = studentObj.feeCurrency || req.school.feeCurrency || 'XLM';
+
       // Intents are a UX convenience; an expired intent must not block crediting (#848).
       // Mark it expired for bookkeeping but continue to record the payment.
       const intent = await PaymentIntent.findOne({ memo: result.memo, schoolId });
@@ -483,21 +712,21 @@ async function verifyPayment(req, res, next) {
       }
       const studentLockToken = studentLockInfo.token;
 
-      let cumulativeTotal;
       let feeValidationStatus;
       let computedExcessAmount;
       let remainingBalance;
       let now;
+      const recordedPayments = [];
       try {
         // Determine cumulative feeValidationStatus (#846).
         // Partial payments (amount < fee) are accepted — money is already on-chain.
         // The cumulative total drives the status; per-payment underpaid rejection
         // is not applied here because a parent may be paying in installments.
         //
-        // Filters match the canonical formula (fix #1751): status:'SUCCESS',
-        // isSuspicious:false, deletedAt:null — identical to updateStudentBalance so
-        // the classification stored on the payment record is consistent with the
-        // student balance this tx will contribute to.
+        // #1974 — the cumulative total is now summed from `creditedAmount` (the
+        // amount expressed in the fee currency) and only rows where it is set.
+        // Summing raw `amount` across assets would treat 100 USDC and 100 XLM as
+        // the same "100 paid" against a single fee.
         //
         // Summed via $toDecimal (#1123 money-representation fix) so the addition
         // happens in exact Decimal128 space inside MongoDB — a plain `$sum` over
@@ -507,12 +736,37 @@ async function verifyPayment(req, res, next) {
         // space, so an installment plan that sums exactly to the fee is never
         // misclassified by a float epsilon.
         const prevAgg = await Payment.aggregate([
-          { $match: { schoolId, studentId: studentStrId, deletedAt: null, status: 'SUCCESS', isSuspicious: false } },
-          { $group: { _id: null, total: { $sum: { $toDecimal: '$amount' } } } },
+          {
+            $match: {
+              schoolId,
+              studentId: studentStrId,
+              deletedAt: null,
+              status: 'SUCCESS',
+              isSuspicious: false,
+              creditedAmount: { $ne: null },
+            },
+          },
+          { $group: { _id: null, total: { $sum: { $toDecimal: '$creditedAmount' } } } },
         ]);
         const prevTotal = prevAgg.length ? decimalFromMongo(prevAgg[0].total) : toMoney(0);
-        const classification = classifyFeePayment(prevTotal.plus(toMoney(result.amount)), studentObj.feeAmount);
-        cumulativeTotal = classification.cumulativeTotal;
+
+        // #1974 — credit each operation in the fee currency. When the operation's
+        // asset already matches the fee currency, creditedAmount === amount. When
+        // it differs, use the rate snapshot captured at verification time; if no
+        // rate is available the operation is not credited (policy: reject).
+        const creditedAmounts = operations.map((op) => {
+          const opAsset = op.assetCode || 'XLM';
+          if (opAsset === feeCurrency) return toMoney(op.amount);
+          const rate = op.fiatSnapshot?.rate;
+          if (!rate || !Number.isFinite(Number(rate))) return null;
+          return toMoney(op.amount).times(toMoney(rate));
+        });
+
+        const totalCreditedThisTx = creditedAmounts.reduce(
+          (sum, c) => (c === null ? sum : sum.plus(c)),
+          toMoney(0),
+        );
+        const classification = classifyFeePayment(prevTotal.plus(totalCreditedThisTx), studentObj.feeAmount);
         feeValidationStatus = classification.status;
         computedExcessAmount = classification.excessAmount;
         remainingBalance = classification.remainingBalance;
@@ -527,50 +781,49 @@ async function verifyPayment(req, res, next) {
           false,
         );
 
-        try {
-          await recordPayment({
-            schoolId,
-            studentId: studentStrId,
-            txHash: result.hash,
-            amount: result.amount,
-            feeAmount: result.feeAmount || studentObj.feeAmount,
-            feeValidationStatus,
-            excessAmount: computedExcessAmount,
-            networkFee: result.networkFee,
-            status: 'SUCCESS',
-            memo: result.memo,
-            senderAddress: result.senderAddress || null,
-            ledgerSequence: result.ledger || null,
-            confirmationStatus: confirmation.confirmationStatus,
-            confirmationState: confirmation.state,
-            confirmedAt: result.date ? new Date(result.date) : now,
-            verifiedAt: now,
-          });
-        } catch (dupErr) {
-          if (dupErr.code === 'DUPLICATE_TX') {
-            // Concurrent path (poller or another verify call) already recorded this tx.
-            // Fetch and return the existing record as a cache hit.
-            const cached = await Payment.findOne({ schoolId, txHash: normalizedHash, status: { $ne: 'REJECTED' } });
-            if (cached) {
-              await audit.success({ txHash: normalizedHash, cached: true, studentId: studentStrId, amount: cached.amount });
-              const targetCurrency = req.school.localCurrency || 'USD';
-              const cachedConv = await convertToLocalCurrency(cached.amount, cached.assetCode || 'XLM', targetCurrency);
-              return res.json({
-                verified: true, cached: true, hash: cached.txHash,
-                stellarExplorerUrl: getExplorerUrl(cached.txHash), explorerUrl: getExplorerUrl(cached.txHash),
-                memo: cached.memo, studentId: cached.studentId, amount: cached.amount,
-                assetCode: cached.assetCode, feeAmount: cached.feeAmount,
-                feeValidation: { status: cached.feeValidationStatus, excessAmount: cached.excessAmount },
-                date: cached.confirmedAt || cached.createdAt, status: cached.status,
-                localCurrency: {
-                  amount: cachedConv.available ? cachedConv.localAmount : null,
-                  currency: cachedConv.currency, rate: cachedConv.rate,
-                  rateTimestamp: cachedConv.rateTimestamp, available: cachedConv.available,
-                },
+        // #1973 — record one Payment row per operation, keyed by { schoolId, txHash, opIndex }.
+        for (let i = 0; i < operations.length; i += 1) {
+          const op = operations[i];
+          const credited = creditedAmounts[i];
+          try {
+            const recorded = await recordPayment({
+              schoolId,
+              studentId: studentStrId,
+              txHash: result.hash,
+              opIndex: op.opIndex !== undefined ? op.opIndex : i,
+              amount: op.amount,
+              assetCode: op.assetCode || 'XLM',
+              assetType: op.assetType,
+              creditedAmount: credited === null ? null : toMoneyNumber(credited),
+              feeCurrency,
+              feeAmount: op.feeAmount || studentObj.feeAmount,
+              feeValidationStatus,
+              excessAmount: computedExcessAmount,
+              networkFee: op.networkFee,
+              status: 'SUCCESS',
+              memo: result.memo,
+              senderAddress: result.senderAddress || null,
+              ledgerSequence: result.ledger || null,
+              confirmationStatus: confirmation.confirmationStatus,
+              confirmationState: confirmation.state,
+              confirmedAt: result.date ? new Date(result.date) : now,
+              verifiedAt: now,
+            });
+            recordedPayments.push(recorded);
+          } catch (dupErr) {
+            if (dupErr.code === 'DUPLICATE_TX') {
+              // Concurrent path (poller or another verify call) already recorded this op.
+              const cached = await Payment.findOne({
+                schoolId,
+                txHash: normalizedHash,
+                opIndex: op.opIndex !== undefined ? op.opIndex : i,
+                status: { $ne: 'REJECTED' },
               });
+              if (cached) recordedPayments.push(cached);
+              continue;
             }
+            throw dupErr;
           }
-          throw dupErr;
         }
 
         // Issue #1034: Update student balance using the unified balance updater.
@@ -582,48 +835,53 @@ async function verifyPayment(req, res, next) {
         await lock.release(studentLockKey, studentLockToken);
       }
 
+      const primary = recordedPayments[0] || result;
+
       await audit.success({
         txHash: normalizedHash,
         studentId: studentStrId,
-        amount: result.amount,
-        assetCode: result.assetCode || 'XLM',
+        amount: primary.amount,
+        assetCode: primary.assetCode || 'XLM',
         feeValidationStatus,
         duration: `${Date.now() - startTime}ms`,
       });
 
-      // Auto-generate receipt (fire-and-forget)
+      // Auto-generate receipt (fire-and-forget), one per recorded operation.
       const { createReceipt } = require('../services/receiptService');
-      createReceipt({
-        txHash: result.hash,
-        studentId: studentStrId,
-        schoolId,
-        amount: result.amount,
-        assetCode: result.assetCode || 'XLM',
-        feeAmount: result.feeAmount || studentObj.feeAmount,
-        feeValidationStatus,
-        memo: result.memo,
-        confirmedAt: result.date ? new Date(result.date) : now,
-      }).catch(err => {
-        // Fire-and-forget, but never silent (#1122). A systemic receipt failure
-        // (bad template, receipt-model fault, downstream outage) must leave a
-        // log trail and a metric, not wait for a parent to report it missing.
-        logger.error('[PaymentController] receipt generation failed', {
-          txHash: result.hash,
-          correlationId: req.correlationId,
-          schoolId,
+      for (const recorded of recordedPayments) {
+        createReceipt({
+          txHash: recorded.txHash || result.hash,
+          opIndex: recorded.opIndex,
           studentId: studentStrId,
-          error: err.message,
-          stack: err.stack,
+          schoolId,
+          amount: recorded.amount,
+          assetCode: recorded.assetCode || 'XLM',
+          feeAmount: recorded.feeAmount || studentObj.feeAmount,
+          feeValidationStatus,
+          memo: result.memo,
+          confirmedAt: result.date ? new Date(result.date) : now,
+        }).catch(err => {
+          // Fire-and-forget, but never silent (#1122). A systemic receipt failure
+          // (bad template, receipt-model fault, downstream outage) must leave a
+          // log trail and a metric, not wait for a parent to report it missing.
+          logger.error('[PaymentController] receipt generation failed', {
+            txHash: result.hash,
+            correlationId: req.correlationId,
+            schoolId,
+            studentId: studentStrId,
+            error: err.message,
+            stack: err.stack,
+          });
+          try {
+            require('../metrics').receiptGenerationFailuresTotal.inc({ source: 'verify_controller' });
+          } catch (_) {
+            // metrics module unavailable — logging above is still the primary signal
+          }
         });
-        try {
-          require('../metrics').receiptGenerationFailuresTotal.inc({ source: 'verify_controller' });
-        } catch (_) {
-          // metrics module unavailable — logging above is still the primary signal
-        }
-      });
+      }
 
       const targetCurrency = req.school.localCurrency || 'USD';
-      const conversion = await convertToLocalCurrency(result.amount, result.assetCode || 'XLM', targetCurrency);
+      const conversion = await convertToLocalCurrency(primary.amount, primary.assetCode || 'XLM', targetCurrency);
       const stellarExplorerUrl = getExplorerUrl(result.hash);
 
       res.json({
@@ -634,13 +892,26 @@ async function verifyPayment(req, res, next) {
         explorerUrl: stellarExplorerUrl,
         memo: result.memo,
         studentId: studentStrId,
-        amount: result.amount,
-        assetCode: result.assetCode,
-        assetType: result.assetType,
-        feeAmount: result.feeAmount || studentObj.feeAmount,
+        // Primary (first) operation's amount/asset for backward compatibility.
+        amount: primary.amount,
+        assetCode: primary.assetCode,
+        assetType: primary.assetType,
+        // #1973 — full per-operation breakdown so callers never see a summed
+        // amount across different assets.
+        payments: recordedPayments.map((p) => ({
+          opIndex: p.opIndex,
+          amount: p.amount,
+          assetCode: p.assetCode,
+          assetType: p.assetType,
+          creditedAmount: p.creditedAmount ?? null,
+          feeCurrency: p.feeCurrency || feeCurrency,
+        })),
+        feeCurrency,
+        creditedAmount: primary.creditedAmount ?? null,
+        feeAmount: primary.feeAmount || studentObj.feeAmount,
         feeValidation: { status: feeValidationStatus, excessAmount: computedExcessAmount },
         remainingBalance,
-        networkFee: result.networkFee,
+        networkFee: primary.networkFee,
         date: result.date,
         localCurrency: {
           amount: conversion.available ? conversion.localAmount : null,
@@ -692,6 +963,8 @@ module.exports = {
   wrapStellarError,
   computeRemainingBalance,
   recordVerificationAttempt,
+  resolvePaymentReference,
+  findSchoolPaymentOps,
   // Re-export from split controllers so tests importing paymentController still work
   ...require('./paymentQueryController'),
   ...require('./paymentAdminController'),

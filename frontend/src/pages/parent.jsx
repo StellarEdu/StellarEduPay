@@ -40,12 +40,21 @@ function formatAmount(amount, asset) {
   return `${Number(amount).toLocaleString(undefined, { maximumFractionDigits: 7 })} ${asset || ""}`.trim();
 }
 
+// #1974 — balances are denominated in the school's fee currency, which may
+// differ from the asset a payment was actually made in. Show the credited
+// amount in the fee currency alongside the original payment when they differ.
+function formatCredited(payment, feeCurrency) {
+  if (payment.creditedAmount === null || payment.creditedAmount === undefined) return null;
+  if (!feeCurrency || payment.assetCode === feeCurrency) return null;
+  return formatAmount(payment.creditedAmount, feeCurrency);
+}
+
 function formatDate(value) {
   if (!value) return "—";
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-function PaymentHistory({ api, studentId, t, onDispute }) {
+function PaymentHistory({ api, studentId, feeCurrency, t, onDispute }) {
   const [state, setState] = useState({ loading: true, error: "", payments: [] });
 
   useEffect(() => {
@@ -98,10 +107,20 @@ function PaymentHistory({ api, studentId, t, onDispute }) {
           </tr>
         </thead>
         <tbody>
-          {state.payments.map((p) => (
+          {state.payments.map((p) => {
+            const credited = formatCredited(p, feeCurrency);
+            return (
             <tr key={p.txHash}>
               <td>{formatDate(p.confirmedAt || p.createdAt)}</td>
-              <td>{formatAmount(p.amount, p.assetCode)}</td>
+              <td>
+                {formatAmount(p.amount, p.assetCode)}
+                {credited && (
+                  <span className={styles.muted}>
+                    {" "}
+                    ({t("parent.creditedAs", "{{amount}} credited", { amount: credited })})
+                  </span>
+                )}
+              </td>
               <td>{p.status}</td>
               <td className={styles.hash} title={p.txHash}>{`${p.txHash.slice(0, 8)}…${p.txHash.slice(-6)}`}</td>
               <td className={styles.actions}>
@@ -115,7 +134,8 @@ function PaymentHistory({ api, studentId, t, onDispute }) {
                 </button>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -183,6 +203,9 @@ function DisputeForm({ api, payment, t, onClose }) {
 function StudentCard({ api, student, t, onDispute, onPreferenceChange }) {
   const plan = student.paymentPlan;
   const [saving, setSaving] = useState(false);
+  // #1974 — fee amounts, totalPaid and remainingBalance are all denominated in
+  // the school's fee currency; never render them as bare numbers.
+  const feeCurrency = student.feeCurrency || "";
 
   async function toggleReminders() {
     setSaving(true);
@@ -205,15 +228,19 @@ function StudentCard({ api, student, t, onDispute, onPreferenceChange }) {
       <div className={styles.stats}>
         <div className={styles.stat}>
           <span className={styles.muted}>{t("parent.totalFees", "Total fees")}</span>
-          <strong>{formatAmount(student.feeAmount)}</strong>
+          <strong>{formatAmount(student.feeAmount, feeCurrency)}</strong>
         </div>
         <div className={styles.stat}>
           <span className={styles.muted}>{t("parent.paid", "Paid")}</span>
-          <strong>{formatAmount(student.totalPaid)}</strong>
+          <strong>{formatAmount(student.totalPaid, feeCurrency)}</strong>
         </div>
         <div className={styles.stat}>
           <span className={styles.muted}>{t("parent.outstanding", "Outstanding")}</span>
-          <strong>{student.feePaid ? t("parent.paidInFull", "Paid in full") : formatAmount(student.remainingBalance)}</strong>
+          <strong>
+            {student.feePaid
+              ? t("parent.paidInFull", "Paid in full")
+              : formatAmount(student.remainingBalance, feeCurrency)}
+          </strong>
         </div>
         {student.paymentDeadline && (
           <div className={styles.stat}>
@@ -235,7 +262,10 @@ function StudentCard({ api, student, t, onDispute, onPreferenceChange }) {
               <>
                 {" · "}
                 {t("parent.nextInstallment", "Next: {{amount}} due {{date}}", {
-                  amount: formatAmount(plan.nextInstallment.amount - (plan.nextInstallment.paidAmount || 0)),
+                  amount: formatAmount(
+                    plan.nextInstallment.amount - (plan.nextInstallment.paidAmount || 0),
+                    feeCurrency
+                  ),
                   date: formatDate(plan.nextInstallment.dueDate),
                 })}
                 {plan.nextInstallment.overdue && <strong> ({t("parent.overdue", "overdue")})</strong>}
@@ -246,7 +276,13 @@ function StudentCard({ api, student, t, onDispute, onPreferenceChange }) {
       )}
 
       <h3>{t("parent.history", "Payment history")}</h3>
-      <PaymentHistory api={api} studentId={student.studentId} t={t} onDispute={onDispute} />
+      <PaymentHistory
+        api={api}
+        studentId={student.studentId}
+        feeCurrency={feeCurrency}
+        t={t}
+        onDispute={onDispute}
+      />
 
       <h3>{t("parent.notifications", "Notifications")}</h3>
       <label>

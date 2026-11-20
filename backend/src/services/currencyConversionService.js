@@ -705,6 +705,49 @@ async function formatWithLocalEquivalent(amount, assetCode = "XLM", targetCurren
   return `${base} (≈ ${conv.localAmount.toFixed(dp)} ${conv.currency})`;
 }
 
+/**
+ * #1974 — Convert a fee amount to local currency using the fee's own currency.
+ *
+ * `feeAmount` is a bare number whose unit is defined by `feeCurrency`
+ * (e.g. "USDC", "XLM" or an ISO fiat code).  Callers (e.g.
+ * getPaymentInstructions) must pass the student's/school's feeCurrency rather
+ * than hard-coding "XLM", so the UI and verify-time conversions agree.
+ *
+ * When `feeCurrency` is a crypto asset (XLM/USDC) the amount is converted via
+ * the price feed exactly like a payment in that asset.  When it is a fiat
+ * code the amount is already denominated in that currency and returned as-is
+ * (no conversion, rate = 1).
+ *
+ * @param {number|string} feeAmount
+ * @param {string}        feeCurrency   - "XLM" | "USDC" | ISO 4217 code
+ * @param {string}        targetCurrency - display currency (defaults to feeCurrency for fiat)
+ * @returns {Promise<object>} same shape as convertToLocalCurrency
+ */
+async function convertFeeToLocalCurrency(feeAmount, feeCurrency = "XLM", targetCurrency) {
+  const feeCur = String(feeCurrency || "XLM").toUpperCase();
+  const isCrypto = feeCur === "XLM" || feeCur === "USDC";
+
+  if (!isCrypto) {
+    // Fee is already denominated in a fiat currency — no conversion needed.
+    const currency = (targetCurrency || feeCur).toUpperCase();
+    const dp = CURRENCY_DECIMALS[currency] ?? 2;
+    const localAmount = new Decimal(feeAmount)
+      .toDecimalPlaces(dp, Decimal.ROUND_HALF_UP)
+      .toNumber();
+    return {
+      localAmount,
+      currency,
+      rate: 1,
+      rateTimestamp: new Date().toISOString(),
+      available: true,
+      stale: false,
+      staleAge: null,
+    };
+  }
+
+  return convertToLocalCurrency(feeAmount, feeCur, targetCurrency || "USD");
+}
+
 function getCachedRates() {
   const result = {};
   for (const [k, v] of _localCache) {
@@ -826,6 +869,7 @@ async function runCoinGeckoCanary(currency = "usd") {
 
 module.exports = {
   convertToLocalCurrency,
+  convertFeeToLocalCurrency,
   enrichPaymentWithConversion,
   formatWithLocalEquivalent,
   captureFiatSnapshot,
