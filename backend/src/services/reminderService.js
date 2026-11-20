@@ -8,7 +8,7 @@
  * and a maximum reminder count to prevent inbox flooding.
  *
  * Config (all via environment variables):
- *   REMINDER_INTERVAL_MS     — how often the scheduler runs (default: 24h)
+ *   REMINDER_INTERVAL_MS     — how often the scheduler runs (default: 1h)
  *   REMINDER_COOLDOWN_HOURS  — min hours between reminders per student (default: 48h)
  *   REMINDER_MAX_COUNT       — stop reminding after N reminders (default: 5)
  */

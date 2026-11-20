@@ -520,7 +520,7 @@ All workers start on server boot inside the `connectDatabase().then(...)` callba
 | Transaction poller | `startPolling()` | `POLL_INTERVAL_MS` (30s) | Sync new payments from Stellar |
 | Retry worker | `startRetryWorker()` | `RETRY_INTERVAL_MS` (60s) | Re-attempt failed verifications (MongoDB-backed when Redis is absent) |
 | Consistency scheduler | `startConsistencyScheduler()` | configurable | Detect DB/chain drift |
-| Reminder scheduler | `startReminderScheduler()` | `REMINDER_INTERVAL_MS` (24h) | Send fee reminder emails |
+| Reminder scheduler | `startReminderScheduler()` | `REMINDER_INTERVAL_MS` (1h) | Send fee reminder emails (per-school send window + per-day `ReminderLog` claim) |
 | TX processing queue worker | `startTxQueueWorker()` | event-driven (BullMQ, **Durable via MongoDB outbox — see Queue Durability below**) | Process transactions enqueued by the stuck-payment reconciler and other internal pathways (`enqueueTransaction`) |
 | Transaction retry + DLQ worker | `initializeRetryQueue()` | event-driven (BullMQ, configurable backoff with jitter) | Re-attempt transaction verifications on transient Horizon errors; permanent failures and retry exhaustion land in the dedicated dead-letter queue |
 | Report generation worker | `startReportQueueWorker()` | event-driven (BullMQ, **durable via `ReportJob` collection**) | Generate CSV/JSON reports and update `ReportJob` status to `completed` / `failed` |
