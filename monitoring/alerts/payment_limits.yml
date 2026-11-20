@@ -54,3 +54,22 @@ groups:
             GET /api/admin/payment-limits?schoolId={{ $labels.school_id }}; the
             `source` field shows which layer (school override, global, or the
             env fallback) supplied the active value.
+
+      # ── Warning: payments are stuck in SUBMITTED ─────────────────────────
+      # payments_stuck_submitted is a cross-tenant gauge of payments left in
+      # SUBMITTED longer than STUCK_PAYMENT_THRESHOLD_MS (#2002). The
+      # reconciliation scheduler re-queues them every interval, so a sustained
+      # non-zero value means re-queuing is failing or the scheduler is not
+      # running.
+      - alert: PaymentsStuckSubmitted
+        expr: payments_stuck_submitted > 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} payments stuck in SUBMITTED"
+          description: >
+            {{ $value }} payments have been in SUBMITTED status longer than the
+            reconciliation threshold for at least 20 minutes. The stuck-payment
+            reconciliation scheduler should have re-queued them; check its logs
+            and the transaction queue for failures.

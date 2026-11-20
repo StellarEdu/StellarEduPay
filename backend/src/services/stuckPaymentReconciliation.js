@@ -17,12 +17,15 @@ const STUCK_PAYMENT_RECONCILIATION_MAX_BATCH = parseInt(process.env.STUCK_PAYMEN
 
 let _job = null;
 
+// Issue #2002: this is a cross-tenant infrastructure query (startup + scheduled
+// reconciliation), so it must explicitly bypass the tenantScope plugin.
 async function findStuckPayments(limit = STUCK_PAYMENT_RECONCILIATION_MAX_BATCH) {
   return Payment.find({
     status: 'SUBMITTED',
     submittedAt: { $lt: new Date(Date.now() - STUCK_PAYMENT_THRESHOLD_MS) },
     deletedAt: null,
   })
+    .bypassTenantScope()
     .sort({ submittedAt: 1 })
     .limit(limit)
     .lean();
