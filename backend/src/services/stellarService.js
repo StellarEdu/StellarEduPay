@@ -102,6 +102,7 @@ const logger = require("../utils/logger").child("StellarService");
 const { getEngineForSchool } = require("./feeAdjustmentEngine");
 const { recordUnmatchedPayment } = require("./unmatchedPaymentService");
 const { updateStudentBalance } = require("../utils/studentBalanceUpdater");
+const { isBeforeIngestStart } = require("../utils/ingestWindow");
 
 // TTL for the per-student balance lock (#1026), shared with paymentController's
 // verifyPayment. Guards the read-aggregate-then-write sequence that computes
@@ -430,9 +431,23 @@ async function detectMemoCollision(
   expectedFee,
   txDate,
   schoolId,
+  multiSenderPolicy,
 ) {
   const COLLISION_WINDOW_MS = 24 * 60 * 60 * 1000;
   const windowStart = new Date(txDate.getTime() - COLLISION_WINDOW_MS);
+
+  // #1980 — a second payer for the same student (two guardians, a sponsor, a
+  // relative) is normal, so a different sender is only a risk factor. The
+  // school's multi-sender policy decides what to do with it:
+  //   'ignore' — never flag (no query needed)
+  //   'flag'   — flag for review, still credit (default)
+  //   'hold'   — flag and hold the payment (legacy behaviour)
+  const policy = MULTI_SENDER_POLICIES.includes(multiSenderPolicy)
+    ? multiSenderPolicy
+    : DEFAULT_MULTI_SENDER_POLICY;
+  if (policy === 'ignore') {
+    return { suspicious: false, reason: null, policy, riskFactor: false };
+  }
 
   const recentFromOtherSender = await Payment.findOne({
     schoolId,
@@ -446,7 +461,9 @@ async function detectMemoCollision(
 
   if (recentFromOtherSender) {
     return {
-      suspicious: true,
+      suspicious: policy === 'hold',
+      riskFactor: true,
+      policy,
       reason:
         'Memo "' +
         memo +
@@ -456,7 +473,7 @@ async function detectMemoCollision(
     };
   }
 
-  return { suspicious: false, reason: null };
+  return { suspicious: false, reason: null, policy, riskFactor: false };
 }
 
 /**
@@ -888,6 +905,18 @@ async function resolvePaymentReference(schoolId, memo) {
  */
 async function recordIncomingTransaction(tx, school, { source = "unknown" } = {}) {
   const { schoolId, stellarAddress } = school;
+
+  // #1986 — enforce the school's ingest window in every ingestion path (sync,
+  // poller, stream, verify) so a rotated wallet's earlier history is never
+  // credited as fees.
+  if (isBeforeIngestStart(tx, school)) {
+    logger.debug("Transaction skipped — before ingestStartsAt", {
+      txHash: tx.hash,
+      schoolId,
+      source,
+    });
+    return { outcome: "before_ingest_window", txHash: tx.hash };
+  }
 
   const existing = await Payment.findOne({
     txHash: tx.hash,

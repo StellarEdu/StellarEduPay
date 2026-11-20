@@ -88,6 +88,7 @@ const ACQUIRE_WITH_FENCE_SCRIPT = `
   local fence_key = KEYS[2]
   local lock_value = ARGV[1]
   local ttl = tonumber(ARGV[2])
+  local fence_ttl = tonumber(ARGV[3])
   
   -- Check if lock is available
   local existing_lock = redis.call("get", lock_key)
@@ -97,6 +98,9 @@ const ACQUIRE_WITH_FENCE_SCRIPT = `
   
   -- Atomically increment fence and set lock
   local fence = redis.call("incr", fence_key)
+  -- Issue #1990: bound the lifetime of the fencing counter so one key per
+  -- verified transaction / student / refund cannot accumulate forever.
+  redis.call("pexpire", fence_key, fence_ttl)
   redis.call("set", lock_key, lock_value, "PX", ttl)
   
   return fence
@@ -176,7 +180,8 @@ async function acquire(key, ttlMs) {
         key,
         fenceKey,
         token,
-        ttlMs
+        ttlMs,
+        FENCE_TTL_MS
       );
       if (fencingToken === null) return null;
       return { token, fencingToken };

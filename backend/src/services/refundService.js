@@ -35,6 +35,9 @@ const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger').child('RefundService');
 const lock = require('./distributedLock');
 const paymentEvents = require('../events/paymentEvents');
+const School = require('../models/schoolModel');
+const { horizonClient } = require('../config/stellarConfig');
+const { withStellarRetry } = require('../utils/withStellarRetry');
 
 // TTL for the per-payment refund lock. Long enough for the DB operations to
 // complete; short enough to auto-expire after a crash without blocking permanently.
