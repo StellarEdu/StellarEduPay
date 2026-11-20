@@ -26,10 +26,18 @@ const auditLogSchema = new mongoose.Schema(
     userAgent:    { type: String, default: null },
 
     // #885 — Hash-chain integrity fields
+    // seq: monotonic per-school sequence number reserved from audit_counters
+    seq:         { type: Number, required: true },
+    // severity: optional classification of the event
+    severity:    {
+      type: String,
+      enum: ['info', 'warning', 'critical'],
+      default: 'info',
+    },
     // prevHash: the entryHash of the previous audit record for this school (null for first record)
     prevHash:    { type: String, default: null },
     // entryHash: HMAC-SHA256 of this entry's canonical fields + prevHash
-    entryHash:   { type: String, default: null, index: true },
+    entryHash:   { type: String, required: true, index: true },
     // archived: set to true by the archive job; never hard-deleted
     archived:    { type: Boolean, default: false, index: true },
   },
@@ -46,6 +54,8 @@ auditLogSchema.index({ schoolId: 1, createdAt: -1 });
 auditLogSchema.index({ createdAt: -1 });
 // Chain verification index: schoolId + sequential ordering
 auditLogSchema.index({ schoolId: 1, _id: 1 });
+// #2000 — one entry per (schoolId, seq); also the chain ordering index
+auditLogSchema.index({ schoolId: 1, seq: 1 }, { unique: true });
 // Free-text search over event details (#1342). Created via migration 026.
 auditLogSchema.index({ details: 'text' });
 
