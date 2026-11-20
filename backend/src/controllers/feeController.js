@@ -2,9 +2,18 @@
 
 const mongoose = require('mongoose');
 const FeeStructure = require('../models/feeStructureModel');
+const School = require('../models/schoolModel');
 const { get, set, del, KEYS, TTL } = require('../cache');
 const { logAudit } = require('../services/auditService');
 const logger = require('../utils/logger');
+
+const DEFAULT_FEE_CURRENCY = 'XLM';
+
+async function resolveFeeCurrency(schoolId, requested) {
+  if (requested) return String(requested).toUpperCase();
+  const school = await School.findOne({ schoolId }).select('feeCurrency').lean();
+  return (school && school.feeCurrency) || DEFAULT_FEE_CURRENCY;
+}
 
 function audit(req, action, targetId, details) {
   if (!req.auditContext) return Promise.resolve();
@@ -14,15 +23,16 @@ function audit(req, action, targetId, details) {
 async function createFeeStructure(req, res, next) {
   try {
     const { schoolId } = req;
-    const { className, feeAmount, description, academicYear, paymentDeadline } = req.body;
+    const { className, feeAmount, feeCurrency, description, academicYear, paymentDeadline } = req.body;
     if (!className || feeAmount == null) return next(Object.assign(new Error('className and feeAmount are required'), { code: 'VALIDATION_ERROR' }));
 
     const existing = await FeeStructure.findOne({ schoolId, className, isActive: true });
     if (existing) return next(Object.assign(new Error(`Active fee structure already exists for class ${className}`), { code: 'DUPLICATE_FEE_STRUCTURE', status: 409 }));
 
-    const fee = await FeeStructure.create({ schoolId, className, feeAmount, description, academicYear: academicYear || new Date().getUTCFullYear().toString(), isActive: true, paymentDeadline: paymentDeadline || null });
+    const resolvedCurrency = await resolveFeeCurrency(schoolId, feeCurrency);
+    const fee = await FeeStructure.create({ schoolId, className, feeAmount, feeCurrency: resolvedCurrency, description, academicYear: academicYear || new Date().getUTCFullYear().toString(), isActive: true, paymentDeadline: paymentDeadline || null });
     del(KEYS.feesAll(schoolId), KEYS.feeByClass(schoolId, className));
-    await audit(req, 'fee_create', className, { className, feeAmount, academicYear });
+    await audit(req, 'fee_create', className, { className, feeAmount, feeCurrency: resolvedCurrency, academicYear });
     res.status(201).json(fee);
   } catch (err) { next(err); }
 }
@@ -93,16 +103,19 @@ async function deleteFeeStructure(req, res, next) {
 async function updateFeeStructure(req, res, next) {
   try {
     const { className } = req.params;
-    const { feeAmount, description, academicYear, paymentDeadline, cascadeToStudents } = req.body;
+    const { feeAmount, feeCurrency, description, academicYear, paymentDeadline, cascadeToStudents } = req.body;
     if (feeAmount == null) return next(Object.assign(new Error('feeAmount is required'), { code: 'VALIDATION_ERROR' }));
 
     const updateFields = { feeAmount };
+    if (feeCurrency    !== undefined) updateFields.feeCurrency    = await resolveFeeCurrency(req.schoolId, feeCurrency);
     if (description    !== undefined) updateFields.description    = description;
     if (academicYear   !== undefined) updateFields.academicYear   = academicYear;
     if (paymentDeadline !== undefined) updateFields.paymentDeadline = paymentDeadline;
 
     const fee = await FeeStructure.findOneAndUpdate({ schoolId: req.schoolId, className, isActive: true }, updateFields, { new: true, runValidators: true });
     if (!fee) return next(Object.assign(new Error(`No active fee structure found for class ${className}`), { code: 'NOT_FOUND' }));
+
+    const feeCurrencyValue = fee.feeCurrency || DEFAULT_FEE_CURRENCY;
 
     del(KEYS.feesAll(req.schoolId), KEYS.feeByClass(req.schoolId, className));
 
@@ -122,13 +135,23 @@ async function updateFeeStructure(req, res, next) {
           if (students.length > 0) {
             const studentIds = students.map(s => s.studentId);
 
-            // Aggregate confirmed payment totals per student from authoritative source
+            // Aggregate confirmed payment totals per student from authoritative source.
+            // Only payments credited in the fee currency count toward the balance; raw
+            // amounts across different assets are not comparable (#1974).
             const paymentTotals = await Payment.aggregate([
-              { $match: Payment.activeFilter({ schoolId: req.schoolId, studentId: { $in: studentIds }, status: 'SUCCESS' }) },
-              { $group: { _id: '$studentId', amountPaid: { $sum: '$amount' } } },
+              {
+                $match: Payment.activeFilter({
+                  schoolId: req.schoolId,
+                  studentId: { $in: studentIds },
+                  status: 'SUCCESS',
+                  creditedAmount: { $ne: null },
+                  creditedCurrency: feeCurrencyValue,
+                }),
+              },
+              { $group: { _id: '$studentId', amountPaid: { $sum: { $toDecimal: '$creditedAmount' } } } },
             ]).session(session);
 
-            const paidByStudentId = new Map(paymentTotals.map(p => [p._id, p.amountPaid]));
+            const paidByStudentId = new Map(paymentTotals.map(p => [p._id, Number(p.amountPaid)]));
 
             const bulkOps = students.map(s => {
               const amountPaid = paidByStudentId.get(s.studentId) || 0;
@@ -158,6 +181,7 @@ async function updateFeeStructure(req, res, next) {
                 studentId: s.studentId,
                 category: className,
                 amount: feeAmount,
+                currency: feeCurrencyValue,
                 paid: amountPaid >= feeAmount,
                 totalPaid: amountPaid,
                 remainingBalance,
@@ -173,7 +197,7 @@ async function updateFeeStructure(req, res, next) {
       }
     }
 
-    await audit(req, 'fee_update', className, { className, feeAmount, cascadeToStudents, studentsUpdated });
+    await audit(req, 'fee_update', className, { className, feeAmount, feeCurrency: feeCurrencyValue, cascadeToStudents, studentsUpdated });
     res.json({ fee, studentsUpdated });
   } catch (err) { next(err); }
 }

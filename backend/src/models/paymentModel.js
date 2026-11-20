@@ -346,6 +346,28 @@ const paymentSchema = new mongoose.Schema(
       rateSource:   { type: String, default: null },  // 'coingecko' | 'coinbase' | etc.
       rateTimestamp:{ type: Date,   default: null },  // when the rate was fetched
     },
+
+    // #1974 — The currency/asset the school's fees are denominated in (e.g.
+    // 'USDC', 'XLM' or an ISO fiat code). Snapshotted on the payment at write
+    // time so historical balances stay meaningful even if the school later
+    // changes its fee currency.
+    feeCurrency: { type: String, default: null },
+
+    // #1974 — The payment amount converted into `feeCurrency`, using the rate
+    // snapshot captured at confirmation time (fiatSnapshot). Student balances
+    // (totalPaid / remainingBalance / feePaid) sum ONLY this field, never the
+    // raw `amount`, so amounts in different assets are never added together.
+    // Null when no conversion could be recorded (e.g. no rate available).
+    creditedAmount: {
+      type: Number,
+      default: null,
+      validate: [
+        {
+          validator: (v) => v === null || v === undefined || (Number.isFinite(v) && v >= 0),
+          message: 'creditedAmount must be a finite non-negative number or null',
+        },
+      ],
+    },
   },
   {
     timestamps: true,
@@ -386,6 +408,43 @@ paymentSchema.statics.existingPaymentFilter = existingPaymentFilter;
 paymentSchema.statics.isRejected = isRejected;
 paymentSchema.statics.REJECTION_STATUSES = REJECTION_STATUSES;
 
+/**
+ * #1974 — Compute the amount credited toward the school's fee currency from a
+ * payment's recorded rate snapshot.
+ *
+ * Returns null when no conversion can be derived (missing amount, missing
+ * snapshot rate, or a snapshot currency that does not match the fee currency),
+ * so callers can apply their own policy (reject, or leave uncredited) rather
+ * than silently crediting a wrong number.
+ *
+ * @param {object} payment a Payment document/lean object (or plain object)
+ * @param {string} [feeCurrency] the target fee currency; defaults to payment.feeCurrency
+ * @returns {number|null}
+ */
+function computeCreditedAmount(payment, feeCurrency) {
+  if (!payment) return null;
+  const target = feeCurrency || payment.feeCurrency || null;
+  if (!target) return null;
+
+  const amount = Number(payment.amount);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+
+  // Same asset as the fee currency: no conversion needed.
+  if (payment.assetCode && payment.assetCode === target) {
+    return parseFloat(amount.toFixed(7));
+  }
+
+  const snapshot = payment.fiatSnapshot || {};
+  const fiatAmount = Number(snapshot.fiatAmount);
+  const fiatCurrency = snapshot.fiatCurrency || null;
+  if (!Number.isFinite(fiatAmount) || fiatAmount < 0) return null;
+  if (!fiatCurrency || fiatCurrency !== target) return null;
+
+  return parseFloat(fiatAmount.toFixed(7));
+}
+
+paymentSchema.statics.computeCreditedAmount = computeCreditedAmount;
+
 // Indexes
 // Compound unique index enforces per-school, per-operation uniqueness: the same
 // transaction may legitimately contain several payment operations (one per
@@ -405,3 +464,4 @@ module.exports.deriveConfirmationStatus = deriveConfirmationStatus;
 module.exports.existingPaymentFilter = existingPaymentFilter;
 module.exports.isRejected = isRejected;
 module.exports.REJECTION_STATUSES = REJECTION_STATUSES;
+module.exports.computeCreditedAmount = computeCreditedAmount;

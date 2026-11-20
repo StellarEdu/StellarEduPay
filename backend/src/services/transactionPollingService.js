@@ -22,6 +22,12 @@ const { updateStudentBalance } = require('../utils/studentBalanceUpdater');
 const { drainingWalletEntries } = require('./walletRotationService');
 const { recordUnmatchedPayment } = require('./unmatchedPaymentService');
 const { isBeforeIngestStart } = require('../utils/ingestWindow');
+const {
+  extractCreditableOperations,
+  resolveCreditedAmount,
+  resolveFeeCurrency,
+} = require('./paymentIngestion');
+const { recordPaymentVerificationAttempt } = require('./paymentVerificationAttemptService');
 
 // Metrics — imported lazily inside helpers to survive jest module resets.
 function _incFunnel(stage, schoolId) {
@@ -88,7 +94,17 @@ const MAX_CONCURRENT_SCHOOL_POLLS = Math.max(1, parseInt(
   process.env.SYNC_MAX_CONCURRENT_SCHOOLS || '4', 10));
 
 /**
- * Process a single transaction for a school
+ * Process a single transaction for a school.
+ *
+ * #1973 — a transaction may credit several operations in different assets. We
+ * record ONE Payment per creditable operation (keyed by { schoolId, txHash,
+ * opIndex }), each with its own assetCode and amount, exactly like verify and
+ * sync. Amounts of different assets are never summed.
+ *
+ * #1975/#1976 — every outcome is terminal or transient. Terminal outcomes
+ * (recorded, duplicate, permanently rejected, unmatched-recorded) let the
+ * caller advance the cursor past the transaction; transient outcomes
+ * (`transient: true`) must stop cursor advancement so the tx is retried.
  */
 async function processTransaction(tx, school, fencingToken) {
   const { schoolId, stellarAddress } = school;
@@ -97,40 +113,59 @@ async function processTransaction(tx, school, fencingToken) {
   // Cheap optimisation only: skip work for transactions we've clearly already
   // recorded. This is NOT the dedup guarantee — it is a read-then-write race
   // (two workers can both miss the row). The authoritative guard is the unique
-  // index on Payment { schoolId, txHash }, which makes the insert below fail
-  // atomically with code 11000 if a concurrent worker won the race.
+  // index on Payment { schoolId, txHash, opIndex }, which makes the insert
+  // below fail atomically with code 11000 if a concurrent worker won the race.
   const existing = await Payment.findOne({ schoolId, txHash: tx.hash, deletedAt: null });
   if (existing) {
-    return { processed: false, reason: 'duplicate' };
+    return { processed: false, reason: 'duplicate', terminal: true };
   }
 
   // Funnel: transaction received by the poller
   _incFunnel('received', schoolId);
 
-  // Extract and validate payment
+  // Extract and validate payment. One Horizon operations fetch per tx (#1976).
   const valid = await extractValidPayment(tx, stellarAddress);
   if (!valid) {
-    return { processed: false, reason: 'invalid_payment' };
+    return { processed: false, reason: 'invalid_payment', terminal: true };
   }
 
-  const { payOp, memo, asset } = valid;
-  // Exact stroop-based normalization (#842) — never parseFloat a monetary value.
-  const paymentAmount = normalizeToNumber(payOp.amount);
+  const { memo, memoType } = valid;
+  // #1973 — every creditable operation, each with its own asset and amount.
+  const creditableOps = extractCreditableOperations(valid);
+  if (creditableOps.length === 0) {
+    return { processed: false, reason: 'invalid_payment', terminal: true };
+  }
 
-  // Validate payment amount is within configured limits
-  const limitValidation = await validatePaymentAmount(paymentAmount, {
-    schoolId,
-    asset: asset?.code,
-  });
-  if (!limitValidation.valid) {
-    logger.warn('Payment outside limits', {
-      txHash: tx.hash,
-      correlationId,
+  // Validate each operation's amount against limits using its own asset.
+  for (const op of creditableOps) {
+    const limitValidation = await validatePaymentAmount(op.amount, {
       schoolId,
-      amount: paymentAmount,
-      error: limitValidation.error
+      asset: op.assetCode,
     });
-    return { processed: false, reason: 'amount_limit_exceeded' };
+    if (!limitValidation.valid) {
+      logger.warn('Payment outside limits', {
+        txHash: tx.hash,
+        correlationId,
+        schoolId,
+        opIndex: op.opIndex,
+        assetCode: op.assetCode,
+        amount: op.amount,
+        error: limitValidation.error,
+      });
+      // #1975 — record the terminal rejection so the tx is not re-fetched forever.
+      await recordPaymentVerificationAttempt({
+        schoolId,
+        txHash: tx.hash,
+        opIndex: op.opIndex,
+        studentId: memo,
+        assetCode: op.assetCode,
+        amount: op.amount,
+        outcome: 'rejected',
+        reason: 'amount_limit_exceeded',
+        detail: limitValidation.error || null,
+      });
+      return { processed: false, reason: 'amount_limit_exceeded', terminal: true };
+    }
   }
 
   // Funnel: payment passed amount/memo validation
@@ -141,8 +176,18 @@ async function processTransaction(tx, school, fencingToken) {
   if (!student) {
     logger.warn('Student not found for memo', { txHash: tx.hash, correlationId, schoolId, memo });
     // Issue #1798 — keep the funds visible for review instead of only logging them.
-    await recordUnmatchedPayment({ schoolId, tx, payOp, memo, memoType: valid.memoType, asset, reason: 'student_not_found' });
-    return { processed: false, reason: 'student_not_found' };
+    for (const op of creditableOps) {
+      await recordUnmatchedPayment({
+        schoolId,
+        tx,
+        payOp: op.payOp,
+        memo,
+        memoType,
+        asset: op.asset,
+        reason: 'student_not_found',
+      });
+    }
+    return { processed: false, reason: 'student_not_found', terminal: true };
   }
 
   // Funnel: student matched by memo
@@ -157,143 +202,220 @@ async function processTransaction(tx, school, fencingToken) {
       currentFence,
       txHash: tx.hash,
     });
-    return { processed: false, reason: 'stale_lock' };
+    // Transient: the tx must be retried by the worker that holds the lock.
+    return { processed: false, reason: 'stale_lock', transient: true };
   }
 
-  const senderAddress = payOp.from || null;
   const txDate = new Date(tx.created_at);
   const txLedger = tx.ledger_attr || tx.ledger || null;
-
-  // Check for suspicious activity
-  const collision = await detectMemoCollision(memo, senderAddress, paymentAmount, student.feeAmount, txDate, schoolId);
-  const crossSchoolCollision = await detectCrossSchoolMemoCollision(memo, schoolId, txDate);
-  const abnormal = await detectAbnormalPatterns(senderAddress, paymentAmount, student.feeAmount, txDate, schoolId, school.suspiciousPaymentMultiplier, school.suspiciousAmountConfig);
-
-  const isSuspicious = collision.suspicious || crossSchoolCollision.suspicious || abnormal.suspicious;
-  const suspicionReason = [collision.reason, crossSchoolCollision.reason, abnormal.reason].filter(Boolean).join('; ') || null;
-
-  if (isSuspicious) {
-    try {
-      require('../metrics').suspiciousPaymentFlagged.inc({ school_id: schoolId });
-    } catch (_) {
-      // metrics module unavailable — flagging still proceeds
-    }
-  }
+  const feeCurrency = resolveFeeCurrency(school, student);
 
   const confirmation = await determineConfirmationState(
     txLedger,
     CONFIRMATION_STATES.DETECTED,
-    isSuspicious,
+    false,
   );
   const isConfirmed = isConfirmedOrAbove(confirmation.state);
   const confirmationStatus = confirmation.confirmationStatus;
 
-  // Calculate per-payment cumulative totals — used only for the payment record's
-  // feeValidationStatus / excessAmount UI fields.  Student balance is NOT written
-  // here; that is exclusively updateStudentBalance's job (fix #1751).
-  //
-  // We still count only confirmed+non-suspicious payments to keep the
-  // per-payment status labels consistent with the canonical formula.
-  const previousPayments = await Payment.aggregate([
-    { $match: { schoolId, studentId: memo, status: 'SUCCESS', isSuspicious: false, deletedAt: null } },
-    { $group: { _id: null, total: { $sum: '$amount' } } },
-  ]);
-  const previousTotal = previousPayments.length ? previousPayments[0].total : 0;
-  // Sum/diff in exact stroop space (#842) so an exact cumulative match is never
-  // mis-flagged as underpaid/overpaid by a float rounding epsilon.
-  const cumulativeTotal = stroopsToNumber(toStroops(previousTotal) + toStroops(paymentAmount));
-
-  // Route classification through the single canonical helper (#1766) so the
-  // poller/stream path uses the same vocabulary as verify and sync: 'partial'
-  // for a cumulative total below the fee, 'underpaid' only when an installment
-  // is short of its expected amount.
-  const classification = classifyFeePayment({
-    cumulativeTotal,
-    feeAmount: student.feeAmount,
-    installmentAmount: student.expectedInstallmentAmount,
-    hasPlan: Boolean(student.paymentPlanId),
-  });
-  const cumulativeStatus = classification.status;
-  const excessAmount = classification.excessAmount;
-
   // Extract network fee
   const networkFee = parseFloat(tx.fee_paid || '0') / 10000000;
 
-  // Record payment
-  const paymentData = {
-    schoolId,
-    studentId: memo,
-    txHash: tx.hash,
-    transactionHash: tx.hash,
-    correlationId,
-    amount: paymentAmount,
-    feeAmount: student.feeAmount,
-    // feeValidationStatus and excessAmount are kept for the payment record so
-    // the UI can still show per-payment over/under flags; they do NOT drive
-    // the student balance (that is exclusively updateStudentBalance's job).
-    feeValidationStatus: cumulativeStatus,
-    excessAmount,
-    status: isSuspicious ? 'FAILED' : (isConfirmed ? 'SUCCESS' : 'PENDING'),
-    memo,
-    senderAddress,
-    isSuspicious,
-    suspicionReason,
-    receivedOnRetiredAddress: Boolean(school.receivedOnRetiredAddress),
-    ledger: txLedger,
-    ledgerSequence: txLedger,
-    confirmationStatus,
-    confirmationState: confirmation.state,
-    confirmedAt: txDate,
-    referenceCode: await generateReferenceCode(),
-    networkFee,
-    // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
-    fiatSnapshot: isConfirmed && !isSuspicious
-      ? await captureFiatSnapshot(paymentAmount, asset || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
-      : null,
-  };
-
   const session = await mongoose.connection.startSession();
   try {
-    await session.withTransaction(async () => {
-      await Payment.create([paymentData], { session });
+    const recorded = [];
+    let balanceLockContended = false;
 
-      // Fix #1751: Delegate all student balance writes to the single canonical
-      // function (updateStudentBalance) so this path never diverges from
-      // verifyPayment and syncPaymentsForSchool.  Only update when the payment
-      // will actually count in the canonical formula (SUCCESS, not suspicious).
-      if (isConfirmed && !isSuspicious) {
-        await updateStudentBalance(schoolId, memo, { session });
+    await session.withTransaction(async () => {
+      for (const op of creditableOps) {
+        const senderAddress = op.payOp.from || null;
+        const paymentAmount = op.amount;
+
+        // Check for suspicious activity per operation.
+        const collision = await detectMemoCollision(memo, senderAddress, paymentAmount, student.feeAmount, txDate, schoolId);
+        const crossSchoolCollision = await detectCrossSchoolMemoCollision(memo, schoolId, txDate);
+        const abnormal = await detectAbnormalPatterns(senderAddress, paymentAmount, student.feeAmount, txDate, schoolId, school.suspiciousPaymentMultiplier, school.suspiciousAmountConfig);
+
+        const isSuspicious = collision.suspicious || crossSchoolCollision.suspicious || abnormal.suspicious;
+        const suspicionReason = [collision.reason, crossSchoolCollision.reason, abnormal.reason].filter(Boolean).join('; ') || null;
+
+        if (isSuspicious) {
+          try {
+            require('../metrics').suspiciousPaymentFlagged.inc({ school_id: schoolId });
+          } catch (_) {
+            // metrics module unavailable — flagging still proceeds
+          }
+        }
+
+        // #883 — snapshot fiat rate at confirmation (best-effort; null if feed unavailable)
+        const fiatSnapshot = isConfirmed && !isSuspicious
+          ? await captureFiatSnapshot(paymentAmount, op.assetCode || 'XLM', process.env.DEFAULT_FIAT_CURRENCY || 'USD')
+          : null;
+
+        // #1974 — credit in the fee currency using the recorded rate snapshot.
+        const credited = resolveCreditedAmount({
+          amount: paymentAmount,
+          assetCode: op.assetCode,
+          feeCurrency,
+          fiatSnapshot,
+        });
+        if (credited.rejected) {
+          logger.warn('Payment rejected: cannot credit in fee currency', {
+            txHash: tx.hash,
+            correlationId,
+            schoolId,
+            opIndex: op.opIndex,
+            assetCode: op.assetCode,
+            feeCurrency,
+            reason: credited.reason,
+          });
+          await recordPaymentVerificationAttempt({
+            schoolId,
+            txHash: tx.hash,
+            opIndex: op.opIndex,
+            studentId: memo,
+            assetCode: op.assetCode,
+            amount: paymentAmount,
+            outcome: 'rejected',
+            reason: credited.reason,
+          });
+          continue;
+        }
+
+        // Calculate per-payment cumulative totals — used only for the payment
+        // record's feeValidationStatus / excessAmount UI fields. Student balance
+        // is NOT written here; that is exclusively updateStudentBalance's job.
+        const previousPayments = await Payment.aggregate([
+          { $match: { schoolId, studentId: memo, status: 'SUCCESS', isSuspicious: false, deletedAt: null } },
+          { $group: { _id: null, total: { $sum: '$creditedAmount' } } },
+        ]).session(session);
+        const previousTotal = previousPayments.length ? previousPayments[0].total : 0;
+        // Sum/diff in exact stroop space (#842) so an exact cumulative match is
+        // never mis-flagged as underpaid/overpaid by a float rounding epsilon.
+        const cumulativeTotal = stroopsToNumber(toStroops(previousTotal) + toStroops(credited.creditedAmount));
+
+        // Route classification through the single canonical helper (#1766).
+        const classification = classifyFeePayment({
+          cumulativeTotal,
+          feeAmount: student.feeAmount,
+          installmentAmount: student.expectedInstallmentAmount,
+          hasPlan: Boolean(student.paymentPlanId),
+        });
+        const cumulativeStatus = classification.status;
+        const excessAmount = classification.excessAmount;
+
+        const paymentData = {
+          schoolId,
+          studentId: memo,
+          txHash: tx.hash,
+          transactionHash: tx.hash,
+          opIndex: op.opIndex,
+          correlationId,
+          amount: paymentAmount,
+          assetCode: op.assetCode,
+          feeCurrency,
+          creditedAmount: credited.creditedAmount,
+          creditedRate: credited.rate,
+          feeAmount: student.feeAmount,
+          feeValidationStatus: cumulativeStatus,
+          excessAmount,
+          status: isSuspicious ? 'FAILED' : (isConfirmed ? 'SUCCESS' : 'PENDING'),
+          memo,
+          senderAddress,
+          isSuspicious,
+          suspicionReason,
+          receivedOnRetiredAddress: Boolean(school.receivedOnRetiredAddress),
+          ledger: txLedger,
+          ledgerSequence: txLedger,
+          confirmationStatus,
+          confirmationState: confirmation.state,
+          confirmedAt: txDate,
+          referenceCode: await generateReferenceCode(),
+          networkFee,
+          fiatSnapshot,
+        };
+
+        try {
+          await Payment.create([paymentData], { session });
+        } catch (error) {
+          if (error.code === 11000) {
+            // Another worker recorded this operation — terminal for this op.
+            continue;
+          }
+          throw error;
+        }
+
+        // Fix #1751: Delegate all student balance writes to the single canonical
+        // function (updateStudentBalance). Only update when the payment will
+        // actually count in the canonical formula (SUCCESS, not suspicious).
+        if (isConfirmed && !isSuspicious) {
+          try {
+            await updateStudentBalance(schoolId, memo, { session });
+          } catch (err) {
+            if (err.code === 'STUDENT_BALANCE_LOCK_CONTENDED') {
+              // #1975 — transient: the balance lock is held elsewhere. The
+              // payment row is written; the balance will be recomputed on the
+              // next run, so we must NOT advance the cursor past this tx.
+              balanceLockContended = true;
+              logger.warn('Student balance lock contended during poll — will retry next cycle', {
+                schoolId,
+                studentId: memo,
+                txHash: tx.hash,
+                opIndex: op.opIndex,
+              });
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        recorded.push(paymentData);
       }
     });
 
-    sseEmit(schoolId, 'payment', {
-      txHash: tx.hash,
-      correlationId,
-      studentId: memo,
-      amount: paymentAmount,
-      feeValidationStatus: cumulativeStatus,
-      status: paymentData.status,
-      confirmedAt: txDate,
-    }, correlationId);
+    for (const paymentData of recorded) {
+      sseEmit(schoolId, 'payment', {
+        txHash: tx.hash,
+        correlationId,
+        studentId: memo,
+        opIndex: paymentData.opIndex,
+        amount: paymentData.amount,
+        assetCode: paymentData.assetCode,
+        creditedAmount: paymentData.creditedAmount,
+        feeCurrency: paymentData.feeCurrency,
+        feeValidationStatus: paymentData.feeValidationStatus,
+        status: paymentData.status,
+        confirmedAt: txDate,
+      }, correlationId);
+    }
 
-    logger.info('Transaction auto-detected and recorded', {
-      txHash: tx.hash,
-      correlationId,
-      schoolId,
-      studentId: memo,
-      amount: paymentAmount,
-      feeValidationStatus: cumulativeStatus,
-      isSuspicious,
-      confirmationStatus,
-    });
+    if (recorded.length > 0) {
+      logger.info('Transaction auto-detected and recorded', {
+        txHash: tx.hash,
+        correlationId,
+        schoolId,
+        studentId: memo,
+        operations: recorded.length,
+        amounts: recorded.map(p => ({ assetCode: p.assetCode, amount: p.amount, creditedAmount: p.creditedAmount })),
+        confirmationStatus,
+      });
+    }
 
-    return { processed: true, payment: paymentData };
+    if (balanceLockContended) {
+      return { processed: recorded.length > 0, payments: recorded, reason: 'balance_lock_contended', transient: true };
+    }
+    if (recorded.length === 0) {
+      // Every operation was either a duplicate or rejected — terminal.
+      return { processed: false, reason: 'no_creditable_operations', terminal: true };
+    }
+    return { processed: true, payments: recorded, terminal: true };
   } catch (error) {
     if (error.code === 11000) {
-      return { processed: false, reason: 'duplicate' };
+      return { processed: false, reason: 'duplicate', terminal: true };
     }
     logger.error('Failed to record payment', { error: error.message, txHash: tx.hash, correlationId });
-    throw error;
+    // Transient: DB/Horizon error — do not advance the cursor past this tx.
+    return { processed: false, reason: 'transient_error', transient: true, error: error.message };
   } finally {
     await session.endSession();
   }
@@ -448,6 +570,7 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
       const records = (page && page.records) || [];
       if (records.length === 0) break;
 
+      let stopAdvancing = false;
       for (const tx of records) {
         if (isBeforeIngestStart(tx, school)) {
           skippedCount++;
@@ -467,8 +590,21 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
         } else {
           skippedCount++;
         }
-        // Advance past every examined tx — we never need to re-read it. Reorg /
-        // confirmation promotion is handled separately by finalizeConfirmedPayments.
+        // #1975/#1976 — only advance the cursor past a TERMINAL outcome. A
+        // transient outcome (balance lock contention, DB/Horizon error) must
+        // stop advancement so the tx is retried on the next cycle.
+        if (result.transient) {
+          stopAdvancing = true;
+          logger.info('Stopping cursor advancement at transient outcome', {
+            schoolId: school.schoolId,
+            txHash: tx.hash,
+            reason: result.reason,
+          });
+          break;
+        }
+        // Advance past every terminally-examined tx — we never need to re-read
+        // it. Reorg / confirmation promotion is handled separately by
+        // finalizeConfirmedPayments.
         if (tx.paging_token) cursor = tx.paging_token;
       }
 
@@ -485,6 +621,12 @@ async function pollSchoolTransactions(school, budget = null, retired = null) {
             { $set: { syncCursor: cursor } },
           );
         }
+      }
+
+      if (stopAdvancing) {
+        // Transient outcome — stop this cycle; the persisted cursor points at
+        // the last terminal tx so the next cycle resumes here.
+        break;
       }
 
       if (records.length < batchSize) {
