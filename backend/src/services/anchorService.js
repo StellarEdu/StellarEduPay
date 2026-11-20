@@ -39,7 +39,28 @@ const School = require('../models/schoolModel');
 const Student = require('../models/studentModel');
 const { processTransaction } = require('./transactionPollingService');
 const { server: horizonServer, networkPassphrase: NETWORK_PASSPHRASE } = require('../config/stellarConfig');
+const { validateWebhookUrl } = require('../utils/ssrfProtection');
 const logger = require('../utils/logger').child('AnchorService');
+
+// ── TOML parser (lazy, avoids hard dependency in test environments) ───────────
+function _toml() {
+  try {
+    return require('@iarna/toml');
+  } catch (_) {
+    return require('smol-toml');
+  }
+}
+
+// ── Caches ───────────────────────────────────────────────────────────────────
+// Parsed stellar.toml per homeDomain, valid for 1 hour.
+const TOML_CACHE_TTL_MS = 60 * 60 * 1000;
+const _tomlCache = new Map(); // homeDomain → { value, expiresAt }
+
+// SEP-10 JWT per anchor (homeDomain + account), valid until the JWT's exp.
+const _jwtCache = new Map(); // `${homeDomain}|${account}` → { jwt, expiresAt }
+const JWT_DEFAULT_TTL_MS = 5 * 60 * 1000; // fallback when the JWT has no exp
+const JWT_EXPIRY_SKEW_MS = 30 * 1000; // refresh slightly before expiry
+=======
 
 // ── Global anchor registry (fallback for schools without per-school config) ───
 let _globalAnchors = [];
@@ -71,31 +92,76 @@ function _stellar() {
 const STELLAR_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
 
 /**
- * Read a top-level string value from a stellar.toml document.
+ * Validate that a URL is safe to contact: HTTPS only, public IPs only, with
+ * pinned DNS resolution (see utils/ssrfProtection). Throws on rejection.
  *
- * SEP-1 defines WEB_AUTH_ENDPOINT, SIGNING_KEY and friends as top-level keys.
- * Only lines before the first [table] header are read, so a key with the same
- * name inside a [[CURRENCIES]] or [DOCUMENTATION] table is never mistaken for
- * the anchor's own value. Full TOML parsing is not needed for these keys.
- *
- * @param {string} text  stellar.toml contents
- * @param {string} key   top-level key name
- * @returns {string|null}
+ * @param {string} url
+ * @param {string} label  used in error messages
+ * @returns {Promise<string>} the validated URL
  */
-function readTopLevelTomlString(text, key) {
-  for (const rawLine of String(text).split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === '' || line.startsWith('#')) continue;
-    if (line.startsWith('[')) break;
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"\\]*)"\s*(?:#.*)?$/);
-    if (match && match[1] === key) return match[2];
+async function _assertSafeUrl(url, label) {
+  try {
+    await validateWebhookUrl(url);
+  } catch (err) {
+    throw Object.assign(
+      new Error(`Rejected ${label} '${url}': ${err.message}`),
+      { code: 'ANCHOR_URL_REJECTED' }
+    );
   }
-  return null;
+  return url;
+}
+
+/**
+ * Validate a homeDomain (host[:port]) by building its stellar.toml URL and
+ * running the SSRF checks on it. Rejects private/internal addresses.
+ *
+ * @param {string} homeDomain
+ * @returns {Promise<string>} the validated toml URL
+ */
+async function _validateHomeDomain(homeDomain) {
+  if (typeof homeDomain !== 'string' || !homeDomain.trim()) {
+    throw Object.assign(new Error('Anchor homeDomain is required'), { code: 'ANCHOR_URL_REJECTED' });
+  }
+  const tomlUrl = `https://${homeDomain.trim()}/.well-known/stellar.toml`;
+  await _assertSafeUrl(tomlUrl, 'anchor homeDomain');
+  return tomlUrl;
+}
+
+/**
+ * Fetch and parse an anchor's stellar.toml, caching the parsed document for
+ * 1 hour per homeDomain.
+ *
+ * @param {string} homeDomain
+ * @returns {Promise<object>} parsed TOML document
+ */
+async function _fetchParsedToml(homeDomain) {
+  const cached = _tomlCache.get(homeDomain);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const tomlUrl = await _validateHomeDomain(homeDomain);
+  const response = await _axios().get(tomlUrl, { timeout: 10_000 });
+  const text = response.data;
+
+  let parsed;
+  try {
+    parsed = _toml().parse(typeof text === 'string' ? text : String(text));
+  } catch (err) {
+    throw Object.assign(
+      new Error(`Invalid stellar.toml for ${homeDomain}: ${err.message}`),
+      { code: 'ANCHOR_TOML_INVALID' }
+    );
+  }
+
+  _tomlCache.set(homeDomain, { value: parsed, expiresAt: Date.now() + TOML_CACHE_TTL_MS });
+  return parsed;
 }
 
 /**
  * Discover the SEP-10 and SEP-24 endpoint URLs, and the anchor's SIGNING_KEY,
  * from an anchor's stellar.toml.
+ *
+ * The TOML is parsed with a real parser (top-level keys only) and every
+ * discovered URL is validated against SSRF rules before being returned.
  *
  * signingKey is null when the toml has no valid SIGNING_KEY. sep10Authenticate
  * refuses to run without one, so this never leads to signing unverified input.
@@ -104,14 +170,12 @@ function readTopLevelTomlString(text, key) {
  * @returns {Promise<{ sep10Url: string, sep24Url: string, signingKey: string|null, webAuthDomain: string|null }>}
  */
 async function discoverAnchorEndpoints(homeDomain) {
-  const tomlUrl = `https://${homeDomain}/.well-known/stellar.toml`;
-  const response = await _axios().get(tomlUrl, { timeout: 10_000 });
-  const text = response.data;
+  const toml = await _fetchParsedToml(homeDomain);
 
-  const sep10Url = readTopLevelTomlString(text, 'WEB_AUTH_ENDPOINT');
-  const sep24Url = readTopLevelTomlString(text, 'TRANSFER_SERVER_SEP0024');
-  const signingKeyRaw = readTopLevelTomlString(text, 'SIGNING_KEY');
-  const webAuthDomain = readTopLevelTomlString(text, 'WEB_AUTH_DOMAIN');
+  const sep10Url = typeof toml.WEB_AUTH_ENDPOINT === 'string' ? toml.WEB_AUTH_ENDPOINT : null;
+  const sep24Url = typeof toml.TRANSFER_SERVER_SEP0024 === 'string' ? toml.TRANSFER_SERVER_SEP0024 : null;
+  const signingKeyRaw = typeof toml.SIGNING_KEY === 'string' ? toml.SIGNING_KEY : null;
+  const webAuthDomain = typeof toml.WEB_AUTH_DOMAIN === 'string' ? toml.WEB_AUTH_DOMAIN : null;
 
   if (!sep10Url) {
     throw new Error(
@@ -124,9 +188,59 @@ async function discoverAnchorEndpoints(homeDomain) {
     );
   }
 
+  // Validate every discovered URL before use (SSRF protection).
+  await _assertSafeUrl(sep10Url, 'WEB_AUTH_ENDPOINT');
+  await _assertSafeUrl(sep24Url, 'TRANSFER_SERVER_SEP0024');
+  if (webAuthDomain) {
+    // WEB_AUTH_DOMAIN is a bare host; validate via its https URL.
+    await _assertSafeUrl(`https://${webAuthDomain}`, 'WEB_AUTH_DOMAIN');
+  }
+
   const signingKey = signingKeyRaw && STELLAR_PUBLIC_KEY_PATTERN.test(signingKeyRaw) ? signingKeyRaw : null;
 
   return { sep10Url, sep24Url, signingKey, webAuthDomain };
+}
+
+/**
+ * Decode a JWT payload without verifying the signature (the token came from
+ * the anchor over TLS; we only need `exp` for cache lifetime).
+ *
+ * @param {string} jwt
+ * @returns {number|null} expiry in epoch ms, or null
+ */
+function _jwtExpiryMs(jwt) {
+  try {
+    const payload = jwt.split('.')[1];
+    if (!payload) return null;
+    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const { exp } = JSON.parse(json);
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Return a cached SEP-10 JWT for the anchor/account, performing a handshake
+ * only when no valid token is cached.
+ *
+ * @param {string} sep10Url
+ * @param {string} account
+ * @param {{ homeDomain: string, signingKey: string, webAuthDomain?: string|null }} anchor
+ * @returns {Promise<string>} JWT token
+ */
+async function getAnchorJwt(sep10Url, account, anchor) {
+  const cacheKey = `${anchor.homeDomain}|${account}`;
+  const cached = _jwtCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.jwt;
+
+  const jwt = await sep10Authenticate(sep10Url, account, anchor);
+  const expMs = _jwtExpiryMs(jwt);
+  const expiresAt = expMs
+    ? expMs - JWT_EXPIRY_SKEW_MS
+    : Date.now() + JWT_DEFAULT_TTL_MS;
+  _jwtCache.set(cacheKey, { jwt, expiresAt });
+  return jwt;
 }
 
 /**
@@ -325,8 +439,8 @@ async function initiateAnchorDeposit({ schoolId, studentId, anchorId }) {
   }
   const platformPublicKey = StellarSdk.Keypair.fromSecret(keypairSecret).publicKey();
 
-  // 5. SEP-10 authentication.
-  const jwt = await sep10Authenticate(sep10Url, platformPublicKey, { homeDomain, signingKey, webAuthDomain });
+  // 5. SEP-10 authentication (cached per anchor until the JWT expires).
+  const jwt = await getAnchorJwt(sep10Url, platformPublicKey, { homeDomain, signingKey, webAuthDomain });
 
   // 6. School receiving wallet.
   const school = await School.findOne({ schoolId }).lean();
@@ -509,7 +623,10 @@ module.exports = {
   listAnchorsForSchool,
   discoverAnchorEndpoints,
   sep10Authenticate,
+  getAnchorJwt,
   stopAllAnchorPolls,
   // exposed for testing
   _activePolls,
+  _tomlCache,
+  _jwtCache,
 };

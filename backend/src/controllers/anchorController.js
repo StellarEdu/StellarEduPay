@@ -12,7 +12,10 @@ const {
   resolveAnchorConfig,
   listAnchorsForSchool,
   discoverAnchorEndpoints,
+  getCachedSep10Jwt,
 } = require('../services/anchorService');
+const { validateWebhookUrl } = require('../utils/ssrfGuard');
+const { query } = require('../config/database');
 
 /**
  * GET /api/anchor/anchors
@@ -49,6 +52,19 @@ async function initiateDeposit(req, res, next) {
       });
     }
 
+    // Validate the student exists (and belongs to this school) before doing
+    // any outbound work against the anchor.
+    const studentResult = await query(
+      'SELECT id FROM students WHERE id = $1 AND school_id = $2',
+      [studentId, req.schoolId],
+    );
+    if (!studentResult.rows.length) {
+      return res.status(400).json({
+        error: 'Unknown studentId',
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
     const result = await initiateAnchorDeposit({
       schoolId: req.schoolId,
       studentId,
@@ -78,7 +94,17 @@ async function getDepositStatus(req, res, next) {
       });
     }
 
-    // Re-authenticate to get a fresh JWT for status checks.
+    // Validate the caller-supplied SEP-24 URL (HTTPS only, public IPs only).
+    const sep24Check = await validateWebhookUrl(sep24Url);
+    if (!sep24Check.valid) {
+      return res.status(400).json({
+        error: `Invalid sep24Url: ${sep24Check.reason || 'not allowed'}`,
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
+    // Reuse the cached SEP-10 JWT (refreshed only when it expires) instead of
+    // running a full handshake on every status poll.
     const anchor = await resolveAnchorConfig(req.schoolId, anchorId);
     const { sep10Url } = await discoverAnchorEndpoints(anchor.homeDomain);
 
@@ -92,8 +118,7 @@ async function getDepositStatus(req, res, next) {
     }
     const platformPublicKey = StellarSdk.Keypair.fromSecret(keypairSecret).publicKey();
 
-    const { sep10Authenticate } = require('../services/anchorService');
-    const jwt = await sep10Authenticate(sep10Url, platformPublicKey);
+    const jwt = await getCachedSep10Jwt(sep10Url, platformPublicKey);
 
     const anchorTx = await fetchAnchorTxStatus(sep24Url, anchorTxId, jwt);
 

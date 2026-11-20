@@ -64,8 +64,24 @@ function tenantScopePlugin(schema, options = {}) {
     return this.setOptions({ _bypassTenantScope: true });
   };
 
+  // A usable tenant value is either a non-empty string, or an object whose
+  // $in array is non-empty and contains only non-empty strings. Anything else
+  // (undefined, null, '', { $exists: true }, { $ne: null }, ...) is rejected:
+  // those either get dropped by the driver (cross-tenant query) or match every
+  // tenant, which is exactly what this plugin exists to prevent.
+  function isConcreteSchoolId(v) {
+    if (typeof v === 'string') return v.length > 0;
+    if (v && typeof v === 'object' && Array.isArray(v.$in)) {
+      return (
+        v.$in.length > 0 &&
+        v.$in.every((s) => typeof s === 'string' && s.length > 0)
+      );
+    }
+    return false;
+  }
+
   function assertSchoolId(filter, op) {
-    if (!filter || !Object.prototype.hasOwnProperty.call(filter, 'schoolId')) {
+    if (!filter || !isConcreteSchoolId(filter.schoolId)) {
       throw new TenantScopeError(modelName, op);
     }
   }
@@ -78,18 +94,35 @@ function tenantScopePlugin(schema, options = {}) {
   }
 
   // Aggregate middleware — this context is the Aggregate instance.
-  // Requires schoolId in the first $match stage of the pipeline.
+  // Requires a concrete schoolId in the first $match stage of the pipeline.
   schema.pre('aggregate', function () {
     if (this.options && this.options._bypassTenantScope) return;
     const pipeline = this.pipeline();
     const first = pipeline[0];
-    if (
-      !first ||
-      !first.$match ||
-      !Object.prototype.hasOwnProperty.call(first.$match, 'schoolId')
-    ) {
+    if (!first || !first.$match || !isConcreteSchoolId(first.$match.schoolId)) {
       throw new TenantScopeError(modelName, 'aggregate');
     }
+  });
+
+  // insertMany — every document must carry a concrete schoolId.
+  schema.pre('insertMany', function (next, docs) {
+    if (this.getOptions && this.getOptions()._bypassTenantScope) return next();
+    const list = Array.isArray(docs) ? docs : [docs];
+    for (const doc of list) {
+      if (!doc || !isConcreteSchoolId(doc.schoolId)) {
+        return next(new TenantScopeError(modelName, 'insertMany'));
+      }
+    }
+    return next();
+  });
+
+  // save — the document being persisted must carry a concrete schoolId.
+  schema.pre('save', function (next) {
+    if (this.$locals && this.$locals._bypassTenantScope) return next();
+    if (!isConcreteSchoolId(this.schoolId)) {
+      return next(new TenantScopeError(modelName, 'save'));
+    }
+    return next();
   });
 }
 

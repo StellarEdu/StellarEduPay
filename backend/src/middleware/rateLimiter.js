@@ -286,10 +286,40 @@ const payLinkLookupLimiter = rl(
   { name: 'rl:paylink' },
 );
 
+// #1953 — Anchor (SEP-24) routes. These are parent-facing and unauthenticated,
+// and each /initiate call performs outbound work (stellar.toml fetch, SEP-10
+// handshake, anchor deposit creation), so they need their own tight limiters.
+// Two dimensions are bounded: per IP (one noisy source) and per school (one
+// school's parents cannot exhaust the anchor's rate limits for everyone else).
+const ANCHOR_RL_MSG = {
+  error: 'Too many anchor requests. Please try again later.',
+  code: 'RATE_LIMIT_EXCEEDED',
+};
+
+const anchorIpLimiter = rl(
+  60 * 1000,
+  parseInt(process.env.ANCHOR_IP_RATE_LIMIT || '10', 10),
+  ANCHOR_RL_MSG,
+  { name: 'rl:anchor-ip' }
+);
+
+const anchorSchoolLimiter = rl(
+  60 * 1000,
+  parseInt(process.env.ANCHOR_SCHOOL_RATE_LIMIT || '20', 10),
+  ANCHOR_RL_MSG,
+  {
+    name: 'rl:anchor-school',
+    keyGenerator: (req) =>
+      req.schoolId ? `anchor-school:${req.schoolId}` : `anchor-school-ip:${req.ip}`,
+  }
+);
+
 module.exports = {
   rl,
   RL_MSG,
   payLinkLookupLimiter,
+  anchorIpLimiter,
+  anchorSchoolLimiter,
   generalLimiter,
   strictLimiter,
   syncLimiter,
