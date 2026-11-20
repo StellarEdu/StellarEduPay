@@ -16,6 +16,21 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       automountServiceAccountToken: false
+      # Spread replicas across nodes so a single node failure cannot take out
+      # every frontend pod. Production clusters must run at least 2 nodes.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: frontend
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
