@@ -8,11 +8,19 @@
  *   - declare a non-empty spec.tls block, each entry with a secretName;
  *   - give every rule an explicit host;
  *   - cover every rule host with some spec.tls[].hosts entry. A wildcard entry
- *     such as "*.example.com" covers exactly one label below it.
+ *     such as "*.example.com" covers exactly one label below it;
+ *   - list exactly the rule hosts in spec.tls[].hosts (issue #2005): a
+ *     certificate issued for a host that is not routed, or a routed host with
+ *     no certificate, is a misconfiguration.
  *
  * Usage:
  *   node scripts/check-ingress-tls.js                 # deploy/k8s/ingress.yaml
  *   node scripts/check-ingress-tls.js path/to/a.yaml  # explicit files
+ *   node scripts/check-ingress-tls.js --kustomize deploy/k8s  # rendered output
+ *
+ * With --kustomize the directory is rendered with `kubectl kustomize` (or
+ * `kustomize build`) and the resulting stream is checked, so the check sees the
+ * same hosts the cluster would receive.
  *
  * Needs js-yaml. Resolved through NODE_PATH, or from this repo's node_modules.
  * CI installs a pinned copy outside the repo (see .github/workflows/ci.yml).
@@ -88,6 +96,19 @@ function checkIngress(ingress) {
     if (tlsHosts.length > 0 && !hostCovered(host, tlsHosts)) {
       problems.push(`Ingress "${name}" rule host "${host}" is not covered by spec.tls hosts [${tlsHosts.join(', ')}]`);
     }
+  }
+
+  // Issue #2005: the certificate must be for exactly the routed hosts.
+  const ruleHosts = rules.map((rule) => rule && rule.host).filter((h) => typeof h === 'string' && h.length > 0);
+  const uniqueTlsHosts = [...new Set(tlsHosts)];
+  const uniqueRuleHosts = [...new Set(ruleHosts)];
+  const missingFromTls = uniqueRuleHosts.filter((h) => !uniqueTlsHosts.includes(h));
+  const missingFromRules = uniqueTlsHosts.filter((h) => !uniqueRuleHosts.includes(h));
+  if (missingFromTls.length > 0) {
+    problems.push(`Ingress "${name}" rule hosts [${missingFromTls.join(', ')}] are missing from spec.tls hosts`);
+  }
+  if (missingFromRules.length > 0) {
+    problems.push(`Ingress "${name}" spec.tls hosts [${missingFromRules.join(', ')}] are not rule hosts`);
   }
 
   return problems;

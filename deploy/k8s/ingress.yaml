@@ -35,12 +35,19 @@ metadata:
     nginx.ingress.kubernetes.io/log-format: >-
       $remote_addr - $remote_user [$time_local] "$stellaredupay_redacted_request"
       $status $body_bytes_sent "$http_referer" "$http_user_agent"
-=======
 spec:
   ingressClassName: nginx
-  # TLS configuration — certificate termination at the Ingress
-  # Replace stellaredupay.example.com in BOTH places (here and rules[].host).
-  # CI (scripts/check-ingress-tls.js, #1923) fails when a rule host is not covered by a tls host.
+  # TLS configuration — certificate termination at the Ingress.
+  #
+  # The host is defined ONCE, in the `stellaredupay-ingress-host` ConfigMap
+  # (configmap.yaml, key INGRESS_HOST). Kustomize `replacements` in
+  # kustomization.yaml copy that value into both spec.tls[0].hosts and
+  # spec.rules[0].host, so the certificate can never be issued for a host that
+  # differs from the routing rule (issue #2005). Override INGRESS_HOST in an
+  # overlay to deploy a different domain.
+  #
+  # CI (scripts/check-ingress-tls.js) fails when a rule host is not covered by a
+  # tls host, and when the two lists are not identical.
   tls:
     - hosts:
         - stellaredupay.example.com
