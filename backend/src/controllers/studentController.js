@@ -182,8 +182,8 @@ async function getAllStudents(req, res, next) {
       const trimmedSearch = req.query.search.trim();
       if (trimmedSearch) {
         const escaped = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const re = new RegExp(`^${escaped}`, 'i');
-        filter.$or = [{ name: re }, { studentId: re }];
+        const re = new RegExp(`^${escaped.toLowerCase()}`);
+        filter.$or = [{ nameLower: re }, { studentIdLower: re }];
       }
     }
 
