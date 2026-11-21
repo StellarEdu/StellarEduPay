@@ -14,8 +14,31 @@ const { isReady: isShutdownReady } = require('../services/shutdownManager');
 const { isEncryptionEnabled: isPiiEncryptionEnabled } = require('../services/studentPiiEncryption');
 const { isEncryptionEnabled: isWebhookSecretEncryptionEnabled } = require('../services/webhookSecretEncryption');
 const { getBuildInfo } = require('../utils/buildInfo');
+const { sharedPollBudget } = require('../services/horizonPollBudget');
 
 const STELLAR_CHECK_TIMEOUT_MS = 3000; // 3 second timeout for Stellar health check
+
+// #2014 — the unauthenticated probes must not turn into a free Horizon query
+// each time a load balancer, container runtime or uptime monitor polls us. A
+// single result is cached and shared by every caller; only the background
+// refresher (or the admin-only detailed check) performs a live probe.
+const MIN_STELLAR_CACHE_TTL_MS = 15000;
+const MAX_STELLAR_CACHE_TTL_MS = 30000;
+const DEFAULT_STELLAR_CACHE_TTL_MS = 20000;
+
+function resolveStellarCacheTtlMs() {
+  const parsed = parseInt(process.env.HEALTH_HORIZON_CACHE_TTL_MS, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_STELLAR_CACHE_TTL_MS;
+  return Math.min(MAX_STELLAR_CACHE_TTL_MS, Math.max(MIN_STELLAR_CACHE_TTL_MS, parsed));
+}
+
+const STELLAR_CACHE_TTL_MS = resolveStellarCacheTtlMs();
+const stellarCache = {
+  result: null,
+  atMs: 0,
+  inFlight: null,
+  timer: null,
+};
 
 /**
  * Report whether at-rest encryption is active for PII and webhook secrets.
@@ -81,8 +104,42 @@ function reasonFor(dependency, message) {
   return code;
 }
 
-async function checkStellar() {
-  const result = await probeStellar();
+function circuitBreakerStatus() {
+  try {
+    return typeof horizonClient.getCircuitBreakerStatus === 'function'
+      ? horizonClient.getCircuitBreakerStatus()
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Perform the single live Horizon request a health refresh is allowed to make.
+ * The request is reserved from the shared poll budget so probes are counted in
+ * the same allowance as payment ingestion (#2014). If the budget is exhausted,
+ * serve the last known result (flagged stale) instead of adding load to an
+ * already saturated Horizon endpoint.
+ */
+async function runStellarProbe() {
+  let result;
+  if (sharedPollBudget.tryConsume(1)) {
+    result = await probeStellar();
+  } else if (stellarCache.result) {
+    result = { ...stellarCache.result, stale: true };
+  } else {
+    result = {
+      status: 'unknown',
+      reason: 'horizon_budget_exhausted',
+      latencyMs: 0,
+      activeUrl: horizonClient.activeUrl,
+      endpoints: circuitBreakerStatus(),
+    };
+  }
+
+  stellarCache.result = result;
+  stellarCache.atMs = Date.now();
+
   // #2013: Horizon is reported separately (health body + horizon_up metric) and
   // is deliberately NOT part of readiness — an SDF Horizon outage must not take
   // the admin API offline by marking every pod NotReady.
@@ -92,6 +149,46 @@ async function checkStellar() {
     // metrics registry unavailable (e.g. during shutdown) — never fail the probe
   }
   return result;
+}
+
+/**
+ * Coalesce concurrent refreshes into a single in-flight probe so a burst of
+ * requests can never fan out into a burst of Horizon calls (#2014).
+ */
+function refreshStellarCache() {
+  if (!stellarCache.inFlight) {
+    stellarCache.inFlight = runStellarProbe().finally(() => {
+      stellarCache.inFlight = null;
+    });
+  }
+  return stellarCache.inFlight;
+}
+
+/**
+ * Cached Stellar status used by the public probes. The background refresher
+ * normally keeps this warm; a refresh only starts here when the cache is cold
+ * (e.g. before the refresher's first tick), and is still deduplicated.
+ */
+async function checkStellar() {
+  if (stellarCache.result && Date.now() - stellarCache.atMs < STELLAR_CACHE_TTL_MS) {
+    return stellarCache.result;
+  }
+  return refreshStellarCache();
+}
+
+/** Start the background refresher that owns all Horizon health probes (#2014). */
+function startHorizonHealthCache() {
+  if (stellarCache.timer) return;
+  void refreshStellarCache(); // warm the cache immediately, don't wait one interval
+  stellarCache.timer = setInterval(() => { void refreshStellarCache(); }, STELLAR_CACHE_TTL_MS);
+  if (stellarCache.timer.unref) stellarCache.timer.unref();
+}
+
+function stopHorizonHealthCache() {
+  if (stellarCache.timer) {
+    clearInterval(stellarCache.timer);
+    stellarCache.timer = null;
+  }
 }
 
 async function probeStellar() {
@@ -115,7 +212,7 @@ async function probeStellar() {
       status: 'ok',
       latencyMs: Date.now() - start,
       activeUrl: horizonClient.activeUrl,
-      endpoints: horizonClient.getCircuitBreakerStatus(),
+      endpoints: circuitBreakerStatus(),
     };
   } catch (err) {
     return {
@@ -123,7 +220,7 @@ async function probeStellar() {
       error: err.message,
       latencyMs: Date.now() - start,
       activeUrl: horizonClient.activeUrl,
-      endpoints: horizonClient.getCircuitBreakerStatus(),
+      endpoints: circuitBreakerStatus(),
     };
   } finally {
     // Always clear the probe timeout so it can't reject after the race has
@@ -137,12 +234,16 @@ async function probeStellar() {
  * detailed body served (behind admin auth) by GET /api/admin/health/details.
  * Raw error messages are replaced with stable reason codes (#1540).
  *
+ * @param {object} [options]
+ * @param {boolean} [options.freshStellar] - Force a live Horizon probe. Only
+ *   used by the admin-authenticated details endpoint (#2014); the public
+ *   probes always read the cached result.
  * @returns {Promise<{statusCode: number, body: object}>}
  */
-async function buildHealthReport() {
+async function buildHealthReport({ freshStellar = false } = {}) {
   const [dbResult, stellarResult] = await Promise.allSettled([
     database.healthCheck(),
-    checkStellar(),
+    freshStellar ? refreshStellarCache() : checkStellar(),
   ]);
 
   const db =
@@ -334,6 +435,8 @@ async function buildHealthReport() {
  * so load balancers and uptime checks keep working without disclosing
  * hostnames, Horizon endpoints, error strings, queue depths or worker state.
  * The detailed report is served by GET /api/admin/health/details.
+ * Horizon status comes from the shared 15–30 s cache (#2014), so this endpoint
+ * never issues a Horizon request of its own under normal operation.
  */
 async function healthCheck(req, res) {
   try {
@@ -350,7 +453,9 @@ async function healthCheck(req, res) {
  */
 async function healthDetails(req, res) {
   try {
-    const { statusCode, body } = await buildHealthReport();
+    // Admin-only: a live Horizon probe is acceptable here, unlike on the
+    // anonymous endpoints where it would be an amplification vector (#2014).
+    const { statusCode, body } = await buildHealthReport({ freshStellar: true });
     return res.status(statusCode).json(body);
   } catch (err) {
     logger.error('Health details failed', { error: err.message });
@@ -381,8 +486,9 @@ async function version(req, res) {
  * GET /health/ready
  * Readiness probe: returns 200 only when the service can handle traffic.
  * Checks shutdown state, DB and (when configured) Redis only; returns 503 if
- * any of those is unavailable. Horizon is reported separately (#2013) and never
- * affects readiness, so a Horizon outage cannot take the admin API offline.
+ * any of those is unavailable. Horizon is reported separately (#2013), from the
+ * shared cache (#2014), and never affects readiness, so a Horizon outage cannot
+ * take the admin API offline.
  */
 async function healthReady(req, res) {
   // Check if shutdown has started (readiness flag flipped)
@@ -453,4 +559,8 @@ module.exports = {
   toReasonCode,
   getEncryptionStatus,
   logEncryptionStatusOnce,
+  checkStellar,
+  startHorizonHealthCache,
+  stopHorizonHealthCache,
+  STELLAR_CACHE_TTL_MS,
 };

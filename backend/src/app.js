@@ -99,7 +99,14 @@ const { requireAdminAuth } = require('./middleware/auth');
 const { jsonDepthGuard, deduplicateQueryParams } = require('./middleware/sanitizeRequest');
 const { sanitizeInput } = require('./middleware/sanitizeInput');
 const { runConsistencyCheck } = require('./controllers/consistencyController');
-const { healthCheck, healthLive, healthReady, version: versionInfo } = require('./controllers/healthController');
+const {
+  healthCheck,
+  healthLive,
+  healthReady,
+  version: versionInfo,
+  startHorizonHealthCache,
+  stopHorizonHealthCache,
+} = require('./controllers/healthController');
 const { setupEnforceConsoleErrorLogging } = require('./errorHandling');
 const logger = require('./utils/logger');
 const { startHeapMonitoring } = require('./utils/heapMonitoring');
@@ -438,6 +445,7 @@ connectDatabase().then(async () => {
   await leaderElection.start();
 
 // Always-start services (handle concurrency internally)
+   startHorizonHealthCache();
    startPolling();
    startStreaming();
    retrySelector.start();
@@ -506,6 +514,7 @@ async function shutdown(signal) {
   logger.info(`Received ${signal} signal — starting graceful shutdown`);
 
   setReady(false);
+  stopHorizonHealthCache();
 
   const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 30_000;
 
