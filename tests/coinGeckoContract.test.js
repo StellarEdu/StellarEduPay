@@ -58,6 +58,28 @@ function mockHttpsGetError(message) {
   return () => { https.get = original; };
 }
 
+function captureHttpsGet(responseBody) {
+  const original = https.get;
+  let captured;
+  https.get = (url, options, callback) => {
+    captured = { url: String(url), options };
+    const fakeRes = {
+      statusCode: 200,
+      on(event, fn) {
+        if (event === 'data') fn(JSON.stringify(responseBody));
+        if (event === 'end') fn();
+        return this;
+      },
+    };
+    callback(fakeRes);
+    return { on() { return this; } };
+  };
+  return {
+    call: () => captured,
+    restore: () => { https.get = original; },
+  };
+}
+
 // ── load service ─────────────────────────────────────────────────────────────
 
 // Fresh require each time so the module-level state is clean.
@@ -167,6 +189,37 @@ describe('CoinGecko response shape contract (#893)', () => {
       await expect(svc._fetchRatesFromCoinGecko('usd')).rejects.toThrow(/no valid XLM rate/);
     } finally {
       restore();
+    }
+  });
+});
+
+describe('CoinGecko API plan contract (#2029)', () => {
+  const originalKey = process.env.COINGECKO_API_KEY;
+  const originalPlan = process.env.COINGECKO_API_PLAN;
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.COINGECKO_API_KEY;
+    else process.env.COINGECKO_API_KEY = originalKey;
+    if (originalPlan === undefined) delete process.env.COINGECKO_API_PLAN;
+    else process.env.COINGECKO_API_PLAN = originalPlan;
+  });
+
+  test.each([
+    ['demo', 'api.coingecko.com', 'x-cg-demo-api-key'],
+    ['pro', 'pro-api.coingecko.com', 'x-cg-pro-api-key'],
+  ])('uses the %s host and header without leaking the key in the URL', async (plan, host, header) => {
+    process.env.COINGECKO_API_KEY = 'secret-test-key';
+    process.env.COINGECKO_API_PLAN = plan;
+    const capture = captureHttpsGet(FIXTURE);
+    try {
+      await loadSvc()._fetchRatesFromCoinGecko('usd');
+      const request = capture.call();
+      expect(new URL(request.url).host).toBe(host);
+      expect(request.url).not.toContain('secret-test-key');
+      expect(request.url).not.toMatch(/api_key/i);
+      expect(request.options.headers).toEqual({ [header]: 'secret-test-key' });
+    } finally {
+      capture.restore();
     }
   });
 });
