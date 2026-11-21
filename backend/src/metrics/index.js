@@ -621,9 +621,35 @@ const syncSkippedTotal = new client.Counter({
   registers: [registry],
 });
 
+// email_send_failures_total{category} — outbound transactional emails that
+// failed to send, grouped by purpose (invitation, password_reset, ...).
+// #2034: dispatch is fire-and-forget so failures are otherwise invisible
+// except for a log line; this makes a broken provider alertable.
+const emailSendFailuresTotal = new client.Counter({
+  name: 'email_send_failures_total',
+  help: 'Number of outbound emails that failed to send, by category',
+  labelNames: ['category'],
+  registers: [registry],
+});
+
+/**
+ * Record a failed email send. Never throws — metrics must not break the
+ * fire-and-forget dispatch path.
+ * @param {string} category e.g. 'invitation' | 'password_reset'
+ */
+function recordEmailSendFailure(category) {
+  try {
+    emailSendFailuresTotal.inc({ category: category || 'unknown' });
+  } catch {
+    // ignore metric errors
+  }
+}
+
 module.exports = {
   registry,
   buildInfoGauge,
+  emailSendFailuresTotal,
+  recordEmailSendFailure,
   schoolWalletWarningGauge,
   syncHorizonCallsTotal,
   syncHorizonCallsPerRun,

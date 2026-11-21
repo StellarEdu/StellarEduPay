@@ -65,14 +65,11 @@
     "jest": "^30.5.2",
     "knip": "^6.45.1",
     "mongodb-memory-server": "^10.0.0",
+    "nock": "^14.0.0",
     "nodemon": "^3.0.0",
     "supertest": "^6.3.0"
   },
-  "jest": {
-    "moduleNameMapper": {
-      "^axios$": "<rootDir>/tests/__stubs__/axios.js"
-    }
-  },
+  "jest": {},
   "optionalDependencies": {
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/auto-instrumentations-node": "^0.82.0",

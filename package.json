@@ -10,7 +10,9 @@
     "coverage:frontend": "cd frontend && npm run coverage",
     "routes:manifest": "node scripts/route-manifest.js",
     "routes:check": "npm run routes:manifest && git diff --exit-code -- routes.json",
-    "test:contract": "npm run routes:check && jest tests/api-route-contract.test.js --runInBand",
+    "openapi:generate": "node scripts/openapi/generate.js",
+    "openapi:check": "node scripts/openapi/check-contract.js",
+    "test:contract": "npm run routes:check && npm run openapi:check && jest tests/api-route-contract.test.js --runInBand",
     "test:integration": "STELLAR_INTEGRATION_TESTS=true jest --config tests/integration/jest.config.js --runInBand --forceExit",
     "test:property": "FC_SEED=18231824 jest tests/property-based-money.test.js --runInBand",
     "coverage:ratchet": "node scripts/coverage-ratchet.js",
@@ -55,7 +57,6 @@
       "^react-dom$": "<rootDir>/node_modules/react-dom",
       "^react/(.*)$": "<rootDir>/node_modules/react/$1",
       "^react-dom/(.*)$": "<rootDir>/node_modules/react-dom/$1",
-      "^axios$": "<rootDir>/tests/__stubs__/axios.js",
       "^next/router$": "<rootDir>/tests/__stubs__/next-router.js",
       "^next/link$": "<rootDir>/tests/__stubs__/next-link.js"
     },
