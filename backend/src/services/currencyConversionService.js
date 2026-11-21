@@ -85,6 +85,27 @@ function _decimalMultiply(amount, rate, currency) {
 const CACHE_TTL_MS             = parseInt(process.env.PRICE_CACHE_TTL_MS        || "60000",  10);
 const PRICE_STALE_THRESHOLD_MS = parseInt(process.env.PRICE_STALE_THRESHOLD_MS  || "3600000", 10);
 const COINGECKO_API_KEY        = process.env.COINGECKO_API_KEY || null;
+const COINGECKO_API_PLAN       = (process.env.COINGECKO_API_PLAN || "demo").toLowerCase();
+
+if (!['demo', 'pro'].includes(COINGECKO_API_PLAN)) {
+  throw new Error('COINGECKO_API_PLAN must be either "demo" or "pro"');
+}
+
+const COINGECKO_BASE_URL = COINGECKO_API_PLAN === 'pro'
+  ? 'https://pro-api.coingecko.com/api/v3'
+  : 'https://api.coingecko.com/api/v3';
+const COINGECKO_API_HEADER = COINGECKO_API_PLAN === 'pro'
+  ? 'x-cg-pro-api-key'
+  : 'x-cg-demo-api-key';
+
+function coinGeckoRequest(path) {
+  return {
+    url: `${COINGECKO_BASE_URL}${path}`,
+    options: COINGECKO_API_KEY
+      ? { headers: { [COINGECKO_API_HEADER]: COINGECKO_API_KEY } }
+      : {},
+  };
+}
 
 // Supported-currencies list cache (#889):
 //   Periodically refreshed from CoinGecko /simple/supported_vs_currencies.
@@ -412,9 +433,8 @@ async function getSupportedCurrencies() {
 
   _supportedCurrenciesInFlight = (async () => {
     try {
-      let url = "https://api.coingecko.com/api/v3/simple/supported_vs_currencies";
-      if (COINGECKO_API_KEY) url += `?x_cg_pro_api_key=${encodeURIComponent(COINGECKO_API_KEY)}`;
-      const data = await httpsGet(url);
+      const request = coinGeckoRequest('/simple/supported_vs_currencies');
+      const data = await httpsGet(request.url, request.options);
       if (!Array.isArray(data) || data.length === 0) throw new Error("Empty supported_vs_currencies response");
       const currencies = new Set(data.map((c) => String(c).toLowerCase()));
       _supportedCurrenciesCache = currencies;
@@ -449,9 +469,9 @@ async function isSupportedCurrency(currencyCode) {
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
-function httpsGet(url) {
+function httpsGet(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { timeout: 8000 }, (res) => {
+    const req = https.get(url, { timeout: 8000, ...options }, (res) => {
       let body = "";
       res.on("data", (c) => { body += c; });
       res.on("end", () => {
@@ -469,12 +489,10 @@ function httpsGet(url) {
 // ── Provider: CoinGecko ───────────────────────────────────────────────────────
 
 async function _fetchFromCoinGecko(currency) {
-  let url =
-    "https://api.coingecko.com/api/v3/simple/price" +
-    `?ids=stellar%2Cusd-coin&vs_currencies=${encodeURIComponent(currency)}`;
-  if (COINGECKO_API_KEY) url += `&x_cg_pro_api_key=${encodeURIComponent(COINGECKO_API_KEY)}`;
-
-  const data = await httpsGet(url);
+  const request = coinGeckoRequest(
+    `/simple/price?ids=stellar%2Cusd-coin&vs_currencies=${encodeURIComponent(currency)}`,
+  );
+  const data = await httpsGet(request.url, request.options);
   const xlmRate  = data?.stellar?.["" + currency];
   const usdcRate = data?.["usd-coin"]?.["" + currency];
 
@@ -845,12 +863,10 @@ function checkCoinGeckoResponseShape(data, currency) {
  */
 async function runCoinGeckoCanary(currency = "usd") {
   try {
-    let url =
-      "https://api.coingecko.com/api/v3/simple/price" +
-      `?ids=stellar%2Cusd-coin&vs_currencies=${encodeURIComponent(currency)}`;
-    if (COINGECKO_API_KEY) url += `&x_cg_pro_api_key=${encodeURIComponent(COINGECKO_API_KEY)}`;
-
-    const data   = await httpsGet(url);
+    const request = coinGeckoRequest(
+      `/simple/price?ids=stellar%2Cusd-coin&vs_currencies=${encodeURIComponent(currency)}`,
+    );
+    const data   = await httpsGet(request.url, request.options);
     const result = checkCoinGeckoResponseShape(data, currency);
 
     if (!result.ok) {
