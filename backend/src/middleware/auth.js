@@ -84,6 +84,10 @@ async function checkSessionRevoked(decoded) {
     return { status: 401, body: { error: 'Account is deactivated.', code: 'SESSION_REVOKED' } };
   }
 
+  // Tokens must carry the tokenVersion they were minted with (see
+  // buildAccessPayload in authController). A missing claim is treated as 0 so
+  // legacy tokens minted before the claim existed are not falsely rejected
+  // while the stored version is still 0.
   const storedVersion = user.tokenVersion || 0;
   const tokenVersion = decoded.tokenVersion || 0;
   if (storedVersion !== tokenVersion) {
