@@ -39,9 +39,16 @@ const feeStructureSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// className must be unique per school (was globally unique before)
-feeStructureSchema.index({ schoolId: 1, className: 1 }, { unique: true });
-feeStructureSchema.index({ schoolId: 1, className: 1, isActive: 1 });
+// Keep historical structures while allowing exactly one active structure for
+// a class. The matching migration replaces the legacy unconditional index.
+feeStructureSchema.index(
+  { schoolId: 1, className: 1 },
+  {
+    name: 'uniq_active_fee_structure_per_class',
+    unique: true,
+    partialFilterExpression: { isActive: true },
+  }
+);
 feeStructureSchema.index({ schoolId: 1, isActive: 1 });
 feeStructureSchema.plugin(softDelete);
 feeStructureSchema.plugin(tenantScope, { modelName: 'FeeStructure' });
