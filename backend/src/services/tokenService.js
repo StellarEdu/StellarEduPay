@@ -63,6 +63,25 @@ async function isSessionRevoked(sid) {
   return false;
 }
 
+// ── Access-token payload ──────────────────────────────────────────────────────
+// Single source of truth for the access-token claims. Every issuer (login,
+// refresh, MFA re-issue) must build its payload here so that tokenVersion is
+// never omitted — the auth middleware compares it against the stored value and
+// rejects mismatches (#2035).
+
+function buildAccessPayload(user) {
+  if (!user) throw new Error('buildAccessPayload requires a user');
+  const payload = {
+    role: user.role,
+    userId: user.id || user.userId,
+    schoolId: user.schoolId,
+    roles: user.roles,
+    tokenVersion: user.tokenVersion || 0,
+  };
+  if (user.mfaSetupPending) payload.mfaSetupPending = true;
+  return payload;
+}
+
 // ── Sign / verify ─────────────────────────────────────────────────────────────
 
 function sign(payload, options = {}) {
@@ -113,6 +132,7 @@ module.exports = {
   ALGORITHM,
   sign,
   verify,
+  buildAccessPayload,
   signWithKey,
   verifyWithKey,
   revokeSession,
