@@ -22,9 +22,11 @@ const feeCategorySchema = new mongoose.Schema(
 
 const studentSchema = new mongoose.Schema(
   {
-    schoolId: { type: String, required: true, index: true },
-    studentId: { type: String, required: true, index: true, maxlength: [28, 'studentId must not exceed 28 characters (Stellar memo limit)'] },
+    schoolId: { type: String, required: true },
+    studentId: { type: String, required: true, maxlength: [28, 'studentId must not exceed 28 characters (Stellar memo limit)'] },
+    studentIdLower: { type: String, required: true, select: false },
     name: { type: String, required: true },
+    nameLower: { type: String, required: true, select: false },
     class: { type: String, required: true, index: true },
     academicYear: { type: String },
     feeAmount: { type: Number, required: true, min: [0, 'Fee amount cannot be negative'] },
@@ -36,7 +38,7 @@ const studentSchema = new mongoose.Schema(
     linkVersion: { type: Number, default: 0, min: 0 },
     fees: { type: [feeCategorySchema], default: [] },
     paymentDeadline: { type: Date, default: null },
-    feePaid: { type: Boolean, default: false, index: true },
+    feePaid: { type: Boolean, default: false },
     totalPaid: { type: Number, default: 0 },
     remainingBalance: { type: Number, default: null },
 
@@ -183,13 +185,31 @@ studentSchema.virtual('totalPaidFromFees').get(function () {
   return this.totalPaid || 0;
 });
 
-studentSchema.index({ studentId: 1, schoolId: 1 }, { unique: true });
+studentSchema.index({ schoolId: 1, studentId: 1 }, { unique: true, name: 'schoolId_1_studentId_1' });
 studentSchema.index({ schoolId: 1, class: 1 });
 studentSchema.index({ schoolId: 1, feePaid: 1 });
-studentSchema.index({ studentId: 1, version: 1 });
-studentSchema.index({ feePaid: 1, class: 1 });
-studentSchema.index({ totalPaid: 1 });
-studentSchema.index({ name: 'text', studentId: 'text' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, createdAt: -1 }, { name: 'student_list_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, feePaid: 1, totalPaid: 1 }, { name: 'student_payment_status_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, nameLower: 1 }, { name: 'student_name_prefix_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, studentIdLower: 1 }, { name: 'student_id_prefix_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, feePaid: 1, paymentDeadline: 1 }, { name: 'student_overdue_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, feePaid: 1, reminderOptOut: 1, parentEmail: 1 }, { name: 'student_email_reminders_by_school' });
+studentSchema.index({ schoolId: 1, deletedAt: 1, feePaid: 1, reminderOptOut: 1, parentPhone: 1 }, { name: 'student_phone_reminders_by_school' });
+
+function setSearchKeys(student) {
+  student.nameLower = String(student.name || '').trim().toLowerCase();
+  student.studentIdLower = String(student.studentId || '').trim().toLowerCase();
+}
+
+studentSchema.pre('validate', function (next) {
+  setSearchKeys(this);
+  next();
+});
+
+studentSchema.pre('insertMany', function (next, docs) {
+  for (const doc of docs || []) setSearchKeys(doc);
+  next();
+});
 
 // ── Parent contact PII encryption at rest — Issue #1480 ─────────────────────
 // Encrypt parentEmail/parentPhone before persisting, then decrypt them back
