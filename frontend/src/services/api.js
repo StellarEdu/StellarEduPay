@@ -184,6 +184,8 @@ export const resolveDispute = (id, data) =>
 // Refunds
 export const initiateRefund = (txHash, data) => api.post(`/payments/${txHash}/refund`, data);
 export const approveRefund = (refundId, data) => api.post(`/payments/refunds/${refundId}/approve`, data);
+export const rejectRefund = (refundId, { reason } = {}) => api.post(`/payments/refunds/${refundId}/reject`, { reason });
+export const completeRefund = (refundId, { refundTxHash } = {}) => api.post(`/payments/refunds/${refundId}/complete`, { refundTxHash });
 export const getPaymentRefunds = (txHash) => api.get(`/payments/${txHash}/refunds`);
 export const getSchoolRefunds = (params = {}) => api.get("/payments/refunds/school/list", { params });
 
