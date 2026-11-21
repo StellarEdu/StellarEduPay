@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { getSchoolRefunds, approveRefund } from "../services/api";
+import { getSchoolRefunds, approveRefund, rejectRefund, completeRefund } from "../services/api";
 import { getErrorMessage } from "../utils/errorMessages";
 import { IconAlertTriangle, IconCheck, IconChevronLeft, IconChevronRight } from "../components/Icons";
 import PageHero from "../components/PageHero";
@@ -11,6 +11,7 @@ const STATUS_META = {
   pending:          { cls: "badge-info",     labelKey: "status.refund.pending",          color: "var(--info)" },
   submitted:        { cls: "badge-primary",  labelKey: "status.refund.submitted",        color: "var(--primary)" },
   confirmed:        { cls: "badge-success",  labelKey: "status.refund.confirmed",        color: "var(--success)" },
+  rejected:         { cls: "badge-danger",   labelKey: "status.refund.rejected",         color: "var(--danger)" },
   failed:           { cls: "badge-danger",   labelKey: "status.refund.failed",           color: "var(--danger)" },
 };
 
@@ -24,152 +25,334 @@ function StatusBadge({ status }) {
   );
 }
 
-function ApproveRefundForm({ refund, user, onApproved, onCancelled }) {
+function actorName(actor) {
+  if (!actor) return "—";
+  return typeof actor === "string" ? actor : actor.displayName || "—";
+}
+
+function formatAmount(amount) {
+  return typeof amount === "number" ? `$${amount.toFixed(2)}` : amount;
+}
+
+const LABEL_STYLE = {
+  display: "block",
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  color: "var(--text-muted)",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  marginBottom: "0.375rem",
+};
+
+const TEXTAREA_STYLE = {
+  width: "100%",
+  padding: "0.5rem 0.75rem",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-sm)",
+  background: "var(--bg)",
+  color: "var(--text)",
+  fontFamily: "monospace",
+  fontSize: "0.8125rem",
+  minHeight: "60px",
+  resize: "vertical",
+  boxSizing: "border-box",
+};
+
+const INPUT_STYLE = { ...TEXTAREA_STYLE, minHeight: 0, padding: "0.5rem 0.75rem" };
+
+function actionButtonStyle(background, submitting) {
+  return {
+    padding: "0.5rem 1rem",
+    background,
+    color: background === "var(--bg)" ? "var(--text)" : "white",
+    border: background === "var(--bg)" ? "1px solid var(--border)" : "none",
+    borderRadius: "var(--radius-sm)",
+    cursor: submitting ? "not-allowed" : "pointer",
+    opacity: submitting ? 0.6 : 1,
+    fontSize: "0.8125rem",
+    fontWeight: 500,
+    display: "flex",
+    alignItems: "center",
+    gap: "0.375rem",
+  };
+}
+
+function FormError({ message }) {
+  if (!message) return null;
+  return (
+    <div role="alert" style={{
+      marginBottom: "0.75rem",
+      padding: "0.5rem 0.75rem",
+      background: "var(--danger-subtle)",
+      color: "var(--danger)",
+      borderRadius: "var(--radius-sm)",
+      fontSize: "0.8125rem",
+    }}>
+      {message}
+    </div>
+  );
+}
+
+function InfoBox({ message }) {
+  return (
+    <div style={{
+      padding: "0.75rem",
+      background: "var(--bg-subtle)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-sm)",
+      fontSize: "0.8125rem",
+      color: "var(--text-muted)",
+    }}>
+      {message}
+    </div>
+  );
+}
+
+function ApprovalForm({ refund, user, onDone, onCancelled }) {
   const { t } = useTranslation();
   const can = usePermissions();
+  const [mode, setMode] = useState("approve");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [note, setNote] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
 
-  // #1581 — only owners may approve (mirrors requireSchoolAuth(['owner'])).
+  // #1581 — only owners may approve or reject (mirrors requireSchoolAuth(['owner'])).
+  // Two-person rule: the initiator can never approve or reject their own request.
   const hasRole = can("refunds.write");
-  const canApprove = hasRole && refund.initiatedBy !== user?.email && refund.status === "approval_pending";
+  const isInitiator = actorName(refund.initiatedBy) === user?.email;
+  const canAct = hasRole && !isInitiator && refund.status === "approval_pending";
 
-  async function handleApprove(e) {
-    e.preventDefault();
-    if (!canApprove) return;
+  if (!canAct) {
+    return (
+      <InfoBox message={
+        !hasRole
+          ? t("refunds.notAuthorized")
+          : isInitiator
+          ? t("refunds.youInitiated")
+          : t("refunds.cannotApproveStatus", { status: refund.status })
+      } />
+    );
+  }
 
+  async function runAction(request, fallbackMessage) {
     setError(null);
     setSubmitting(true);
     try {
-      await approveRefund(refund._id, { note });
-      onApproved();
+      await request();
+      onDone();
     } catch (err) {
-      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("refunds.failedToApprove"));
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || fallbackMessage);
     } finally {
       setSubmitting(false);
     }
   }
 
-  if (!canApprove) {
-    return (
-      <div style={{
-        padding: "0.75rem",
-        background: "var(--bg-subtle)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
-        fontSize: "0.8125rem",
-        color: "var(--text-muted)",
-      }}>
-        {!hasRole
-          ? t("refunds.notAuthorized")
-          : refund.initiatedBy === user?.email
-          ? t("refunds.youInitiated")
-          : refund.status !== "approval_pending"
-          ? t("refunds.cannotApproveStatus", { status: refund.status })
-          : t("refunds.notAuthorized")}
-      </div>
-    );
+  function handleApprove(e) {
+    e.preventDefault();
+    runAction(() => approveRefund(refund._id, { note }), t("refunds.failedToApprove"));
+  }
+
+  function handleReject(e) {
+    e.preventDefault();
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setError(t("refunds.rejectReasonRequired"));
+      return;
+    }
+    runAction(() => rejectRefund(refund._id, { reason }), t("refunds.failedToReject"));
   }
 
   return (
-    <form onSubmit={handleApprove} style={{
+    <div style={{
       padding: "0.75rem",
       border: "1px solid var(--border)",
       borderRadius: "var(--radius-sm)",
       background: "var(--bg-subtle)",
     }}>
-      {error && (
-        <div style={{
-          marginBottom: "0.75rem",
-          padding: "0.5rem 0.75rem",
-          background: "var(--danger-subtle)",
-          color: "var(--danger)",
-          borderRadius: "var(--radius-sm)",
-          fontSize: "0.8125rem",
-        }}>
-          {error}
-        </div>
+      <div role="group" aria-label={t("refunds.decisionLabel")} style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        {[
+          { value: "approve", label: t("refunds.approveRefund") },
+          { value: "reject", label: t("refunds.rejectRefund") },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={mode === opt.value}
+            onClick={() => { setMode(opt.value); setError(null); }}
+            style={{
+              padding: "0.375rem 0.75rem",
+              border: `1.5px solid ${mode === opt.value ? "var(--accent)" : "var(--border)"}`,
+              background: mode === opt.value ? "var(--accent-subtle)" : "var(--bg)",
+              color: mode === opt.value ? "var(--accent)" : "var(--text)",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "0.8125rem",
+              fontWeight: mode === opt.value ? 600 : 400,
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      <FormError message={error} />
+
+      {mode === "approve" ? (
+        <form onSubmit={handleApprove}>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label style={LABEL_STYLE}>{t("refunds.approvalNoteLabel")}</label>
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder={t("refunds.reasonPlaceholder")}
+              style={TEXTAREA_STYLE}
+            />
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <button type="button" onClick={onCancelled} disabled={submitting} style={actionButtonStyle("var(--bg)", submitting)}>
+              {t("actions.cancel")}
+            </button>
+            <button type="submit" disabled={submitting} style={actionButtonStyle("var(--success)", submitting)}>
+              <IconCheck size={16} />
+              {submitting ? t("refunds.approving") : t("refunds.approveRefund")}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={handleReject}>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label style={LABEL_STYLE}>{t("refunds.rejectReasonLabel")}</label>
+            <textarea
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              placeholder={t("refunds.rejectReasonPlaceholder")}
+              required
+              style={TEXTAREA_STYLE}
+            />
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <button type="button" onClick={onCancelled} disabled={submitting} style={actionButtonStyle("var(--bg)", submitting)}>
+              {t("actions.cancel")}
+            </button>
+            <button type="submit" disabled={submitting} style={actionButtonStyle("var(--danger)", submitting)}>
+              {submitting ? t("refunds.rejecting") : t("refunds.rejectRefund")}
+            </button>
+          </div>
+        </form>
       )}
+    </div>
+  );
+}
+
+function CompleteRefundForm({ refund, onDone, onCancelled }) {
+  const { t } = useTranslation();
+  const can = usePermissions();
+  const [refundTxHash, setRefundTxHash] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const hasRole = can("refunds.write");
+  const canComplete = hasRole && refund.status === "pending";
+
+  if (!canComplete) {
+    return <InfoBox message={hasRole ? t("refunds.notCompletable") : t("refunds.notAuthorized")} />;
+  }
+
+  async function handleComplete(e) {
+    e.preventDefault();
+    const hash = refundTxHash.trim();
+    // Stellar transaction hashes are 32 bytes, written as 64 hex characters.
+    if (!/^[0-9a-fA-F]{64}$/.test(hash)) {
+      setError(t("refunds.invalidRefundTxHash"));
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    try {
+      await completeRefund(refund._id, { refundTxHash: hash });
+      onDone();
+    } catch (err) {
+      setError(getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("refunds.failedToComplete"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleComplete} style={{
+      padding: "0.75rem",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-sm)",
+      background: "var(--bg-subtle)",
+    }}>
+      <div style={{ fontSize: "0.8125rem", marginBottom: "0.75rem" }}>
+        {t("refunds.sendInstructions", { amount: formatAmount(refund.amount) })}
+      </div>
+      <div style={{ fontSize: "0.8125rem", marginBottom: "0.75rem", wordBreak: "break-all" }}>
+        <span style={{ color: "var(--text-muted)" }}>{t("refunds.originalTransaction")}: </span>
+        <code style={{ fontSize: "0.75rem" }}>{refund.originalTxHash}</code>
+      </div>
+
+      <FormError message={error} />
 
       <div style={{ marginBottom: "0.75rem" }}>
-        <label style={{
-          display: "block",
-          fontSize: "0.75rem",
-          fontWeight: 600,
-          color: "var(--text-muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          marginBottom: "0.375rem",
-        }}>
-          {t("refunds.approvalNoteLabel")}
-        </label>
-        <textarea
-          value={note}
-          onChange={e => setNote(e.target.value)}
-          placeholder={t("refunds.reasonPlaceholder")}
-          style={{
-            width: "100%",
-            padding: "0.5rem 0.75rem",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--bg)",
-            color: "var(--text)",
-            fontFamily: "monospace",
-            fontSize: "0.8125rem",
-            minHeight: "60px",
-            resize: "vertical",
-            boxSizing: "border-box",
-          }}
+        <label style={LABEL_STYLE}>{t("refunds.refundTxHashLabel")}</label>
+        <input
+          value={refundTxHash}
+          onChange={e => setRefundTxHash(e.target.value)}
+          placeholder={t("refunds.refundTxHashPlaceholder")}
+          required
+          style={INPUT_STYLE}
         />
       </div>
 
       <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-        <button
-          type="button"
-          onClick={onCancelled}
-          disabled={submitting}
-          style={{
-            padding: "0.5rem 1rem",
-            border: "1px solid var(--border)",
-            background: "var(--bg)",
-            color: "var(--text)",
-            borderRadius: "var(--radius-sm)",
-            cursor: submitting ? "not-allowed" : "pointer",
-            opacity: submitting ? 0.6 : 1,
-            fontSize: "0.8125rem",
-            fontWeight: 500,
-          }}
-        >
+        <button type="button" onClick={onCancelled} disabled={submitting} style={actionButtonStyle("var(--bg)", submitting)}>
           {t("actions.cancel")}
         </button>
-        <button
-          type="submit"
-          disabled={submitting}
-          style={{
-            padding: "0.5rem 1rem",
-            background: "var(--success)",
-            color: "white",
-            border: "none",
-            borderRadius: "var(--radius-sm)",
-            cursor: submitting ? "not-allowed" : "pointer",
-            opacity: submitting ? 0.6 : 1,
-            fontSize: "0.8125rem",
-            fontWeight: 500,
-            display: "flex",
-            alignItems: "center",
-            gap: "0.375rem",
-          }}
-        >
-          <IconCheck size={16} />
-          {submitting ? t("refunds.approving") : t("refunds.approveRefund")}
+        <button type="submit" disabled={submitting} style={actionButtonStyle("var(--info)", submitting)}>
+          {submitting ? t("refunds.completing") : t("refunds.markCompleted")}
         </button>
       </div>
     </form>
   );
 }
 
-function RefundCard({ refund, user, onApproved }) {
+function RefundTimeline({ refund }) {
+  const { t } = useTranslation();
+  const events = [
+    { id: "initiated", at: refund.createdAt, text: t("refunds.timelineInitiated", { name: actorName(refund.initiatedBy) }) },
+    { id: "approved", at: refund.approvedAt, text: t("refunds.timelineApproved", { name: actorName(refund.approvedBy) }) },
+    { id: "rejected", at: refund.rejectedAt, text: t("refunds.timelineRejected", { name: actorName(refund.rejectedBy), reason: refund.rejectionReason || "—" }) },
+    { id: "confirmed", at: refund.confirmedAt, text: t("refunds.timelineConfirmed") },
+    { id: "failed", at: refund.failedAt, text: t("refunds.timelineFailed", { reason: refund.failureReason || "—" }) },
+  ].filter(event => event.at);
+
+  return (
+    <div style={{ marginTop: "1rem", fontSize: "0.8125rem" }}>
+      <div style={LABEL_STYLE}>{t("refunds.timelineTitle")}</div>
+      <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {events.map(event => (
+          <li key={event.id} style={{ display: "flex", gap: "0.75rem", padding: "0.25rem 0", flexWrap: "wrap" }}>
+            <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {new Date(event.at).toLocaleString()}
+            </span>
+            <span>{event.text}</span>
+          </li>
+        ))}
+      </ol>
+      {refund.refundTxHash && (
+        <div style={{ marginTop: "0.5rem", wordBreak: "break-all" }}>
+          <span style={{ color: "var(--text-muted)" }}>{t("refunds.refundHash")}: </span>
+          <code style={{ fontSize: "0.75rem" }}>{refund.refundTxHash}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RefundCard({ refund, user, onChanged }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
@@ -192,8 +375,8 @@ function RefundCard({ refund, user, onApproved }) {
           <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <StatusBadge status={refund.status} />
             <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-              {refund.status === "approval_pending" && t("refunds.initiatedBy", { name: refund.initiatedBy })}
-              {refund.status !== "approval_pending" && refund.approvedAt && t("refunds.approvedBy", { name: refund.approvedBy })}
+              {refund.status === "approval_pending" && t("refunds.initiatedBy", { name: actorName(refund.initiatedBy) })}
+              {refund.status !== "approval_pending" && refund.approvedAt && t("refunds.approvedBy", { name: actorName(refund.approvedBy) })}
             </span>
           </div>
 
@@ -212,7 +395,7 @@ function RefundCard({ refund, user, onApproved }) {
             <div>
               <div style={{ color: "var(--text-muted)", marginBottom: "0.25rem" }}>{t("refunds.amount")}</div>
               <div style={{ fontWeight: 600 }}>
-                {typeof refund.amount === "number" ? `$${refund.amount.toFixed(2)}` : refund.amount}
+                {formatAmount(refund.amount)}
               </div>
             </div>
             <div>
@@ -232,6 +415,7 @@ function RefundCard({ refund, user, onApproved }) {
 
         <button
           onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
           style={{
             background: "none",
             border: "none",
@@ -247,12 +431,24 @@ function RefundCard({ refund, user, onApproved }) {
       </div>
 
       {expanded && (
-        <ApproveRefundForm
-          refund={refund}
-          user={user}
-          onApproved={onApproved}
-          onCancelled={() => setExpanded(false)}
-        />
+        <>
+          {refund.status === "approval_pending" && (
+            <ApprovalForm
+              refund={refund}
+              user={user}
+              onDone={onChanged}
+              onCancelled={() => setExpanded(false)}
+            />
+          )}
+          {refund.status === "pending" && (
+            <CompleteRefundForm
+              refund={refund}
+              onDone={onChanged}
+              onCancelled={() => setExpanded(false)}
+            />
+          )}
+          <RefundTimeline refund={refund} />
+        </>
       )}
     </div>
   );
@@ -340,6 +536,7 @@ function Refunds() {
           { value: "approval_pending", labelKey: "status.refund.approval_pending" },
           { value: "pending", labelKey: "status.refund.pending" },
           { value: "confirmed", labelKey: "status.refund.confirmed" },
+          { value: "rejected", labelKey: "status.refund.rejected" },
           { value: "failed", labelKey: "status.refund.failed" },
           { value: "all", labelKey: "refunds.filterAll" },
         ].map(opt => (
@@ -398,7 +595,7 @@ function Refunds() {
                 key={refund._id}
                 refund={refund}
                 user={user}
-                onApproved={handleApprovalSuccess}
+                onChanged={handleApprovalSuccess}
               />
             ))}
           </div>
