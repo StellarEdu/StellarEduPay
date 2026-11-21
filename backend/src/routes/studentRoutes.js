@@ -30,7 +30,7 @@ const {
   validateGetStudentFeeHistoryQuery,
 } = require('../middleware/validate');
 const { resolveSchool } = require('../middleware/schoolContext');
-const { requireAdminAuth, requireSchoolAuth } = require('../middleware/auth');
+const { requireSchoolAuth } = require('../middleware/auth');
 const { auditContext } = require('../middleware/auditContext');
 const { bulkImportLimiter, publicStudentLimiter } = require('../middleware/rateLimiter');
 const streamingCsvUpload = require('../middleware/streamingCsvUpload');
@@ -51,7 +51,9 @@ router.get('/overdue', requireSchoolAuth(['owner', 'staff', 'read_only']), getOv
 
 // Public routes
 router.get('/public/:studentId', publicStudentLimiter, validateStudentIdParam, getPublicStudentInfo);
-router.get('/:studentId', requireAdminAuth, validateStudentIdParam, getStudent);
+// School owners and staff open a student's payment view from the staff UI
+// (issue #2026). read_only can view but not change students.
+router.get('/:studentId', requireSchoolAuth(['owner', 'staff', 'read_only']), validateStudentIdParam, getStudent);
 // updateStudent performs a partial update, so PATCH is the accurate verb (issue
 // #1576); PUT is kept as an alias since the frontend previously relied on it.
 router.patch('/:studentId', requireSchoolAuth(['owner', 'staff']), validateStudentIdParam, auditContext, updateStudent);

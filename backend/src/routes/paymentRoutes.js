@@ -311,5 +311,9 @@ router.post("/:paymentId/unlock", requireSchoolAuth(['owner', 'staff']), auditCo
 router.post("/:txHash/receipt", requireSchoolAuth(['owner', 'staff']), validateTxHashParam, auditContext, generateReceipt);
 
 // Student-scoped payment listing
+// Mounted before /:studentId. Balance is a two-segment path, so it cannot be
+// matched by /:studentId; the frontend calls it for every student (issue #2026).
+router.get("/balance/:studentId", requireSchoolAuth(['owner', 'staff', 'read_only']), validateStudentIdParam, getStudentBalance);
+
 router.get("/:studentId", validateStudentIdParam, requireSchoolAuth(['owner', 'staff', 'read_only']), getStudentPayments);
 module.exports = router;
