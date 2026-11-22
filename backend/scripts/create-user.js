@@ -12,6 +12,65 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('../src/models/userModel');
 
+/**
+ * One-off recovery script: reset User.tokenVersion to 0 for accounts locked out
+ * by the tokenVersion mismatch bug (tokens never carried tokenVersion, so any
+ * bump made every subsequent login fail).
+ *
+ * Usage:
+ *   node scripts/reset-token-version.js --email user@example.com
+ *   node scripts/reset-token-version.js --all
+ */
+
+async function resetTokenVersion() {
+  const args = process.argv.slice(2);
+  const getArg = (name) => {
+    const idx = args.indexOf(name);
+    return idx >= 0 && args[idx + 1] ? args[idx + 1] : null;
+  };
+
+  const email = getArg('--email');
+  const all = args.includes('--all');
+
+  if (!email && !all) {
+    console.error('Usage: node scripts/reset-token-version.js --email <email>');
+    console.error('       node scripts/reset-token-version.js --all');
+    console.error('Example: node scripts/reset-token-version.js --email owner@school.com');
+    process.exit(1);
+  }
+
+  const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/school-payment-system';
+
+  try {
+    await mongoose.connect(mongoUri);
+    console.log('Connected to MongoDB');
+
+    const filter = all ? {} : { email: email.trim().toLowerCase() };
+
+    if (!all) {
+      const existing = await User.findOne(filter);
+      if (!existing) {
+        console.error(`User with email ${filter.email} not found.`);
+        process.exit(1);
+      }
+    }
+
+    const result = await User.updateMany(filter, { $set: { tokenVersion: 0 } });
+
+    console.log(`Reset tokenVersion to 0 for ${result.modifiedCount} user(s).`);
+    if (result.matchedCount !== result.modifiedCount) {
+      console.log(`  (${result.matchedCount} matched, ${result.matchedCount - result.modifiedCount} already at 0)`);
+    }
+
+    process.exit(0);
+  } catch (err) {
+    console.error('Error resetting tokenVersion:', err.message);
+    process.exit(1);
+  } finally {
+    await mongoose.disconnect().catch(() => {});
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const getArg = (name) => {
@@ -84,3 +143,9 @@ async function main() {
 }
 
 main();
+
+if (require.main === module) {
+  resetTokenVersion();
+}
+
+module.exports = { resetTokenVersion };

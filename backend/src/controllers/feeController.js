@@ -34,7 +34,15 @@ async function createFeeStructure(req, res, next) {
     del(KEYS.feesAll(schoolId), KEYS.feeByClass(schoolId, className));
     await audit(req, 'fee_create', className, { className, feeAmount, feeCurrency: resolvedCurrency, academicYear });
     res.status(201).json(fee);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return next(Object.assign(
+        new Error(`Active fee structure already exists for class ${req.body.className}`),
+        { code: 'DUPLICATE_FEE_STRUCTURE', status: 409 }
+      ));
+    }
+    next(err);
+  }
 }
 
 async function getAllFeeStructures(req, res, next) {

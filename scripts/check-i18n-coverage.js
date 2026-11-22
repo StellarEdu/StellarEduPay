@@ -10,6 +10,8 @@
  *
  * Rules:
  *  - fr must stay at 100% coverage.
+ *  - Parent-facing namespaces (PARENT_FACING_NAMESPACES) must be 100% covered
+ *    in every locale (issue #2024).
  *  - Any other locale may not have more missing keys than its entry in
  *    scripts/i18n-coverage-baseline.json. Raise the baseline only when adding
  *    new English strings is intended, and lower it as translations land.
@@ -26,6 +28,9 @@ const ROOT = path.resolve(__dirname, '..');
 const LOCALES_DIR = path.join(ROOT, 'frontend', 'src', 'i18n', 'locales');
 const BASELINE_PATH = path.join(__dirname, 'i18n-coverage-baseline.json');
 const REQUIRED_FULL_COVERAGE = ['fr'];
+// Parent-facing namespaces must be fully translated for every offered locale
+// (issue #2024). Keys here can never be counted against the ratchet baseline.
+const PARENT_FACING_NAMESPACES = ['payFees', 'paymentForm', 'verifyPayment', 'errors', 'unsubscribe'];
 const PLURAL_SUFFIXES = ['_zero', '_one', '_two', '_few', '_many', '_other'];
 
 function flatten(obj, prefix = '', out = {}) {
@@ -90,6 +95,11 @@ function checkCoverage(report, baseline) {
     if (code === 'en') continue;
     if (REQUIRED_FULL_COVERAGE.includes(code) && entry.missing.length > 0) {
       failures.push(`${code} must be 100% covered but is missing ${entry.missing.length} keys (e.g. ${entry.missing[0]})`);
+      continue;
+    }
+    const parentMissing = entry.missing.filter((key) => PARENT_FACING_NAMESPACES.includes(key.split('.')[0]));
+    if (parentMissing.length > 0) {
+      failures.push(`${code} is missing ${parentMissing.length} parent-facing keys (e.g. ${parentMissing[0]}); these namespaces must be 100% covered`);
       continue;
     }
     const allowed = baseline[code];

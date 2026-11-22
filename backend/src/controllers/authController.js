@@ -302,7 +302,11 @@ async function handleEnvAdminLogin(req, res, { username, password, mfaCode }) {
   const accessTTL = parseTTL('JWT_ACCESS_TOKEN_TTL', 8 * 3600);
   const refreshTTL = parseTTL('JWT_REFRESH_TOKEN_TTL', 30 * 86400);
 
-  const jwtPayload = { role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'] };
+  // #2035 — build the payload through the shared helper (no User doc for the
+  // env super-admin, so tokenVersion is 0).
+  const jwtPayload = tokenService.buildAccessPayload({
+    role: 'admin', username: loginId, userId: 'super_admin', roles: ['super_admin'],
+  });
   // #1939/#1940 — sign through tokenService and bind the token to the refresh session.
   const sessionId = crypto.randomBytes(16).toString('hex');
   const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
@@ -388,6 +392,29 @@ async function handleLogin(req, res) {
   if (!credValid) {
     recordLoginFailure(loginId).catch(() => logger.debug('[AuthController] recordLoginFailure missed (invalid credentials)'));
     return res.status(401).json({ error: 'Invalid credentials.', code: 'INVALID_CREDENTIALS' });
+  }
+
+  // #2035 — recovery for accounts already locked out by the tokenVersion bug.
+  // Credentials are valid, so a non-zero tokenVersion with no live session
+  // means the version was bumped while no token could ever carry it. Reset it
+  // to 0 so the freshly issued token matches the stored value again.
+  if ((user.tokenVersion || 0) > 0) {
+    try {
+      const store = getStore();
+      const sessions = await store.listUserSessions(user._id.toString()).catch(() => []);
+      if (!Array.isArray(sessions) || sessions.length === 0) {
+        const User = require('../models/userModel');
+        const reset = await User.findByIdAndUpdate(
+          user._id,
+          { $set: { tokenVersion: 0 } },
+          { new: true }
+        );
+        if (reset) user.tokenVersion = reset.tokenVersion || 0;
+        logger.info('[AuthController] Re-synced tokenVersion for locked-out user', { userId: user._id.toString() });
+      }
+    } catch (err) {
+      logger.warn('[AuthController] tokenVersion re-sync failed', { userId: user._id.toString(), error: err.message });
+    }
   }
 
   // ── MFA check ──────────────────────────────────────────────────────────────
@@ -483,15 +510,13 @@ async function handleLogin(req, res) {
     (!mfaAlreadyEnabled) &&
     (process.env.REQUIRE_MFA === 'true' || schoolRequiresMfa);
 
-  const jwtPayload = {
-    role:     'user',
-    userId:   user._id.toString(),
-    schoolId: user.schoolId,
-    roles:    user.roles,
-    // Must match the account's tokenVersion or checkSessionRevoked rejects the token.
-    tokenVersion: user.tokenVersion || 0,
+  // #2035 — build the payload through the single shared helper so the token
+  // always carries the account's current tokenVersion. Without it every token
+  // decodes with tokenVersion 0 and is rejected forever once the stored
+  // version has been bumped (role change, deactivation, password reset).
+  const jwtPayload = tokenService.buildAccessPayload(user, {
     ...(mfaSetupPending ? { mfaSetupPending: true } : {}),
-  };
+  });
   // #1940 — same session id for the access token and the refresh session.
   const sessionId = crypto.randomBytes(16).toString('hex');
   const { token } = tokenService.sign(jwtPayload, { expiresIn: accessTTL, sid: sessionId });
@@ -599,7 +624,7 @@ async function refreshWithStore(req, res) {
   // lightweight lookup to check the current mfaEnabled + mfaSecret state and
   // the school's requireMfa policy, then compute the flag fresh. This also
   // picks up the role/schoolId changes addressed in #1528.
-  const jwtPayload = {};
+  let jwtPayload = {};
   if (meta.role)     jwtPayload.role     = meta.role;
   if (meta.userId)   jwtPayload.userId   = meta.userId;
   if (meta.roles)    jwtPayload.roles    = meta.roles;
@@ -619,10 +644,10 @@ async function refreshWithStore(req, res) {
         return res.status(401).json({ error: 'Account is disabled.', code: 'ACCOUNT_DISABLED' });
       }
 
-      // Reflect any role / school changes made since the token was originally issued.
-      if (liveUser.roles)    jwtPayload.roles    = liveUser.roles;
-      if (liveUser.schoolId) jwtPayload.schoolId = liveUser.schoolId;
-      jwtPayload.tokenVersion = liveUser.tokenVersion || 0;
+      // #2035 — rebuild the payload from the live record so tokenVersion (and
+      // any role / school changes) come from the DB, never from the stored
+      // refresh metadata, which may predate the bump.
+      jwtPayload = tokenService.buildAccessPayload(liveUser);
 
       // Re-evaluate MFA setup requirement against live state.
       const userHasPersonalMfa = Boolean(liveUser.mfaEnabled && liveUser.mfaSecret);

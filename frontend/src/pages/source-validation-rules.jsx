@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getSourceValidationRules,
   createSourceValidationRule,
@@ -25,6 +26,7 @@ function truncateKey(key) {
 
 export default function SourceValidationRules() {
   const { schoolId } = useAdminAuthContext();
+  const { t } = useTranslation();
   const [rules, setRules]     = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
@@ -41,7 +43,7 @@ export default function SourceValidationRules() {
     setError(null);
     getSourceValidationRules(schoolId)
       .then(({ data }) => setRules(data))
-      .catch(() => setError("Could not load source validation rules."))
+      .catch(() => setError(t("sourceRules.loadFailed")))
       .finally(() => setLoading(false));
   }, [schoolId]);
 
@@ -54,7 +56,7 @@ export default function SourceValidationRules() {
 
     const publicKey = form.publicKey.trim();
     if (!isLikelyStellarPublicKey(publicKey)) {
-      setFormError("Enter a valid Stellar public key (56 characters, starting with \"G\").");
+      setFormError(t("sourceRules.invalidKey"));
       return;
     }
 
@@ -76,7 +78,7 @@ export default function SourceValidationRules() {
       load();
     } catch (err) {
       setFormError(
-        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || "Save failed."
+        getErrorMessage(err.response?.data?.code, err.response?.data?.error) || t("sourceRules.saveFailed")
       );
     } finally {
       setSaving(false);
@@ -95,7 +97,7 @@ export default function SourceValidationRules() {
       setPendingDeleteRule(null);
       load();
     } catch {
-      setError("Could not remove rule.");
+      setError(t("sourceRules.removeFailed"));
     } finally {
       setDeletingRule(false);
     }
@@ -104,14 +106,14 @@ export default function SourceValidationRules() {
   return (
     <div className="page-wrap">
       <PageHero
-        eyebrow="Security"
-        title="Source Validation Rules"
-        subtitle="Allowlist trusted parent/sender Stellar addresses. Payments from unmatched senders are still accepted, but only allowlisted addresses match a rule here."
+        eyebrow={t("sourceRules.eyebrow")}
+        title={t("sourceRules.title")}
+        subtitle={t("sourceRules.subtitle")}
       />
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <div className="card-header">
-          <div className="card-title">Add Trusted Sender</div>
+          <div className="card-title">{t("sourceRules.addTitle")}</div>
         </div>
         <div className="card-body">
           {formError && (
@@ -123,33 +125,33 @@ export default function SourceValidationRules() {
           {formSuccess && (
             <div role="status" className="alert alert-success" style={{ marginBottom: "1rem" }}>
               <IconCheck size={15} />
-              <span>Rule saved successfully.</span>
+              <span>{t("sourceRules.savedSuccess")}</span>
             </div>
           )}
 
           <form onSubmit={handleSubmit}>
             <div className="form-group">
-              <label className="form-label">Stellar Public Key *</label>
+              <label className="form-label">{t("sourceRules.publicKeyLabel")}</label>
               <input
                 required
                 className="form-input"
                 value={form.publicKey}
                 onChange={e => setForm(f => ({ ...f, publicKey: e.target.value }))}
-                placeholder="G..."
+                placeholder={t("sourceRules.publicKeyPlaceholder")}
                 style={{ fontFamily: "monospace" }}
               />
             </div>
             <div className="form-group">
-              <label className="form-label">Label (optional)</label>
+              <label className="form-label">{t("sourceRules.labelLabel")}</label>
               <input
                 className="form-input"
                 value={form.label}
                 onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
-                placeholder="e.g. Jane Doe (parent)"
+                placeholder={t("sourceRules.labelPlaceholder")}
               />
             </div>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving…" : "Add Rule"}
+              {saving ? t("sourceRules.saving") : t("sourceRules.addRule")}
             </button>
           </form>
         </div>
@@ -164,29 +166,29 @@ export default function SourceValidationRules() {
 
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Rules</div>
+          <div className="card-title">{t("sourceRules.rulesTitle")}</div>
           <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
-            {rules.length} rule{rules.length !== 1 ? "s" : ""}
+            {t("sourceRules.ruleCount", { count: rules.length })}
           </span>
         </div>
 
         {loading ? (
-          <div style={{ padding: "1.5rem" }}>Loading…</div>
+          <div style={{ padding: "1.5rem" }}>{t("sourceRules.loading")}</div>
         ) : rules.length === 0 ? (
           <div style={{ padding: "3rem", textAlign: "center", color: "var(--text-muted)" }}>
-            <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>No rules yet</p>
-            <p style={{ fontSize: "0.8125rem" }}>Add a trusted sender above to get started.</p>
+            <p style={{ fontWeight: 500, marginBottom: "0.25rem" }}>{t("sourceRules.noRules")}</p>
+            <p style={{ fontSize: "0.8125rem" }}>{t("sourceRules.noRulesHint")}</p>
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col">Label</th>
-                  <th scope="col">Public Key</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Last Matched</th>
-                  <th scope="col" style={{ textAlign: "right" }}>Actions</th>
+                  <th scope="col">{t("sourceRules.colLabel")}</th>
+                  <th scope="col">{t("sourceRules.colPublicKey")}</th>
+                  <th scope="col">{t("sourceRules.colStatus")}</th>
+                  <th scope="col">{t("sourceRules.colLastMatched")}</th>
+                  <th scope="col" style={{ textAlign: "right" }}>{t("sourceRules.colActions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -198,17 +200,17 @@ export default function SourceValidationRules() {
                     </td>
                     <td>
                       <span className={`badge ${rule.isActive ? "badge-success" : "badge-neutral"}`}>
-                        {rule.isActive ? "Active" : "Inactive"}
+                        {rule.isActive ? t("sourceRules.active") : t("sourceRules.inactive")}
                       </span>
                     </td>
                     <td style={{ fontSize: "0.8125rem", color: "var(--text-muted)" }}>
                       {rule.lastMatchedAt
                         ? new Date(rule.lastMatchedAt).toLocaleDateString(undefined, { dateStyle: "medium" })
-                        : "Never"}
+                        : t("sourceRules.never")}
                     </td>
                     <td style={{ textAlign: "right" }}>
                       <button className="btn btn-sm btn-danger" onClick={() => handleDelete(rule)}>
-                        Remove
+                        {t("sourceRules.remove")}
                       </button>
                     </td>
                   </tr>
@@ -221,10 +223,10 @@ export default function SourceValidationRules() {
 
       {pendingDeleteRule && (
         <ConfirmationModal
-          title="Remove trusted sender?"
-          description={`Remove trusted sender "${pendingDeleteRule.name}"?`}
-          confirmLabel={deletingRule ? "Removing…" : "Remove"}
-          cancelLabel="Cancel"
+          title={t("sourceRules.removeTitle")}
+          description={t("sourceRules.removeDescription", { name: pendingDeleteRule.name })}
+          confirmLabel={deletingRule ? t("sourceRules.removing") : t("sourceRules.remove")}
+          cancelLabel={t("actions.cancel")}
           confirmVariant="danger"
           onConfirm={confirmDeleteRule}
           onCancel={() => setPendingDeleteRule(null)}

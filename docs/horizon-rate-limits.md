@@ -178,12 +178,24 @@ if the cross-school budget is already the binding constraint).
 | `SYNC_MAX_PAGES_PER_POLL` | 50 | Per-school cap on pages drained in one cycle, independent of the shared budget. Bounds how much of the shared budget one very active school can consume in a single cycle, while letting a fresh school's backfill span multiple cycles |
 | `SYNC_MAX_CONCURRENT_SCHOOLS` | 4 | Max schools polled simultaneously. Bounds burstiness of the requests the budget already caps in total — it does not raise or lower the budget itself |
 | `HORIZON_POLL_RECENT_ACTIVITY_WINDOW_MS` | 3600000 | Window over which recent activity boosts priority |
+| `HEALTH_HORIZON_CACHE_TTL_MS` | 20000 | How long anonymous health probes reuse one Horizon result (clamped to 15000–30000) |
 
 > **Multi-replica warning.** The budget is per-process. Leaving
 > `HORIZON_POLL_REPLICA_COUNT=1` while running N replicas means the combined
 > rate is N× the intended budget. The per-school distributed lock still prevents
 > two replicas syncing the *same* school, so this is a rate-limit concern rather
 > than a correctness one — but it will reintroduce 429s.
+
+### Health probes share the allowance too (#2014)
+
+The anonymous `GET /health` and `GET /health/ready` probes no longer make a live
+Horizon request per call. A background refresher owns the only health-related
+Horizon probe, caches its result for `HEALTH_HORIZON_CACHE_TTL_MS` (15–30 s), and
+coalesces concurrent refreshes into one in-flight request. Every such probe
+reserves one token from `sharedPollBudget`, so probe traffic is now reflected in
+the budget's `consumedThisCycle`/`remaining` stats and cannot be amplified by
+hammering the public endpoint. The detailed, live check remains available only
+on the admin-authenticated `GET /api/admin/health/details`.
 
 ### Worked example: how the budget is allocated as fleet size grows
 
