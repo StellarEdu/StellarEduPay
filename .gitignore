@@ -44,3 +44,7 @@ test_output*.txt
 
 # Backup key material (#1630) — never commit decryption identities
 backup-keys/
+
+# Alertmanager receiver secrets (#2018) — see monitoring/secrets/README.md
+monitoring/secrets/*
+!monitoring/secrets/README.md
