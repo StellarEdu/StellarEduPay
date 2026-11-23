@@ -1,20 +1,30 @@
 version: "3.8"
 
-# Local development monitoring stack — Prometheus + Grafana.
+# Local development monitoring stack — Prometheus + Grafana + exporters.
+#
+# Prerequisites:
+#   The main stack (docker-compose.yml) must be running first. This file joins
+#   its networks as external networks so exporters and Prometheus can reach
+#   mongo, redis and backend by service name (#2019).
 #
 # Usage:
-#   1. Set METRICS_TOKEN in backend/.env (generate with: openssl rand -hex 32)
-#   2. Copy that token into monitoring/prometheus.yml under authorization.credentials
-#   3. Set GRAFANA_PASSWORD to a strong password (required — no default):
+#   1. Create the metrics scrape token file (NOT committed; git-ignored):
+#        openssl rand -hex 32 > monitoring/secrets/metrics_token
+#        chmod 600 monitoring/secrets/metrics_token
+#      Use the same value as METRICS_BEARER_TOKEN in backend/.env.
+#   2. Set GRAFANA_PASSWORD to a strong password (required — no default):
 #        export GRAFANA_PASSWORD=$(openssl rand -hex 24)
-#   4. docker compose -f docker-compose.monitoring.yml up -d
+#   3. Set MONGO_EXPORTER_URI to a least-privilege monitoring user, e.g.
+#        mongodb://metrics:<password>@mongo:27017/?authSource=admin&replicaSet=rs0
+#      (the user needs the clusterMonitor role; required — no default).
+#   4. docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 #
-# Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3001  (admin / <GRAFANA_PASSWORD>)
-# Jaeger UI:  http://localhost:16686  (traces — see docs/tracing.md, #1636)
+# All published ports are bound to 127.0.0.1 only. Reach them from the host
+# itself, or put a reverse proxy with authentication in front of them.
 #
-# NOTE: GRAFANA_PASSWORD is a required environment variable. Docker Compose will
-# refuse to start the monitoring stack if it is not set.
+# Prometheus: http://127.0.0.1:9090
+# Grafana:    http://127.0.0.1:3001  (admin / <GRAFANA_PASSWORD>)
+# Jaeger UI:  http://127.0.0.1:16686 (traces — see docs/tracing.md, #1636)
 
 services:
   prometheus:
@@ -22,21 +32,20 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alerts:/etc/prometheus/alerts:ro
+      - ./monitoring/secrets/metrics_token:/etc/prometheus/metrics_token:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
-      - "--web.enable-lifecycle"
+    # --web.enable-lifecycle intentionally omitted: it allowed unauthenticated
+    # POST /-/quit and /-/reload (#2019).
     ports:
-      - "9090:9090"
-    # Allows the container to reach the backend running on the Docker host.
-    # On Linux, host-gateway resolves to the host machine's IP so that
-    # host.docker.internal works the same as on Mac/Windows Docker Desktop.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:9090:9090"
     networks:
       - monitoring
+      - frontend-backend
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:10.4.3
@@ -49,11 +58,12 @@ services:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     depends_on:
       - prometheus
     networks:
       - monitoring
+    restart: unless-stopped
 
   # ── Distributed tracing (#1636) ─────────────────────────────────────────
   # Jaeger all-in-one receives OTLP traces from the backend. Enable tracing in
@@ -66,9 +76,9 @@ services:
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "16686:16686" # UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "127.0.0.1:16686:16686" # UI
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
     networks:
       - monitoring
     restart: unless-stopped
@@ -77,34 +87,31 @@ services:
 
   # Exports MongoDB metrics (connection pool, op counters, replication lag, etc.)
   # Uses the percona/mongodb_exporter image which supports MongoDB 5+/6+/7+.
-  # Set MONGO_URI in your environment or .env file so the exporter can connect.
   mongodb_exporter:
     image: percona/mongodb_exporter:0.40
     command:
-      - "--mongodb.uri=${MONGO_URI:-mongodb://root:password@host.docker.internal:27017/?authSource=admin&replicaSet=rs0}"
+      - "--mongodb.uri=${MONGO_EXPORTER_URI:?Error: MONGO_EXPORTER_URI must be set to a least-privilege monitoring user (clusterMonitor role).}"
       - "--collect-all"
       - "--compatible-mode"
     ports:
-      - "9216:9216"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:9216:9216"
     networks:
       - monitoring
+      - backend-db
     restart: unless-stopped
 
   # Exports Redis metrics (memory usage, connected clients, hit/miss ratios, etc.)
   redis_exporter:
     image: oliver006/redis_exporter:v1.59.0
     environment:
-      REDIS_ADDR: "redis://host.docker.internal:6379"
-      # Set REDIS_PASSWORD here if your Redis instance requires auth.
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      REDIS_ADDR: "redis://redis:6379"
+      # Same password the redis service requires (set in .env).
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
     ports:
-      - "9121:9121"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:9121:9121"
     networks:
       - monitoring
+      - backend-db
     restart: unless-stopped
 
   # Exports host/container-level metrics (CPU, memory, disk, network I/O).
@@ -121,7 +128,7 @@ services:
       - /sys:/host/sys:ro
       - /:/rootfs:ro
     ports:
-      - "9100:9100"
+      - "127.0.0.1:9100:9100"
     networks:
       - monitoring
     restart: unless-stopped
@@ -129,6 +136,13 @@ services:
 networks:
   monitoring:
     driver: bridge
+  # Networks created by the main stack (docker-compose.yml).
+  frontend-backend:
+    external: true
+    name: stellaredupay_frontend-backend
+  backend-db:
+    external: true
+    name: stellaredupay_backend-db
 
 volumes:
   prometheus_data:

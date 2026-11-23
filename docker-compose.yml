@@ -307,7 +307,11 @@ volumes:
   redis_data:
 
 networks:
+  # Fixed names so docker-compose.monitoring.yml can join them as external
+  # networks (#2019). Do not rename without updating the monitoring stack.
   frontend-backend:
+    name: stellaredupay_frontend-backend
     driver: bridge
   backend-db:
+    name: stellaredupay_backend-db
     driver: bridge
