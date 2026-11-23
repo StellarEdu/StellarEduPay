@@ -223,6 +223,11 @@ jobs:
         run: npm ci
       - name: Install backend dependencies
         run: cd backend && npm ci
+      # #2021: fail when backend/openapi.json or docs/api-spec.md is stale.
+      # Also covered by test:contract below; kept as its own step so the
+      # failure is named clearly in the CI log.
+      - name: Check OpenAPI spec is up to date
+        run: node scripts/openapi/check-contract.js
       - name: Check generated route manifest and API contract
         run: npm run test:contract
 

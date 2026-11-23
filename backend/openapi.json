@@ -773,7 +773,7 @@
         "tags": [
           "admin"
         ],
-        "operationId": "postAdminIpBlocksClear",
+        "operationId": "postAdminIpBlocksByIpHashClear",
         "summary": "POST /api/admin/ip-blocks/{ipHash}/clear",
         "description": "Lift every active authentication block for one hashed IP (as returned by GET /api/admin/ip-blocks).",
         "security": [
@@ -789,8 +789,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{16}$"
+              "type": "string"
             }
           }
         ],
@@ -832,6 +831,36 @@
         "x-source": "backend/src/routes/adminRoutes.js",
         "responses": {
           "201": {
+            "description": "Successful response."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/ops/overview": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "getAdminOpsOverview",
+        "summary": "GET /api/admin/ops/overview",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "admin",
+        "x-source": "backend/src/routes/adminRoutes.js",
+        "responses": {
+          "200": {
             "description": "Successful response."
           },
           "401": {
@@ -1826,7 +1855,12 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
         "x-source": "backend/src/routes/analyticsRoutes.js",
         "parameters": [
           {
@@ -1867,7 +1901,12 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
         "x-source": "backend/src/routes/analyticsRoutes.js",
         "parameters": [
           {
@@ -1908,7 +1947,12 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
         "x-source": "backend/src/routes/analyticsRoutes.js",
         "parameters": [
           {
@@ -1949,7 +1993,12 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
         "x-source": "backend/src/routes/analyticsRoutes.js",
         "parameters": [
           {
@@ -2529,7 +2578,7 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
         "x-source": "backend/src/routes/authRoutes.js",
         "responses": {
           "200": {
@@ -2669,7 +2718,7 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
         "x-source": "backend/src/routes/authRoutes.js",
         "responses": {
           "200": {
@@ -2699,7 +2748,7 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
         "x-source": "backend/src/routes/authRoutes.js",
         "parameters": [
           {
@@ -3233,6 +3282,26 @@
             }
           }
         ],
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/email/webhooks/generic": {
+      "post": {
+        "tags": [
+          "email"
+        ],
+        "operationId": "postEmailWebhooksGeneric",
+        "summary": "POST /api/email/webhooks/generic",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/emailRoutes.js",
         "responses": {
           "201": {
             "description": "Successful response."
@@ -3878,6 +3947,314 @@
         }
       }
     },
+    "/api/parent/disputes": {
+      "post": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "postParentDisputes",
+        "summary": "POST /api/parent/disputes",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/links": {
+      "get": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "getParentLinks",
+        "summary": "GET /api/parent/links",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "postParentLinks",
+        "summary": "POST /api/parent/links",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/links/{tokenId}": {
+      "delete": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "deleteParentLinksByTokenId",
+        "summary": "DELETE /api/parent/links/{tokenId}",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "tokenId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/links/{tokenId}/devices": {
+      "get": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "getParentLinksByTokenIdDevices",
+        "summary": "GET /api/parent/links/{tokenId}/devices",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "tokenId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/links/revoke-student/{studentId}": {
+      "post": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "postParentLinksRevokeStudentByStudentId",
+        "summary": "POST /api/parent/links/revoke-student/{studentId}",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/me": {
+      "get": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "getParentMe",
+        "summary": "GET /api/parent/me",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/receipts/{txHash}": {
+      "get": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "getParentReceiptsByTxHash",
+        "summary": "GET /api/parent/receipts/{txHash}",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "txHash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/session": {
+      "post": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "postParentSession",
+        "summary": "POST /api/parent/session",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/students/{studentId}/payments": {
+      "get": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "getParentStudentsByStudentIdPayments",
+        "summary": "GET /api/parent/students/{studentId}/payments",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/parent/students/{studentId}/preferences": {
+      "put": {
+        "tags": [
+          "parent"
+        ],
+        "operationId": "putParentStudentsByStudentIdPreferences",
+        "summary": "PUT /api/parent/students/{studentId}/preferences",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/parentPortalRoutes.js",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/pay/{token}": {
+      "get": {
+        "tags": [
+          "pay"
+        ],
+        "operationId": "getPayByToken",
+        "summary": "GET /api/pay/{token}",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/payLinkRoutes.js",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/payment-plans/{studentId}": {
       "delete": {
         "tags": [
@@ -4320,6 +4697,59 @@
         ],
         "responses": {
           "200": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/payments/{txHash}/receipt": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "postPaymentsByTxHashReceipt",
+        "summary": "POST /api/payments/{txHash}/receipt",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
+        "x-source": "backend/src/routes/paymentRoutes.js",
+        "parameters": [
+          {
+            "name": "txHash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "201": {
             "description": "Successful response."
           },
           "400": {
@@ -4793,6 +5223,96 @@
         }
       }
     },
+    "/api/payments/dlq/admin": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "getPaymentsDlqAdmin",
+        "summary": "GET /api/payments/dlq/admin",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "admin",
+        "x-source": "backend/src/routes/paymentRoutes.js",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/payments/dlq/admin/{id}/retry": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "postPaymentsDlqAdminByIdRetry",
+        "summary": "POST /api/payments/dlq/admin/{id}/retry",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "admin",
+        "x-source": "backend/src/routes/paymentRoutes.js",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/payments/events": {
       "get": {
         "tags": [
@@ -5092,13 +5612,13 @@
         }
       }
     },
-    "/api/payments/queue/{txHash}": {
+    "/api/payments/queue/{jobId}": {
       "get": {
         "tags": [
           "payments"
         ],
-        "operationId": "getPaymentsQueueByTxHash",
-        "summary": "GET /api/payments/queue/{txHash}",
+        "operationId": "getPaymentsQueueByJobId",
+        "summary": "GET /api/payments/queue/{jobId}",
         "security": [
           {
             "BearerAuth": []
@@ -5107,13 +5627,12 @@
         "x-auth": "school",
         "x-roles": [
           "owner",
-          "staff",
-          "read_only"
+          "staff"
         ],
         "x-source": "backend/src/routes/paymentRoutes.js",
         "parameters": [
           {
-            "name": "txHash",
+            "name": "jobId",
             "in": "path",
             "required": true,
             "schema": {
@@ -5192,45 +5711,6 @@
         }
       }
     },
-    "/api/payments/receipt/{txHash}": {
-      "get": {
-        "tags": [
-          "payments"
-        ],
-        "operationId": "getPaymentsReceiptByTxHash",
-        "summary": "GET /api/payments/receipt/{txHash}",
-        "security": [],
-        "x-auth": "public",
-        "x-source": "backend/src/routes/paymentRoutes.js",
-        "parameters": [
-          {
-            "name": "txHash",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/SchoolIdHeader"
-          },
-          {
-            "$ref": "#/components/parameters/SchoolSlugHeader"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful response."
-          },
-          "400": {
-            "$ref": "#/components/responses/SchoolContextRequired"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/api/payments/receipts/{receiptId}/verify": {
       "get": {
         "tags": [
@@ -5259,6 +5739,44 @@
           },
           "404": {
             "description": "Receipt not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/payments/receipts/{schoolId}/{receiptId}/verify": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "operationId": "getPaymentsReceiptsBySchoolIdByReceiptIdVerify",
+        "summary": "GET /api/payments/receipts/{schoolId}/{receiptId}/verify",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/routes/paymentRoutes.js",
+        "parameters": [
+          {
+            "name": "schoolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receiptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -5971,7 +6489,8 @@
         "x-auth": "school",
         "x-roles": [
           "owner",
-          "finance"
+          "staff",
+          "read_only"
         ],
         "x-source": "backend/src/routes/receiptsRoutes.js",
         "parameters": [
@@ -7247,6 +7766,49 @@
         }
       }
     },
+    "/api/schools/{schoolId}/wallet-health": {
+      "get": {
+        "tags": [
+          "schools"
+        ],
+        "operationId": "getSchoolsBySchoolIdWalletHealth",
+        "summary": "GET /api/schools/{schoolId}/wallet-health",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "school",
+        "x-roles": [
+          "owner"
+        ],
+        "x-source": "backend/src/routes/schoolRoutes.js",
+        "parameters": [
+          {
+            "name": "schoolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/schools/{schoolId}/webhook-secret": {
       "put": {
         "tags": [
@@ -7619,7 +8181,12 @@
             "BearerAuth": []
           }
         ],
-        "x-auth": "admin",
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
         "x-source": "backend/src/routes/studentRoutes.js",
         "parameters": [
           {
@@ -7848,6 +8415,112 @@
         ],
         "responses": {
           "200": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/students/{studentId}/pay-link": {
+      "post": {
+        "tags": [
+          "students"
+        ],
+        "operationId": "postStudentsByStudentIdPayLink",
+        "summary": "POST /api/students/{studentId}/pay-link",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
+        "x-source": "backend/src/routes/payLinkRoutes.js",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/students/{studentId}/pay-link/revoke": {
+      "post": {
+        "tags": [
+          "students"
+        ],
+        "operationId": "postStudentsByStudentIdPayLinkRevoke",
+        "summary": "POST /api/students/{studentId}/pay-link/revoke",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
+        "x-source": "backend/src/routes/payLinkRoutes.js",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "201": {
             "description": "Successful response."
           },
           "400": {
@@ -8159,6 +8832,52 @@
         ],
         "responses": {
           "201": {
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/students/bulk/template.csv": {
+      "get": {
+        "tags": [
+          "students"
+        ],
+        "operationId": "getStudentsBulkTemplateCsv",
+        "summary": "GET /api/students/bulk/template.csv",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff",
+          "read_only"
+        ],
+        "x-source": "backend/src/routes/studentRoutes.js",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful response."
           },
           "400": {
@@ -8513,6 +9232,26 @@
         }
       }
     },
+    "/api/version": {
+      "get": {
+        "tags": [
+          "version"
+        ],
+        "operationId": "getVersion",
+        "summary": "GET /api/version",
+        "security": [],
+        "x-auth": "public",
+        "x-source": "backend/src/app.js",
+        "responses": {
+          "200": {
+            "description": "Successful response."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/webhook-deliveries": {
       "get": {
         "tags": [
@@ -8596,10 +9335,25 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8624,10 +9378,24 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
+          }
+        ],
         "responses": {
           "201": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8654,6 +9422,9 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
         "parameters": [
           {
@@ -8663,11 +9434,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
           }
         ],
         "responses": {
           "200": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8692,6 +9472,10 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
         "parameters": [
           {
@@ -8701,11 +9485,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
           }
         ],
         "responses": {
           "200": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8730,6 +9523,9 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
         "parameters": [
           {
@@ -8739,11 +9535,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
           }
         ],
         "responses": {
           "200": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8770,6 +9575,9 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
         "parameters": [
           {
@@ -8779,11 +9587,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
           }
         ],
         "responses": {
           "201": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -8810,6 +9627,10 @@
           }
         ],
         "x-auth": "school",
+        "x-roles": [
+          "owner",
+          "staff"
+        ],
         "x-source": "backend/src/routes/webhookEndpointRoutes.js",
         "parameters": [
           {
@@ -8819,11 +9640,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SchoolIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SchoolSlugHeader"
           }
         ],
         "responses": {
           "201": {
             "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/SchoolContextRequired"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"

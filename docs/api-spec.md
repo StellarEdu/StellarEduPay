@@ -27,7 +27,10 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/academic-periods/student-fees` | school (owner, staff) | yes |
 | `GET` | `/api/academic-periods/student-fees/{studentId}` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/admin/health/details` | admin |  |
+| `GET` | `/api/admin/ip-blocks` | admin |  |
+| `POST` | `/api/admin/ip-blocks/{ipHash}/clear` | admin |  |
 | `POST` | `/api/admin/log-level` | admin |  |
+| `GET` | `/api/admin/ops/overview` | admin |  |
 | `GET` | `/api/admin/outbox/dead-letter` | admin |  |
 | `DELETE` | `/api/admin/outbox/dead-letter/{eventId}` | admin |  |
 | `GET` | `/api/admin/outbox/dead-letter/{eventId}` | admin |  |
@@ -56,10 +59,10 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/admin/webhooks/dlq/{id}/retry` | admin |  |
 | `GET` | `/api/admin/webhooks/v1-endpoints` | admin |  |
 | `POST` | `/api/admin/webhooks/v1-endpoints/notify` | admin |  |
-| `GET` | `/api/analytics/class-completion` | admin | yes |
-| `GET` | `/api/analytics/summary` | admin | yes |
-| `GET` | `/api/analytics/unpaid-cohorts` | admin | yes |
-| `GET` | `/api/analytics/volume-trend` | admin | yes |
+| `GET` | `/api/analytics/class-completion` | school (owner, staff, read_only) | yes |
+| `GET` | `/api/analytics/summary` | school (owner, staff, read_only) | yes |
+| `GET` | `/api/analytics/unpaid-cohorts` | school (owner, staff, read_only) | yes |
+| `GET` | `/api/analytics/volume-trend` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/anchor/anchors` | public | yes |
 | `POST` | `/api/anchor/initiate` | public | yes |
 | `GET` | `/api/anchor/status/{anchorTxId}` | public | yes |
@@ -74,13 +77,13 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/auth/change-password` | school |  |
 | `POST` | `/api/auth/login` | public |  |
 | `POST` | `/api/auth/logout` | public |  |
-| `GET` | `/api/auth/me` | admin |  |
+| `GET` | `/api/auth/me` | school |  |
 | `POST` | `/api/auth/mfa/user/disable` | school |  |
 | `POST` | `/api/auth/mfa/user/setup` | school |  |
 | `POST` | `/api/auth/mfa/user/verify` | school |  |
 | `POST` | `/api/auth/refresh` | public |  |
-| `GET` | `/api/auth/sessions` | admin |  |
-| `DELETE` | `/api/auth/sessions/{sessionId}` | admin |  |
+| `GET` | `/api/auth/sessions` | school |  |
+| `DELETE` | `/api/auth/sessions/{sessionId}` | school |  |
 | `GET` | `/api/consistency` | admin |  |
 | `POST` | `/api/csp-report` | public |  |
 | `GET` | `/api/disputes` | school (owner, staff, read_only) | yes |
@@ -95,6 +98,7 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/email/suppressions` | admin |  |
 | `DELETE` | `/api/email/suppressions/{email}` | admin |  |
 | `POST` | `/api/email/webhooks/{provider}` | public |  |
+| `POST` | `/api/email/webhooks/generic` | public |  |
 | `GET` | `/api/fee-adjustments` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/fee-adjustments` | school (owner) | yes |
 | `DELETE` | `/api/fee-adjustments/{id}` | school (owner) | yes |
@@ -110,12 +114,18 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/internal/backup-heartbeat` | public |  |
 | `POST` | `/api/internal/backup-restore-test-heartbeat` | public |  |
 | `POST` | `/api/internal/backup-verification-heartbeat` | public |  |
-| `GET` | `/api/parent/children` | parent |  |
-| `GET` | `/api/parent/children/{studentId}` | parent |  |
-| `GET` | `/api/parent/children/{studentId}/payments` | parent |  |
-| `GET` | `/api/parent/me` | parent |  |
-| `POST` | `/api/parent/me/link` | parent |  |
-| `DELETE` | `/api/parent/me/link/{studentId}` | parent |  |
+| `POST` | `/api/parent/disputes` | public |  |
+| `GET` | `/api/parent/links` | public |  |
+| `POST` | `/api/parent/links` | public |  |
+| `DELETE` | `/api/parent/links/{tokenId}` | public |  |
+| `GET` | `/api/parent/links/{tokenId}/devices` | public |  |
+| `POST` | `/api/parent/links/revoke-student/{studentId}` | public |  |
+| `GET` | `/api/parent/me` | public |  |
+| `GET` | `/api/parent/receipts/{txHash}` | public |  |
+| `POST` | `/api/parent/session` | public |  |
+| `GET` | `/api/parent/students/{studentId}/payments` | public |  |
+| `PUT` | `/api/parent/students/{studentId}/preferences` | public |  |
+| `GET` | `/api/pay/{token}` | public |  |
 | `DELETE` | `/api/payment-plans/{studentId}` | admin | yes |
 | `GET` | `/api/payment-plans/{studentId}` | school | yes |
 | `POST` | `/api/payment-plans/{studentId}` | admin | yes |
@@ -125,6 +135,7 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/payments/{paymentId}/unlock` | school (owner, staff) | yes |
 | `GET` | `/api/payments/{studentId}` | school (owner, staff, read_only) | yes |
 | `PATCH` | `/api/payments/{txHash}/correct-placeholder` | school (owner, staff) | yes |
+| `POST` | `/api/payments/{txHash}/receipt` | school (owner, staff) | yes |
 | `POST` | `/api/payments/{txHash}/refund` | school (owner, staff) | yes |
 | `GET` | `/api/payments/{txHash}/refunds` | school (owner, staff, read_only) | yes |
 | `PATCH` | `/api/payments/{txHash}/status` | school (owner, staff) | yes |
@@ -134,6 +145,8 @@ request/response examples for the most-used endpoints.
 | `PATCH` | `/api/payments/bulk/status` | school (owner, staff) | yes |
 | `GET` | `/api/payments/dlq` | school (owner, staff) | yes |
 | `POST` | `/api/payments/dlq/{id}/retry` | school (owner, staff) | yes |
+| `GET` | `/api/payments/dlq/admin` | admin | yes |
+| `POST` | `/api/payments/dlq/admin/{id}/retry` | admin | yes |
 | `GET` | `/api/payments/events` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/payments/finalize` | school (owner, staff) | yes |
 | `GET` | `/api/payments/instructions/{studentId}` | public | yes |
@@ -141,10 +154,10 @@ request/response examples for the most-used endpoints.
 | `GET` | `/api/payments/limits` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/payments/overpayments` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/payments/pending` | school (owner, staff, read_only) | yes |
-| `GET` | `/api/payments/queue/{txHash}` | school (owner, staff, read_only) | yes |
+| `GET` | `/api/payments/queue/{jobId}` | school (owner, staff) | yes |
 | `GET` | `/api/payments/rates` | school (owner, staff, read_only) | yes |
-| `GET` | `/api/payments/receipt/{txHash}` | public | yes |
 | `GET` | `/api/payments/receipts/{receiptId}/verify` | public |  |
+| `GET` | `/api/payments/receipts/{schoolId}/{receiptId}/verify` | public |  |
 | `POST` | `/api/payments/reconciliation/report` | school (owner, staff) | yes |
 | `GET` | `/api/payments/reconciliation/reports` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/payments/refunds/{refundId}/approve` | school (owner, staff) | yes |
@@ -161,7 +174,7 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/payments/verify` | public | yes |
 | `GET` | `/api/payments/verify/{txHash}` | public |  |
 | `GET` | `/api/public-config` | public |  |
-| `GET` | `/api/receipts/{txHash}` | school (owner, finance) | yes |
+| `GET` | `/api/receipts/{txHash}` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/reminders/opt-out` | school (owner, staff) | yes |
 | `GET` | `/api/reminders/preview` | school (owner, staff) | yes |
 | `POST` | `/api/reminders/resubscribe` | public |  |
@@ -195,6 +208,7 @@ request/response examples for the most-used endpoints.
 | `GET` | `/api/schools/{schoolId}/users` | school (owner, staff, read_only) |  |
 | `POST` | `/api/schools/{schoolId}/users` | school (owner) |  |
 | `PATCH` | `/api/schools/{schoolId}/users/{userId}` | school (owner) |  |
+| `GET` | `/api/schools/{schoolId}/wallet-health` | school (owner) |  |
 | `PUT` | `/api/schools/{schoolId}/webhook-secret` | admin |  |
 | `POST` | `/api/schools/{slug}/webhooks` | admin |  |
 | `GET` | `/api/source-rules` | school (owner, staff, read_only) | yes |
@@ -203,17 +217,20 @@ request/response examples for the most-used endpoints.
 | `GET` | `/api/students` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/students` | school (owner, staff) | yes |
 | `DELETE` | `/api/students/{studentId}` | school (owner, staff) | yes |
-| `GET` | `/api/students/{studentId}` | admin | yes |
+| `GET` | `/api/students/{studentId}` | school (owner, staff, read_only) | yes |
 | `PATCH` | `/api/students/{studentId}` | school (owner, staff) | yes |
 | `PUT` | `/api/students/{studentId}` | school (owner, staff) | yes |
 | `POST` | `/api/students/{studentId}/credit-adjustments` | school (owner, staff) | yes |
 | `GET` | `/api/students/{studentId}/fee-history` | school (owner, staff, read_only) | yes |
+| `POST` | `/api/students/{studentId}/pay-link` | school (owner, staff) | yes |
+| `POST` | `/api/students/{studentId}/pay-link/revoke` | school (owner, staff) | yes |
 | `GET` | `/api/students/{studentId}/payments/audit` | school (owner, staff, read_only) | yes |
 | `POST` | `/api/students/{studentId}/reconcile` | school (owner, staff) | yes |
 | `POST` | `/api/students/{studentId}/reminders/resubscribe` | school (owner, staff) | yes |
 | `POST` | `/api/students/{studentId}/reset-payment` | school (owner, staff) | yes |
 | `POST` | `/api/students/{studentId}/restore` | school (owner, staff) | yes |
 | `POST` | `/api/students/bulk` | school (owner, staff) | yes |
+| `GET` | `/api/students/bulk/template.csv` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/students/export` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/students/overdue` | school (owner, staff, read_only) | yes |
 | `GET` | `/api/students/public/{studentId}` | public | yes |
@@ -224,18 +241,16 @@ request/response examples for the most-used endpoints.
 | `POST` | `/api/users/request-password-reset` | public |  |
 | `POST` | `/api/users/reset-password` | public |  |
 | `POST` | `/api/users/set-password` | public |  |
-| `GET` | `/api/wallet/balance` | school (owner, staff, read_only) | yes |
-| `GET` | `/api/wallet/history` | school (owner, staff, read_only) | yes |
-| `GET` | `/api/wallet/transactions` | school (owner, staff, read_only) | yes |
+| `GET` | `/api/version` | public |  |
 | `GET` | `/api/webhook-deliveries` | school |  |
 | `POST` | `/api/webhook-deliveries/{id}/replay` | school |  |
-| `GET` | `/api/webhook-endpoints` | school |  |
-| `POST` | `/api/webhook-endpoints` | school |  |
-| `DELETE` | `/api/webhook-endpoints/{id}` | school |  |
-| `GET` | `/api/webhook-endpoints/{id}` | school |  |
-| `PUT` | `/api/webhook-endpoints/{id}` | school |  |
-| `POST` | `/api/webhook-endpoints/{id}/rotate-secret` | school |  |
-| `POST` | `/api/webhook-endpoints/{id}/test` | school |  |
+| `GET` | `/api/webhook-endpoints` | school (owner, staff) | yes |
+| `POST` | `/api/webhook-endpoints` | school (owner) | yes |
+| `DELETE` | `/api/webhook-endpoints/{id}` | school (owner) | yes |
+| `GET` | `/api/webhook-endpoints/{id}` | school (owner, staff) | yes |
+| `PUT` | `/api/webhook-endpoints/{id}` | school (owner) | yes |
+| `POST` | `/api/webhook-endpoints/{id}/rotate-secret` | school (owner) | yes |
+| `POST` | `/api/webhook-endpoints/{id}/test` | school (owner, staff) | yes |
 | `GET` | `/health` | public |  |
 | `GET` | `/health/live` | public |  |
 | `GET` | `/health/ready` | public |  |

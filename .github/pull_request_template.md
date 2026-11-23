@@ -43,4 +43,5 @@ Closes #
 - [ ] I searched for duplicate issues and PRs.
 - [ ] I removed secrets, credentials, and personal/payment data from the change.
 - [ ] Documentation is updated where user or operator behavior changed.
+- [ ] API changed (routes, auth, or request/response shape)? Ran `npm run openapi:generate` and committed `backend/openapi.json` and `docs/api-spec.md`.
 - [ ] This PR contains one focused change or clearly explains why the changes must ship together.
