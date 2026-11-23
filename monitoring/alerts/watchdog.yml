@@ -1,0 +1,17 @@
+groups:
+  - name: watchdog
+    interval: 60s
+    rules:
+      # ── Watchdog: always firing (#2018) ───────────────────────────────────
+      # This alert is always true, so it is always delivered to Alertmanager.
+      # The `watchdog-heartbeat` receiver in monitoring/alertmanager.yml
+      # forwards it to a dead-man's-switch service. If that service stops
+      # receiving pings, the alert pipeline itself (Prometheus → Alertmanager
+      # → receiver) is broken, and the dead-man's-switch should notify someone.
+      # Routed by alertname, not severity, so it never pages or posts to Slack.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alert pipeline heartbeat — if this stops arriving, alerting is broken"
