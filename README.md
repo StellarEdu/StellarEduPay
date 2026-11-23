@@ -772,6 +772,7 @@ The application supports four log levels (from least to most verbose):
 
 **Via environment variable (startup):**
 ```bash
+cd backend
 LOG_LEVEL=debug npm start        # Set at startup
 LOG_LEVEL=warn npm start         # Production mode
 ```
@@ -803,7 +804,7 @@ In development (`NODE_ENV != production`), the backend automatically suppresses 
 
 This keeps the console output clean at the default `info` level. To see low-level details:
 ```bash
-LOG_LEVEL=debug npm run dev
+cd backend && LOG_LEVEL=debug npm run dev
 ```
 
 #### File Logging
@@ -829,10 +830,10 @@ Configuration via environment variables:
 Examples:
 ```bash
 # Bare metal: write rotating files to an absolute path
-LOG_TO_FILE=true LOG_DIR=/var/log/stellaredupay npm start
+cd backend && LOG_TO_FILE=true LOG_DIR=/var/log/stellaredupay npm start
 
 # Keep larger files, shorter retention
-LOG_TO_FILE=true LOG_MAX_SIZE=500m LOG_MAX_FILES=7d npm start
+cd backend && LOG_TO_FILE=true LOG_MAX_SIZE=500m LOG_MAX_FILES=7d npm start
 ```
 
 Do not set `LOG_TO_FILE=true` in Kubernetes or Docker. Use `kubectl logs`, or a
