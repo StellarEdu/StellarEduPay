@@ -44,3 +44,6 @@ test_output*.txt
 
 # Backup key material (#1630) — never commit decryption identities
 backup-keys/
+
+# Monitoring scrape token (#2019) — never commit
+monitoring/secrets/
