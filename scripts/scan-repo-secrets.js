@@ -32,6 +32,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -50,12 +51,27 @@ const EXCEPTIONS_FILE = path.join(REPO_ROOT, 'security-exceptions.json');
 const STELLAR_SECRET_KEY = /(?<![A-Z2-7])S[A-Z2-7]{55}(?![A-Z2-7])/g;
 
 /**
- * 2. BIP-39 mnemonic phrase: 12 or more consecutive lowercase English words
- *    (3–8 characters each) separated by single spaces.  The BIP-39 wordlist
- *    is exclusively lowercase ASCII, so uppercase words don't trigger this.
- *    We require at least 12 words (the shortest standard mnemonic length).
+ * 2. BIP-39 mnemonic phrase (#2022).
+ *
+ *    A candidate is a run of exactly 12, 15, 18, 21 or 24 consecutive words
+ *    separated by single spaces, where every word is in the official BIP-39
+ *    English wordlist AND the phrase passes the BIP-39 checksum. Ordinary
+ *    English sentences made of common words (school, budget, service) are
+ *    in the wordlist, so word matching alone flags prose. The checksum
+ *    rejects random word runs with probability 1 - 2^-CS (CS = 4 bits for
+ *    12 words up to 8 bits for 24 words).
+ *
+ *    The wordlist is scripts/lib/bip39-english.txt (sha256
+ *    2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda).
  */
-const BIP39_MNEMONIC = /\b([a-z]{3,8} ){11,23}[a-z]{3,8}\b/g;
+const BIP39_WORDLIST_FILE = path.join(REPO_ROOT, 'scripts', 'lib', 'bip39-english.txt');
+const BIP39_VALID_WORD_COUNTS = [12, 15, 18, 21, 24];
+const BIP39_WORDS = fs
+  .readFileSync(BIP39_WORDLIST_FILE, 'utf8')
+  .split('\n')
+  .map((w) => w.trim())
+  .filter(Boolean);
+const BIP39_INDEX = new Map(BIP39_WORDS.map((w, i) => [w, i]));
 
 /**
  * 3. Realistic hex secret assigned via KEY=value (env-file style or inline).
@@ -85,6 +101,59 @@ const OBVIOUSLY_FAKE_HEX = [
   /replace[_\-]?me/i,                  // explicit placeholder label in value
   /your[_\-]?secret/i,
 ];
+
+/**
+ * BIP-39 checksum: the entropy is followed by its first CS bits of SHA-256,
+ * where CS = word count / 3. Returns true when the phrase is self-consistent.
+ *
+ * @param {number[]} indices - wordlist index of each word (11 bits each)
+ */
+function bip39ChecksumValid(indices) {
+  const csBits = indices.length / 3;
+  const entBits = indices.length * 11 - csBits;
+  const bits = indices.map((i) => i.toString(2).padStart(11, '0')).join('');
+  const entropy = Buffer.alloc(entBits / 8);
+  for (let i = 0; i < entBits / 8; i++) {
+    entropy[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+  }
+  const hash = crypto.createHash('sha256').update(entropy).digest();
+  const expected = hash[0].toString(2).padStart(8, '0').slice(0, csBits);
+  return bits.slice(entBits) === expected;
+}
+
+/**
+ * Finds valid BIP-39 mnemonic candidates on a single line.
+ *
+ * @param {string} line
+ * @returns {string[]} the matched phrases (empty when none)
+ */
+function findMnemonicCandidates(line) {
+  const tokens = [];
+  const tokenRe = /(?<![A-Za-z0-9])[a-z]+(?![A-Za-z0-9])/g;
+  let m;
+  while ((m = tokenRe.exec(line)) !== null) {
+    tokens.push({ word: m[0], start: m.index, end: m.index + m[0].length });
+  }
+
+  const found = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (!BIP39_INDEX.has(tokens[i].word)) continue;
+    for (const count of BIP39_VALID_WORD_COUNTS) {
+      if (i + count > tokens.length) break;
+      const window = tokens.slice(i, i + count);
+      const contiguous = window.every((t, j) =>
+        BIP39_INDEX.has(t.word) && (j === 0 || line.slice(window[j - 1].end, t.start) === ' ')
+      );
+      if (!contiguous) continue;
+      const indices = window.map((t) => BIP39_INDEX.get(t.word));
+      if (!bip39ChecksumValid(indices)) continue;
+      found.push(line.slice(window[0].start, window[count - 1].end));
+      i += count - 1;
+      break;
+    }
+  }
+  return found;
+}
 
 // ── Allowlist ────────────────────────────────────────────────────────────────
 
@@ -185,8 +254,8 @@ for (const relPath of listTrackedFiles()) {
     }
 
     // ── 2. BIP-39 mnemonic ────────────────────────────────────────────────
-    const mnemonicMatches = line.match(BIP39_MNEMONIC);
-    if (mnemonicMatches) {
+    const mnemonicMatches = findMnemonicCandidates(line);
+    if (mnemonicMatches.length > 0) {
       for (const match of mnemonicMatches) {
         if (isAllowed('mnemonic', relPath, lineNo, exceptions)) continue;
         const preview = match.split(' ').slice(0, 3).join(' ');
