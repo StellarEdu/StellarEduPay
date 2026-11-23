@@ -7,10 +7,12 @@ const User = require('../models/userModel');
 const config = require('../config');
 const logger = require('../utils/logger').child('UserController');
 const { logAudit } = require('../services/auditService');
-const { sendEmail } = require('../services/emailService');
+const { sendEmail } = require('../services/email');
 const { renderEmailTemplate } = require('../services/emailTemplateService');
 const { revokeAllUserSessions } = require('../services/sessionStore');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { maskEmail } = require('../utils/piiRedaction');
+const { emailSendFailuresTotal } = require('../utils/metrics');
 
 // ── Password policy ────────────────────────────────────────────────────────────
 
@@ -78,14 +80,23 @@ async function revokeUserSessions(userId) {
 }
 
 // ── Email dispatch helper (async, non-blocking) ────────────────────────────────
-function dispatchEmail(payload) {
+function dispatchEmail(payload, category = 'unknown') {
   // Fire-and-forget: never await in the request path so latency is identical
   // regardless of whether the account exists.
   setImmediate(() => {
     Promise.resolve()
       .then(() => sendEmail(payload))
       .catch(err => {
-        logger.warn('[UserController] Failed to send email', { error: err.message, to: payload?.to });
+        try {
+          emailSendFailuresTotal.inc({ category });
+        } catch (_) {
+          // Metrics must never break email dispatch.
+        }
+        logger.error('[UserController] Failed to send email', {
+          error: err.message,
+          to: maskEmail(payload?.to),
+          category,
+        });
       });
   });
 }
@@ -154,9 +165,9 @@ async function createUser(req, res) {
       invitationLink,
       expiresInDays: 7,
     });
-    dispatchEmail({ to: normalizedEmail, subject, html, text });
+    dispatchEmail({ to: normalizedEmail, subject, html, text }, 'invitation');
   } catch (err) {
-    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: maskEmail(normalizedEmail) });
   }
 
   await logAudit({
@@ -363,9 +374,9 @@ async function createSchoolUser(req, res) {
       invitationLink,
       expiresInDays: 7,
     });
-    dispatchEmail({ to: normalizedEmail, subject, html, text });
+    dispatchEmail({ to: normalizedEmail, subject, html, text }, 'invitation');
   } catch (err) {
-    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render invitation email', { error: err.message, email: maskEmail(normalizedEmail) });
   }
 
   await logAudit({
@@ -626,9 +637,9 @@ async function requestPasswordReset(req, res) {
       resetLink,
       expiresInMinutes: 60,
     });
-    dispatchEmail({ to: normalizedEmail, subject, html, text });
+    dispatchEmail({ to: normalizedEmail, subject, html, text }, 'password_reset');
   } catch (err) {
-    logger.warn('[UserController] Failed to render password reset email', { error: err.message, email: normalizedEmail });
+    logger.warn('[UserController] Failed to render password reset email', { error: err.message, email: maskEmail(normalizedEmail) });
   }
 
   await logAudit({

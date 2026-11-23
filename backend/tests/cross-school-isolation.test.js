@@ -253,6 +253,127 @@ describe('HTTP cross-school isolation (documented from root suite)', () => {
   });
 });
 
+// ─── Staff invitation / password-reset email dispatch (issue #2034) ─────────
+
+describe('userController email dispatch (issue #2034)', () => {
+  const mockSendEmail = jest.fn();
+  const mockLogger = {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
+
+  jest.doMock('../src/services/email', () => ({ sendEmail: mockSendEmail }));
+  jest.doMock('../src/utils/logger', () => mockLogger);
+
+  const User = require('../src/models/userModel');
+  const userController = require('../src/controllers/userController');
+
+  const FULL_EMAIL = 'new.staff@example.com';
+  const MASKED_EMAIL = 'n***@example.com';
+
+  function emailReq(body = {}) {
+    return {
+      body,
+      school: SCHOOL_A,
+      schoolId: SCHOOL_A.schoolId,
+      user: { _id: 'admin-1', role: 'admin', schoolId: SCHOOL_A.schoolId },
+      headers: {},
+      params: {},
+      query: {},
+    };
+  }
+
+  function flushImmediate() {
+    return new Promise((resolve) => setImmediate(resolve));
+  }
+
+  function allLogLines() {
+    return ['info', 'warn', 'error', 'debug'].flatMap((level) =>
+      mockLogger[level].mock.calls.map((args) => JSON.stringify(args))
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSendEmail.mockResolvedValue({ success: true });
+  });
+
+  it('createSchoolUser sends exactly one invitation email', async () => {
+    User.findOne.mockResolvedValue(null);
+    User.create.mockResolvedValue({
+      _id: 'user-1',
+      email: FULL_EMAIL,
+      role: 'staff',
+      schoolId: SCHOOL_A.schoolId,
+      save: jest.fn().mockResolvedValue(undefined),
+    });
+
+    const res = mockRes();
+    await userController.createSchoolUser(
+      emailReq({ email: FULL_EMAIL, name: 'New Staff', role: 'staff' }),
+      res,
+      jest.fn()
+    );
+    await flushImmediate();
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const payload = mockSendEmail.mock.calls[0][0];
+    expect(payload.to).toBe(FULL_EMAIL);
+    expect(payload.template).toMatch(/invit/i);
+  });
+
+  it('requestPasswordReset sends exactly one reset email', async () => {
+    User.findOne.mockResolvedValue({
+      _id: 'user-2',
+      email: FULL_EMAIL,
+      role: 'staff',
+      schoolId: SCHOOL_A.schoolId,
+      save: jest.fn().mockResolvedValue(undefined),
+    });
+
+    const res = mockRes();
+    await userController.requestPasswordReset(
+      emailReq({ email: FULL_EMAIL }),
+      res,
+      jest.fn()
+    );
+    await flushImmediate();
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const payload = mockSendEmail.mock.calls[0][0];
+    expect(payload.to).toBe(FULL_EMAIL);
+    expect(payload.template).toMatch(/reset/i);
+  });
+
+  it('never logs a full email address when sending fails', async () => {
+    mockSendEmail.mockRejectedValue(new Error('provider down'));
+    User.findOne.mockResolvedValue(null);
+    User.create.mockResolvedValue({
+      _id: 'user-3',
+      email: FULL_EMAIL,
+      role: 'staff',
+      schoolId: SCHOOL_A.schoolId,
+      save: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await userController.createSchoolUser(
+      emailReq({ email: FULL_EMAIL, name: 'New Staff', role: 'staff' }),
+      mockRes(),
+      jest.fn()
+    );
+    await flushImmediate();
+
+    const lines = allLogLines();
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line).not.toContain(FULL_EMAIL);
+    }
+    expect(lines.some((line) => line.includes(MASKED_EMAIL))).toBe(true);
+  });
+});
+
 // ─── Dead-letter queue cross-tenant isolation (issue #1768) ──────────────────
 
 describe('dead-letter queue — cross-school isolation (unit)', () => {

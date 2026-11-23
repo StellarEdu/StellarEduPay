@@ -505,7 +505,15 @@ node scripts/seed-test-data.js --clean  # Drop and recreate
 
 ## API Reference
 
-The HTTP contract lives in [`backend/openapi.json`](backend/openapi.json), generated from the routers by `node scripts/openapi/generate.js` and enforced in CI (`node scripts/openapi/check-contract.js`). It is served at `GET /api/docs.json` (or `/api/docs` in development). In production (unless `SWAGGER_ENABLED=true`) `/api/docs.json` requires admin authentication. [`docs/api-spec.md`](docs/api-spec.md) has the full endpoint index plus request/response examples; the list below is a summary.
+The HTTP contract lives in [`backend/openapi.json`](backend/openapi.json), generated from the routers by `node scripts/openapi/generate.js`. It is served at `GET /api/docs.json` (or `/api/docs` in development). In production (unless `SWAGGER_ENABLED=true`) `/api/docs.json` requires admin authentication. [`docs/api-spec.md`](docs/api-spec.md) has the full endpoint index plus request/response examples; the list below is a summary.
+
+**Keeping the contract up to date.** If you add, change, or remove a route, regenerate the spec and commit the result:
+
+```bash
+npm run openapi:generate   # alias for node scripts/openapi/generate.js
+```
+
+CI enforces this: the `route-contract` job runs `node scripts/openapi/check-contract.js`, which fails if `backend/openapi.json` or the `docs/api-spec.md` endpoint index is stale. That job is a required check, so a PR that adds a route without regenerating the spec cannot merge.
 
 ### Authentication
 
@@ -666,15 +674,33 @@ See [`docs/security.md`](docs/security.md) for a full threat model.
 
 Tests mock both the Stellar SDK and MongoDB — no real network or database required.
 
-```bash
-# All tests (from project root)
-npm test
+### Test layout
 
-# Backend tests only
+Each package owns its tests and is run by that package's Jest config. There is exactly one home for every test file:
+
+| Location | Contents | Command |
+|----------|----------|---------|
+| `backend/tests/unit/` | Backend unit tests | `cd backend && npm test` |
+| `backend/tests/integration/` | Backend integration tests (mocked Stellar/Mongo) | `cd backend && npm test` |
+| `backend/tests/e2e/` | Backend end-to-end tests | `cd backend && npm test` |
+| `backend/src/**/__tests__/` | Co-located backend unit tests | `cd backend && npm test` |
+| `frontend/src/**/__tests__/` | Frontend tests | `cd frontend && npm test` |
+| `tests/` (repo root) | Cross-cutting checks only: repo scripts and CI configuration | `npm test` |
+
+`cd backend && npm test` runs **all** backend tests (unit, integration and e2e) with the backend Jest config. Do not add backend tests to the root `tests/` directory — the root tree is reserved for repository/CI script checks, and a test filename must never exist in two trees.
+
+```bash
+# Backend tests (all of them)
 cd backend && npm test
 
-# Specific test file
-npm test tests/stellar.test.js
+# Frontend tests
+cd frontend && npm test
+
+# Cross-cutting repo/CI script checks (from project root)
+npm test
+
+# Specific backend test file
+cd backend && npx jest tests/unit/stellar.test.js
 
 # Integration tests (requires live Stellar testnet)
 npm run test:integration
@@ -878,7 +904,7 @@ StellarEduPay/
 │   │   ├── services/          # Business logic, Stellar, webhooks, polling
 │   │   ├── templates/         # Email HTML/text templates
 │   │   └── utils/             # Helpers: logger, crypto, validation
-│   ├── tests/                 # Backend-scoped unit tests
+│   ├── tests/                 # Backend tests: unit/, integration/, e2e/
 │   ├── Dockerfile
 │   ├── .env.example
 │   └── package.json
@@ -898,7 +924,7 @@ StellarEduPay/
 ├── docs/                      # Architecture, API spec, integration guides
 ├── monitoring/                # Prometheus config, Grafana provisioning
 ├── scripts/                   # Wallet generation, seed, migrations, backup
-├── tests/                     # Root-level integration & e2e tests
+├── tests/                     # Cross-cutting repo/CI script checks only
 ├── deploy/k8s/                # Kubernetes deployment sample
 ├── docker-compose.yml
 ├── docker-compose.monitoring.yml
