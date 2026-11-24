@@ -238,7 +238,7 @@ following environment variables **must** be set:
 export GRAFANA_PASSWORD=$(openssl rand -hex 24)
 export METRICS_TOKEN=$(openssl rand -hex 32)
 
-# Copy METRICS_TOKEN into monitoring/prometheus.yml (authorization.credentials)
+# Create monitoring/secrets/metrics_token with the METRICS_BEARER_TOKEN value (see docker-compose.monitoring.yml)
 # then start the stack:
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 ```

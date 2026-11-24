@@ -20,18 +20,16 @@ alerting:
 scrape_configs:
   - job_name: stellaredupay
     metrics_path: /metrics
-    # Set METRICS_TOKEN in backend/.env, then substitute it here before deploying.
-    # Generate a strong token with: openssl rand -hex 32
-    # Replace the placeholder below with the actual token value.
-    # Never use "change_me_to_a_secure_random_token" in any environment.
+    # Bearer token read from a mounted file, never written into this tracked
+    # file (#2019). Create monitoring/secrets/metrics_token — see the usage
+    # notes in docker-compose.monitoring.yml. Must match METRICS_BEARER_TOKEN.
     authorization:
       type: Bearer
-      credentials: "REPLACE_WITH_METRICS_TOKEN"
+      credentials_file: /etc/prometheus/metrics_token
     static_configs:
-      # host.docker.internal resolves to the Docker host on Mac/Windows.
-      # On Linux it is mapped to host-gateway via extra_hosts in docker-compose.monitoring.yml.
+      # Backend reached by service name on the shared frontend-backend network.
       - targets:
-          - "host.docker.internal:5000"
+          - "backend:5000"
 
   # ── Infrastructure exporters ─────────────────────────────────────────────
 

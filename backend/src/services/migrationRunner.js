@@ -55,6 +55,26 @@ async function runMigrations(_require = require, _db = null) {
     .filter(f => f.endsWith('.js'))
     .sort();
 
+  // Two files sharing a numeric prefix (e.g. 036_a.js and 036_b.js) have an
+  // order that depends only on filename sorting, and make rollback ambiguous.
+  // Refuse to run rather than apply them in an accidental order (#2023).
+  const byPrefix = new Map();
+  for (const file of files) {
+    const prefix = (file.match(/^(\d{3})_/) || [])[1];
+    if (!prefix) continue;
+    if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+    byPrefix.get(prefix).push(file);
+  }
+  const duplicatePrefixes = [...byPrefix.entries()].filter(([, list]) => list.length > 1);
+  if (duplicatePrefixes.length > 0) {
+    throw new Error(
+      '[Migration] Duplicate migration numbers found. Each number must be unique:\n' +
+      duplicatePrefixes
+        .map(([prefix, list]) => `  • ${prefix}: ${list.join(', ')}`)
+        .join('\n')
+    );
+  }
+
   // Validate every migration file before running any of them. A missing or
   // mismatched version would cause the runner to silently skip migrations
   // (multiple files sharing version: undefined collapse to one DB document),

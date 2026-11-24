@@ -1,7 +1,9 @@
 'use strict';
 
 /**
- * Migration 036: Unify Payment.feeValidationStatus vocabulary.
+ * Migration 039: Unify Payment.feeValidationStatus vocabulary.
+ *
+ * Renumbered from 036 (#2023): 036 was already used by two other migrations.
  *
  * Historically two writers disagreed on the value used when the cumulative
  * amount paid is below the fee:
@@ -30,6 +32,9 @@ const CANONICAL_STATUSES = ['valid', 'underpaid', 'overpaid', 'partial', 'unknow
 const CONFIRMED_OR_ABOVE = ['confirmed', 'finalized'];
 
 module.exports = {
+  // Must equal the filename without .js (enforced by migrationRunner).
+  version: '039_unify_fee_validation_status',
+
   async up(db) {
     const payments = db.collection('payments');
     const plans = db.collection('paymentplans');
@@ -135,7 +140,7 @@ module.exports = {
     // migration is idempotent, so re-running it is safe.
     // eslint-disable-next-line no-console
     console.log(
-      '[migration 036] down() is a no-op; feeValidationStatus vocabulary is unified.'
+      '[migration 039] down() is a no-op; feeValidationStatus vocabulary is unified.'
     );
   },
 };

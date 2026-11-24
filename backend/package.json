@@ -12,7 +12,8 @@
     "test": "jest",
     "lint": "eslint src",
     "knip": "knip",
-    "depcheck": "depcheck"
+    "depcheck": "depcheck",
+    "create-wallet": "node ../scripts/create-school-wallet.js"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1121.0",
