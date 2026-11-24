@@ -38,6 +38,24 @@ services:
     networks:
       - monitoring
 
+  # Alertmanager receives firing alerts from Prometheus and routes them to
+  # PagerDuty / Slack / the Watchdog heartbeat (#2018). Receiver secrets are
+  # read from ./monitoring/secrets/ — see monitoring/secrets/README.md.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/secrets:/etc/alertmanager/secrets:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:10.4.3
     environment:
@@ -132,4 +150,5 @@ networks:
 
 volumes:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
