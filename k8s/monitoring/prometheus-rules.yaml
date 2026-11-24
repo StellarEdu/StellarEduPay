@@ -1,0 +1,1061 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-admin-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: admin-alerts
+      rules:
+        - alert: AdminAlertFired
+          expr: increase(send_admin_alert_total[5m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Admin alert fired
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-api-errors
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api_errors
+      interval: 60s
+      rules:
+        # ── Warning: sustained elevated 5xx rate ──────────────────────────────
+        # http_request_duration_seconds_count{method,route,status} is recorded
+        # for every request by the requestLogger middleware. A 5% error rate
+        # sustained for 10 minutes is well above normal background noise
+        # (transient DB blips, individual bad requests) without being so
+        # sensitive that a single slow deploy trips it.
+        - alert: ApiHigh5xxRateWarning
+          expr: >
+            sum(rate(http_request_duration_seconds_count{status=~"5.."}[10m]))
+              /
+            clamp_min(sum(rate(http_request_duration_seconds_count[10m])), 0.001)
+              > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Elevated HTTP 5xx rate on the API"
+            description: >
+              {{ $value | printf "%.1f%%" }} of requests have returned a 5xx
+              status over the last 10 minutes. This includes the payment
+              confirmation and processing endpoints. Check application logs and
+              the mongodb_connection_state / horizon_circuit_breaker_state
+              gauges for a root cause before escalating.
+
+        # ── Critical: fast-burn 5xx spike ─────────────────────────────────────
+        # A short (5m), high (20%) ratio catches an acute outage (e.g. a bad
+        # deploy or a dependency going down hard) far faster than the 10m/5%
+        # warning window would, at the cost of being noisier on brief blips —
+        # acceptable for a critical page on the payment-processing path.
+        - alert: ApiHigh5xxRateCritical
+          expr: >
+            sum(rate(http_request_duration_seconds_count{status=~"5.."}[5m]))
+              /
+            clamp_min(sum(rate(http_request_duration_seconds_count[5m])), 0.001)
+              > 0.2
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Critical HTTP 5xx rate on the API — payment processing likely impacted"
+            description: >
+              {{ $value | printf "%.1f%%" }} of requests have returned a 5xx
+              status over the last 5 minutes. This is very likely an active
+              incident on the payment-processing path. Page on-call.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-api-latency
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api_latency
+      interval: 60s
+      rules:
+        # ── Warning: p95 latency degraded ─────────────────────────────────────
+        # http_request_duration_seconds_bucket carries buckets up to 5s
+        # (metrics/index.js). A p95 above 1s across all routes is a real
+        # degradation for a payment-confirmation API where most requests are
+        # simple reads/writes, not a false positive from one slow report endpoint.
+        - alert: ApiLatencyP95High
+          expr: >
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[10m])) by (le)) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "API p95 latency above 1s"
+            description: >
+              The 95th-percentile HTTP response time across all routes has been
+              above 1 second for 10 minutes ({{ $value | printf "%.2f" }}s).
+              Check MongoDB connection health (mongodb_connection_state) and
+              Horizon request latency (horizon_request_duration_seconds) for a
+              root cause.
+
+        # ── Critical: p99 latency severely degraded ───────────────────────────
+        # p99 above 2.5s (the second-highest configured bucket) means even
+        # typical-tail requests are approaching timeout territory for
+        # payment-confirmation traffic.
+        - alert: ApiLatencyP99Critical
+          expr: >
+            histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[10m])) by (le)) > 2.5
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "API p99 latency critically high"
+            description: >
+              The 99th-percentile HTTP response time across all routes has been
+              above 2.5 seconds for 10 minutes ({{ $value | printf "%.2f" }}s).
+              Parent- and admin-facing payment requests are likely timing out or
+              about to. Page on-call.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-auth-ip-blocks
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: auth-ip-blocks
+      rules:
+        - alert: AuthIpWideBlockApplied
+          expr: increase(auth_ip_blocks_total{kind="ip"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Whole-IP authentication block applied
+            description: A client IP exceeded the IP-wide auth failure backstop (100 per 5 minutes) and every request from it is being rejected with 429. Check GET /api/admin/ip-blocks; if the source is a trusted office or school network, add it to TRUSTED_NETWORKS and clear the block with POST /api/admin/ip-blocks/{ipHash}/clear.
+        - alert: AuthCredentialBlockSpike
+          expr: increase(auth_ip_blocks_total{kind="credential"}[10m]) > 5
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: Elevated credential-level authentication blocks
+            description: More than five credential-level auth blocks in 10 minutes. This can mean a secret rotation left clients with stale tokens, or a brute-force attempt. Review GET /api/admin/ip-blocks.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-backup
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: backup
+      interval: 60s
+      rules:
+        # ── Warning: no successful backup in the expected 24-hour window ──────
+        # backup_last_success_timestamp_seconds is set by backup.sh via
+        # POST /api/internal/backup-heartbeat on each successful run. A value
+        # of 0 means "no successful backup has been recorded since the process
+        # started" — the BackupNotRun rule catches that separately.
+        # The 26-hour threshold (24 h schedule + 2 h grace) fires before the
+        # window reaches 48 h (two missed backups). See issue #1102.
+        - alert: BackupStale
+          expr: >
+            backup_last_success_timestamp_seconds > 0
+            and (time() - backup_last_success_timestamp_seconds) > 93600
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No successful backup in the last 26 hours"
+            description: >
+              The last recorded successful backup was
+              {{ $value | humanizeDuration }} ago (threshold: 26 h).
+              The backup container may have failed silently. Check
+              `docker logs <backup-container>` and verify that
+              BACKUP_NOTIFY_TOKEN is set correctly in both the backup
+              and backend containers.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
+        # ── Critical: backup is more than 2 days stale ───────────────────────
+        - alert: BackupCriticallyStale
+          expr: >
+            backup_last_success_timestamp_seconds > 0
+            and (time() - backup_last_success_timestamp_seconds) > 172800
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No successful backup in the last 48 hours — immediate action required"
+            description: >
+              The last recorded successful backup was
+              {{ $value | humanizeDuration }} ago (threshold: 48 h).
+              Financial and student data is at risk. Investigate and
+              restore the backup schedule immediately.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
+        # ── Warning: backup metric exists but has never been updated ─────────
+        # Catches the case where BACKUP_NOTIFY_TOKEN is misconfigured or the
+        # backend just restarted — the gauge is 0 until the first successful
+        # backup heartbeat arrives. This fires 26 hours after process start so
+        # operators notice misconfiguration before the first real backup window
+        # elapses.
+        - alert: BackupNotRun
+          expr: backup_last_success_timestamp_seconds == 0
+          for: 26h
+          labels:
+            severity: warning
+          annotations:
+            summary: "No backup heartbeat received since process start"
+            description: >
+              backup_last_success_timestamp_seconds is 0, meaning the
+              backend has never received a successful backup heartbeat
+              since it last started. Verify that BACKUP_NOTIFY_TOKEN is
+              set in both the backup and backend containers and that the
+              backup container can reach the backend on
+              BACKEND_INTERNAL_URL.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
+        # ── Warning: weekly CI restore test has not succeeded within 8 days ──
+        # last_backup_restore_test_age_seconds is recomputed on every scrape by
+        # backend/src/metrics/index.js from the timestamp recorded via
+        # POST /api/internal/backup-restore-test-heartbeat, which the weekly
+        # backup-restore-test GitHub Actions job calls after
+        # scripts/test-backup-recovery.sh succeeds. See issue #1413.
+        - alert: BackupRestoreTestStale
+          expr: last_backup_restore_test_age_seconds > 691200
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup restore CI test has not succeeded in over 8 days"
+            description: >
+              last_backup_restore_test_age_seconds is
+              {{ $value | humanizeDuration }} (threshold: 8 days). The
+              weekly backup-restore-test CI workflow may have failed
+              silently. Check the workflow run history in GitHub Actions.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+
+        # ── Warning: backup restore has not been verified within 8 days ──────
+        # last_backup_verification_age_seconds is recomputed on every scrape by
+        # backend/src/metrics/index.js from the timestamp recorded via
+        # POST /api/internal/backup-verification-heartbeat, which
+        # scripts/verify-latest-backup.sh calls after successfully restoring
+        # the latest backup to a temporary instance and matching document
+        # counts against production. See issue #1343.
+        - alert: BackupVerificationStale
+          expr: last_backup_verification_age_seconds > 691200
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup restore has not been verified in over 8 days"
+            description: >
+              last_backup_verification_age_seconds is
+              {{ $value | humanizeDuration }} (threshold: 8 days). The
+              weekly backup-verify job may have failed silently. Check
+              `docker logs <backup-verify-container>`.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/backup-staleness.md"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-heap-usage
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: heap_usage
+      interval: 60s
+      rules:
+        # ── Critical: heap usage sustained above 85% ────────────────────────────
+        # Node.js heap_used_ratio is the ratio of used heap to total heap size.
+        # Above 0.85 for 10 minutes indicates sustained memory pressure and risk
+        # of out-of-memory crashes. Alert immediately.
+        - alert: NodeHeapUsageHigh
+          expr: >
+            nodejs_heap_used_ratio > 0.85
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node.js heap usage above 85%"
+            description: >
+              This instance's Node.js heap utilization has been above 85% for
+              10 minutes ({{ $value | printf "%.1%" }}). Memory pressure is high
+              and an out-of-memory crash is imminent. Check for memory leaks,
+              consider restarting the instance, or increase heap size limits.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-horizon-failover
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: horizon_failover
+      interval: 60s
+      rules:
+        # ── Warning: failovers are happening at all ───────────────────────────
+        # horizon_failover_total (horizonFailoverClient.js) increments every
+        # time a call fails over from one Horizon endpoint to the next. In
+        # steady state this should be ~0; any sustained rate means the
+        # currently-active endpoint (or endpoints) is degraded.
+        - alert: HorizonFailoverEventsOccurring
+          expr: sum(rate(horizon_failover_total[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Horizon endpoint failovers are occurring"
+            description: >
+              The Horizon failover client has been switching endpoints for 15
+              minutes ({{ $value | printf "%.4f" }}/s). Check
+              horizon_circuit_breaker_state per endpoint (0=closed, 1=open,
+              2=half_open) to see which Horizon URL is degraded.
+
+        # ── Critical: a circuit breaker has been open for a sustained period ──
+        # horizon_circuit_breaker_state == 1 means that endpoint has been pulled
+        # out of rotation after CB_FAILURE_THRESHOLD consecutive 5xx/429/network
+        # failures. A single endpoint open briefly is expected recovery
+        # behaviour; open for 5+ minutes means it is not coming back on its own.
+        - alert: HorizonCircuitBreakerOpen
+          expr: horizon_circuit_breaker_state == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Horizon circuit breaker open for {{ $labels.url }}"
+            description: >
+              The circuit breaker for Horizon endpoint {{ $labels.url }} has
+              been open for over 5 minutes. Traffic is failing over to the next
+              configured endpoint (if any). Check that endpoint's health
+              directly.
+
+        # ── Critical: every configured Horizon endpoint is unavailable ───────
+        # min() across all endpoints' circuit-breaker state is 1 only when every
+        # single one is open (closed=0 or half_open=2 would pull the min down).
+        # This is the "HORIZON_ALL_UNAVAILABLE" condition from
+        # horizonFailoverClient.js#call — payment sync is fully stalled.
+        - alert: HorizonAllEndpointsUnavailable
+          expr: min(horizon_circuit_breaker_state) == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "All Horizon endpoints are unavailable — payment sync stalled"
+            description: >
+              Every configured Horizon endpoint has had its circuit breaker open
+              for at least 2 minutes. The transaction poller cannot reach
+              Horizon at all; no new payments are being confirmed. Page on-call
+              immediately.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-horizon-poll
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: horizon_poll
+      interval: 60s
+      rules:
+        # ── Warning: some tenant is falling behind the documented SLA ─────────
+        # horizon_poll_max_deferral_cycles is the direct input to the max
+        # sync-delay figure in docs/horizon-rate-limits.md:
+        #   max delay ≈ (max_deferral_cycles + 1) × poll interval
+        # A sustained value above 5 means at least one school is being deferred
+        # repeatedly and its parents are seeing stale payment state.
+        - alert: HorizonPollSchoolFallingBehind
+          expr: horizon_poll_max_deferral_cycles > 5
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A school is repeatedly deferred by the Horizon poll budget"
+            description: >
+              At least one school has been deferred for {{ $value }} consecutive
+              poll cycles, putting it outside the documented sync-delay SLA. The
+              fleet has likely outgrown its Horizon allowance. See the
+              "Operational guidance" section of docs/horizon-rate-limits.md.
+
+        # ── Warning: we are still hitting the real limit ──────────────────────
+        # In steady state the budget should keep the poller below Horizon's
+        # limit, so any sustained 429 rate means the configured limit is higher
+        # than the real one, or HORIZON_POLL_REPLICA_COUNT is wrong and N
+        # replicas are each spending a full budget.
+        - alert: HorizonRateLimitedDespiteBudget
+          expr: rate(horizon_rate_limited_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Horizon is returning 429s even with poll budgeting active"
+            description: >
+              The poller is still being rate limited ({{ $value | printf "%.3f" }}/s).
+              Either HORIZON_RATE_LIMIT_PER_HOUR exceeds the real allowance, or
+              HORIZON_POLL_REPLICA_COUNT does not match the running replica count
+              (each replica then spends a full budget). Check both before adding
+              tenants.
+
+        # ── Critical: adaptive ceiling has collapsed ──────────────────────────
+        # AIMD halves the ceiling on every 429-affected cycle. Sitting near the
+        # floor means the configured limit is badly wrong and sync throughput is
+        # a small fraction of what operators think it is.
+        - alert: HorizonPollBudgetCollapsed
+          expr: horizon_poll_budget_ceiling <= 4
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Horizon poll budget has collapsed to its floor"
+            description: >
+              The adaptive per-cycle budget has been pulled down to the minimum
+              for 30 minutes, meaning sustained rate limiting. Payment sync is
+              running at a small fraction of nominal throughput and delays will
+              be far outside the documented SLA for every tenant.
+
+        # ── Warning: budget is chronically saturated ──────────────────────────
+        # Deferrals are a normal, ordered response to a bound budget — but a
+        # persistently non-zero deferred count is the signal that the fleet has
+        # outgrown its allowance and needs a capacity decision.
+        - alert: HorizonPollBudgetSaturated
+          expr: horizon_poll_deferred_schools > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Horizon poll budget saturated for an hour"
+            description: >
+              {{ $value }} schools have been deferred continuously for an hour.
+              Polling is keeping up only by prioritising; quiet schools are being
+              served purely by the aging guard. Raise the Horizon allowance, move
+              to a dedicated Horizon instance, lengthen the poll interval, or
+              shard schools across replicas.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-leader-election
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: leader_election
+      interval: 30s
+      rules:
+        # ── Critical: split brain ────────────────────────────────────────────
+        # leader_election_is_leader is 1 on exactly one replica in a healthy
+        # deployment. A Redis network partition can leave two replicas both
+        # believing they hold scheduler:leader, at which point every singleton
+        # scheduler runs twice: duplicate reminder emails, doubled audit events,
+        # and reconciliation writes racing each other. Summing across instances
+        # is the only way to see it — no single replica can tell on its own.
+        - alert: LeaderElectionSplitBrain
+          expr: sum(leader_election_is_leader) > 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Split brain — {{ $value }} replicas claim scheduler leadership"
+            description: >
+              More than one replica has reported leader_election_is_leader = 1
+              for over a minute. Singleton schedulers are running on each of
+              them, so reminders and audit events are being duplicated and
+              reconciliation may be writing conflicting results. Check Redis
+              reachability from every replica and restart the extra leaders.
+
+        # ── Critical: nobody is the leader ───────────────────────────────────
+        # The mirror image of split brain: no replica holds the lock, so the
+        # singleton schedulers are not running anywhere and reminders,
+        # reconciliation, and finalization have silently stopped.
+        - alert: LeaderElectionNoLeader
+          expr: sum(leader_election_is_leader) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No replica holds scheduler leadership"
+            description: >
+              No replica has held the scheduler leader lock for 5 minutes.
+              Reminder dispatch, reconciliation, and payment finalization are
+              not running. Check that Redis is reachable and that at least one
+              replica is up.
+
+        # ── Warning: leadership is churning ──────────────────────────────────
+        # A healthy leader renews well inside LEADER_LOCK_TTL_MS and keeps its
+        # tenure growing for hours. A tenure that stays under a few minutes
+        # means the lock keeps expiring and being re-acquired — usually Redis
+        # latency or a saturated event loop starving the renew timer.
+        - alert: LeaderElectionChurning
+          expr: max(leader_election_tenure_seconds) < 300
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Scheduler leadership is churning"
+            description: >
+              No replica has held leadership for longer than 5 minutes at any
+              point in the last 15 minutes. The leader lock is expiring before
+              it is renewed. Check Redis latency and event-loop lag on the
+              replicas, and review LEADER_LOCK_TTL_MS against
+              LEADER_RENEW_INTERVAL_MS.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-mongodb
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: mongodb
+      interval: 60s
+      rules:
+        # ── Critical: not connected to MongoDB ────────────────────────────────
+        # mongodb_connection_state mirrors mongoose.connection.readyState
+        # (1=connected) on every scrape. Every payment read/write depends on
+        # this connection, so any sustained non-connected state is a full
+        # outage of the payment-processing path, not a degradation.
+        - alert: MongoDBDisconnected
+          expr: mongodb_connection_state != 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MongoDB is not connected"
+            description: >
+              mongodb_connection_state has been away from "connected" (1) for
+              over a minute (current value: {{ $value }}; 0=disconnected,
+              2=connecting, 3=disconnecting). Payment reads and writes are
+              failing. Check MongoDB Atlas/replica-set health and network
+              connectivity from the backend.
+
+        # ── Warning: driver reporting connection errors ───────────────────────
+        # mongodb_connection_errors_total increments on every 'error' event from
+        # the driver (config/database.js). The driver retries transparently for
+        # many of these, so a low sustained rate is worth investigating before
+        # it escalates into MongoDBDisconnected.
+        - alert: MongoDBConnectionErrorsElevated
+          expr: rate(mongodb_connection_errors_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MongoDB connection errors are occurring"
+            description: >
+              The MongoDB driver has reported connection errors for 5 minutes
+              ({{ $value | printf "%.3f" }}/s). The connection pool may be
+              unstable even though mongodb_connection_state still reads
+              "connected". Check application logs for "[MongoDB] Connection
+              error" entries.
+
+    - name: redis
+      interval: 60s
+      rules:
+        # ── Warning: Redis memory approaching maxmemory ───────────────────────
+        # Redis runs with maxmemory-policy noeviction (required by BullMQ: with
+        # eviction, job keys silently disappear). That means once used memory
+        # reaches maxmemory, Redis rejects all writes with OOM errors instead of
+        # evicting keys — the BullMQ retry/dead-letter queues, distributed locks,
+        # fencing counters, rate-limit counters, session revocations and
+        # idempotency keys all stop being written. Alert well before the limit so
+        # there is time to raise maxmemory or shed load.
+        # Runbook: docs/runbooks/redis.md (sizing guide: keys per school and per
+        # payment; raise maxmemory or scale out before the limit is hit).
+        - alert: RedisMemoryUsageHigh
+          expr: >
+            redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Redis memory usage is above 80% of maxmemory"
+            description: >
+              Redis is using {{ $value | humanizePercentage }} of its configured
+              maxmemory (redis_memory_used_bytes / redis_memory_max_bytes) for
+              over 10 minutes. Eviction is disabled (maxmemory-policy
+              noeviction), so at maxmemory Redis will reject writes and the
+              BullMQ queues, locks, rate-limit counters and idempotency keys will
+              stop accepting writes. Raise maxmemory, review the sizing guide in
+              docs/runbooks/redis.md, and check for unbounded key growth (e.g.
+              fencing counters).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-payment-limits
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: payment_limits
+      interval: 60s
+      rules:
+        # ── Warning: limits are rejecting payments at a sustained rate ───────
+        # payment_limit_triggered_total{school_id,asset,code} is incremented
+        # whenever a payment is rejected by the configured min/max (#1117).
+        # Before this metric, limits were a control with no feedback loop: there
+        # was no signal telling an operator that the configured values were
+        # mismatched to real payment behaviour, and adjusting them needed a
+        # redeploy anyway.
+        #
+        # A sustained AMOUNT_TOO_HIGH rate is the interesting one — it is either
+        # a fee structure the ceiling no longer fits, or someone probing with
+        # large amounts. AMOUNT_TOO_LOW is usually dust or a misconfigured
+        # minimum.
+        - alert: PaymentLimitTriggeredFrequently
+          expr: sum(rate(payment_limit_triggered_total[15m])) by (school_id, asset, code) > 0.01
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Payment limit {{ $labels.code }} rejecting payments for {{ $labels.school_id }}"
+            description: >
+              Payments in {{ $labels.asset }} for school {{ $labels.school_id }}
+              have been rejected as {{ $labels.code }} for 15 minutes
+              ({{ $value | printf "%.4f" }}/s). Either the configured limits no
+              longer match this school's fee structure, or someone is probing with
+              out-of-range amounts. Review the effective limits via
+              GET /api/admin/payment-limits?schoolId={{ $labels.school_id }} and
+              adjust with PUT if warranted — this no longer requires a redeploy.
+
+        # ── Critical: the limits are rejecting most attempted payments ───────
+        # Compares rejections against payments entering the funnel. A high ratio
+        # means the limits are misconfigured badly enough to be an outage for
+        # parents trying to pay, not a fraud signal.
+        - alert: PaymentLimitBlockingMostPayments
+          expr: >
+            sum(rate(payment_limit_triggered_total[15m])) by (school_id)
+              /
+            clamp_min(sum(rate(payment_funnel_total{stage="received"}[15m])) by (school_id), 0.001)
+              > 0.5
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Payment limits are blocking most payments for {{ $labels.school_id }}"
+            description: >
+              More than half of payments received for school
+              {{ $labels.school_id }} over the last 15 minutes were rejected by
+              the configured payment limits. This is very likely a
+              misconfiguration — a limit set in the wrong asset's value range will
+              do exactly this. Parents cannot pay. Check
+              GET /api/admin/payment-limits?schoolId={{ $labels.school_id }}; the
+              `source` field shows which layer (school override, global, or the
+              env fallback) supplied the active value.
+
+        # ── Warning: payments are stuck in SUBMITTED ─────────────────────────
+        # payments_stuck_submitted is a cross-tenant gauge of payments left in
+        # SUBMITTED longer than STUCK_PAYMENT_THRESHOLD_MS (#2002). The
+        # reconciliation scheduler re-queues them every interval, so a sustained
+        # non-zero value means re-queuing is failing or the scheduler is not
+        # running.
+        - alert: PaymentsStuckSubmitted
+          expr: payments_stuck_submitted > 0
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $value }} payments stuck in SUBMITTED"
+            description: >
+              {{ $value }} payments have been in SUBMITTED status longer than the
+              reconciliation threshold for at least 20 minutes. The stuck-payment
+              reconciliation scheduler should have re-queued them; check its logs
+              and the transaction queue for failures.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-payment-processing-latency
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: payment_processing_latency
+      interval: 60s
+      rules:
+        # ── Warning: payment processing p95 latency degraded ──────────────────
+        # Track the 95th percentile of payment processing duration from detection
+        # to confirmation. A 10-second threshold matches the README documentation
+        # for acceptable SLA.
+        - alert: PaymentProcessingLatencyHigh
+          expr: >
+            histogram_quantile(0.95, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le)) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Payment processing p95 latency above 10s"
+            description: >
+              The 95th-percentile payment processing time (from transaction
+              detection to confirmation) has been above 10 seconds for 5 minutes
+              ({{ $value | printf "%.2f" }}s). Check Horizon polling latency
+              (horizon_request_duration_seconds) and the transaction retry queue
+              depth (queue_depth{queue="transaction-retry"}).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-price-feed
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: price_feed
+      interval: 60s
+      rules:
+        # ── Warning: feed has been stale for 5+ minutes ──────────────────────
+        # price_feed_staleness_seconds rises continuously while providers are
+        # down. A 5-minute threshold gives a heads-up before fiat display
+        # silently degrades.
+        - alert: PriceFeedStalenessWarning
+          expr: price_feed_staleness_seconds > 300
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Price feed {{ $labels.provider }} is stale (> 5 min)"
+            description: >
+              The {{ $labels.provider }} price feed has not returned a fresh rate
+              for {{ $value | humanizeDuration }}. Fiat display may be serving
+              cached (stale) values. Check CoinGecko / Coinbase status and
+              StellarEduPay logs.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/price-feed-staleness.md"
+            dashboard_url: "http://localhost:3001/d/stellaredupay-price-feed/stellaredupay-price-feed-health"
+
+        # ── Critical: stale flag set and no recovery after 15 minutes ────────
+        # price_feed_stale{provider} is set to 1 only when the
+        # stale-while-revalidate window is exhausted. At that point fiat amounts
+        # show "rate unavailable" to end users.
+        - alert: PriceFeedStale
+          expr: price_feed_stale == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Price feed {{ $labels.provider }} cache exhausted — fiat display degraded"
+            description: >
+              The {{ $labels.provider }} price feed stale-while-revalidate window
+              has been exhausted for more than 15 minutes. All fiat currency
+              conversions are returning "rate unavailable". Immediate investigation
+              required. Last successful fetch timestamp:
+              {{ query "price_feed_last_success_timestamp{provider=\"" }}{{ $labels.provider }}{{ query "\"}" | first | value | humanizeTimestamp }}.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/price-feed-staleness.md"
+            dashboard_url: "http://localhost:3001/d/stellaredupay-price-feed/stellaredupay-price-feed-health"
+
+        # ── Info: last-success timestamp has not advanced in 10 minutes ──────
+        # Catches the edge case where the metric exists but is frozen (process
+        # restart wiped the in-memory counter and no successful fetch has happened).
+        - alert: PriceFeedNoRecentSuccess
+          expr: (time() - price_feed_last_success_timestamp) > 600 and price_feed_last_success_timestamp > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No successful price feed fetch from {{ $labels.provider }} in 10 min"
+            description: >
+              {{ $labels.provider }} has not produced a successful price feed fetch
+              for {{ $value | humanizeDuration }}. Fiat display may degrade soon.
+            runbook_url: "https://github.com/manuelusman73-png/StellarEduPay/blob/main/docs/runbooks/price-feed-staleness.md"
+            dashboard_url: "http://localhost:3001/d/stellaredupay-price-feed/stellaredupay-price-feed-health"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-queue-backpressure
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: queue_backpressure
+      interval: 60s
+      rules:
+        # ── Warning: backpressure threshold reached ───────────────────────────
+        # payment_processor_queue_depth is the concurrent payment processor's
+        # in-flight count (ConcurrentPaymentProcessor.activeCount);
+        # payment_processor_queue_backpressure_high_water mirrors the live
+        # configured QUEUE_BACKPRESSURE_HIGH_WATER value (config/index.js), so
+        # this alert stays correct even if that env var is overridden. Crossing
+        # it is exactly the condition that makes transactionPollingService
+        # throttle its batch size (getEffectiveBatchSize) — expected behaviour,
+        # but sustained for 5+ minutes means the processor isn't draining fast
+        # enough to keep up with intake.
+        - alert: PaymentQueueBackpressureHighWater
+          expr: payment_processor_queue_depth >= payment_processor_queue_backpressure_high_water
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Payment processor queue at backpressure high-water mark"
+            description: >
+              The payment processor's in-flight queue depth
+              ({{ $value }}) has been at or above the configured backpressure
+              high-water mark for 5 minutes. The poller is throttling intake
+              (see transactionPollingService.getEffectiveBatchSize). Check
+              whether Horizon or MongoDB latency is the bottleneck.
+
+        # ── Critical: queue at/near configured maximum depth ─────────────────
+        # payment_processor_queue_max_depth mirrors MAX_QUEUE_DEPTH. At or above
+        # it, processPayment starts rejecting new work outright with
+        # QUEUE_FULL — a payment-processing outage for whoever gets rejected.
+        - alert: PaymentQueueNearCapacity
+          expr: payment_processor_queue_depth >= payment_processor_queue_max_depth
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Payment processor queue is full — payments are being rejected"
+            description: >
+              The payment processor's in-flight queue depth
+              ({{ $value }}) has reached the configured MAX_QUEUE_DEPTH for 2
+              minutes. New payments are being rejected with QUEUE_FULL. Page
+              on-call; consider raising MAX_QUEUE_DEPTH or investigating why the
+              queue isn't draining.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-receipts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: receipts
+      interval: 60s
+      rules:
+        # ── Warning: receipts are failing at a low but sustained rate ────────
+        # receipt_generation_failures_total{source} is incremented by both the
+        # inline verify path and the payment-saved subscriber (#1122). Before
+        # that metric existed, the inline path swallowed errors entirely and a
+        # broken receipt pipeline was invisible until a parent complained.
+        #
+        # Any sustained non-zero rate is worth a look: receipt generation is
+        # idempotent and should not fail transiently at volume.
+        - alert: ReceiptGenerationFailures
+          expr: sum(rate(receipt_generation_failures_total[10m])) by (source) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Receipt generation failing via {{ $labels.source }}"
+            description: >
+              Receipt generation has been failing on the {{ $labels.source }} path
+              for 10 minutes ({{ $value | printf "%.3f" }}/s). Payments are still
+              being confirmed on-chain, but parents and admins will not receive
+              receipts. Search logs for "receipt generation failed" or "Receipt
+              subscriber failed" to get the txHash and underlying error.
+
+        # ── Critical: receipts are failing for essentially every payment ─────
+        # Compares receipt failures against confirmed-payment throughput. A ratio
+        # near 1 means the receipt pipeline is systemically down (bad template,
+        # receipt-model/DB fault, downstream dependency outage) rather than
+        # hitting isolated bad records.
+        - alert: ReceiptGenerationSystemicFailure
+          expr: >
+            sum(rate(receipt_generation_failures_total[15m]))
+              /
+            clamp_min(sum(rate(payment_funnel_total{stage="confirmed"}[15m])), 0.001)
+              > 0.5
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Receipt generation is systemically broken"
+            description: >
+              More than half of confirmed payments have failed to produce a
+              receipt over the last 15 minutes. This is an outage of the receipt
+              pipeline, not isolated bad data. Payments themselves are unaffected
+              (funds are on-chain and recorded), but every affected payment will
+              need its receipt backfilled once the root cause is fixed.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-transaction-queue
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: transaction_queue
+      interval: 60s
+      rules:
+        # transaction_queue_depth_alert_threshold mirrors the configurable
+        # TRANSACTION_QUEUE_ALERT_THRESHOLD env var (default 100), so this alert
+        # stays correct even if the threshold is overridden. Sustained backlog
+        # means the BullMQ transaction-processing worker isn't keeping up with
+        # intake — payments stop confirming even though /health may still report
+        # healthy for other subsystems.
+        - alert: TransactionQueueBacklogSustained
+          expr: transaction_queue_depth >= transaction_queue_depth_alert_threshold
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Transaction processing queue backlog sustained for 5+ minutes"
+            description: >
+              The transaction queue depth ({{ $value }}) has been at or above
+              the configured alert threshold for 5 minutes. Check the BullMQ
+              worker's liveness (see /health workers.transactionQueueWorker) and
+              whether Horizon or MongoDB latency is the bottleneck.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-wallet-health
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  # #1938 — settlement-wallet readiness. school_wallet_warning{code} is the number
+  # of active schools whose wallet currently raises that readiness warning, set by
+  # the daily leader-only wallet-health job.
+  groups:
+    - name: school_wallet_health
+      interval: 1h
+      rules:
+        # A school whose wallet has no USDC trustline makes every USDC payment fail
+        # on the payer's side (op_no_trust). Parents see errors; the school sees nothing.
+        - alert: SchoolWalletUsdcTrustlineMissing
+          expr: sum(school_wallet_warning{code="USDC_TRUSTLINE_MISSING"}) > 0
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} school wallet(s) cannot receive USDC"
+            description: >
+              At least one active school's settlement wallet has no USDC trustline to the
+              pinned issuer while USDC is accepted. USDC payments to it will fail. See
+              GET /api/schools/:schoolId/wallet-health for the affected school.
+
+        # An account that does not exist on the network cannot receive anything.
+        - alert: SchoolWalletAccountNotFound
+          expr: sum(school_wallet_warning{code="ACCOUNT_NOT_FOUND"}) > 0
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} school wallet(s) do not exist on the Stellar network"
+            description: >
+              An active school's configured settlement address was not found on Horizon.
+              Payments to it cannot be received until the account is funded or the
+              address is corrected.
+
+        # Below the reserve floor a new trustline or sponsored entry cannot be added.
+        - alert: SchoolWalletLowReserveHeadroom
+          expr: sum(school_wallet_warning{code="LOW_RESERVE_HEADROOM"}) > 0
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $value }} school wallet(s) are close to the base reserve"
+            description: >
+              At least one school wallet has less than the minimum headroom above its base
+              reserve. Top it up before adding trustlines or other ledger entries.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-watchdog
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: watchdog
+      interval: 60s
+      rules:
+        # ── Watchdog: always firing (#2018) ───────────────────────────────────
+        # This alert is always true, so it is always delivered to Alertmanager.
+        # The `watchdog-heartbeat` receiver in monitoring/alertmanager.yml
+        # forwards it to a dead-man's-switch service. If that service stops
+        # receiving pings, the alert pipeline itself (Prometheus → Alertmanager
+        # → receiver) is broken, and the dead-man's-switch should notify someone.
+        # Routed by alertname, not severity, so it never pages or posts to Slack.
+        - alert: Watchdog
+          expr: vector(1)
+          labels:
+            severity: none
+          annotations:
+            summary: "Alert pipeline heartbeat — if this stops arriving, alerting is broken"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stellaredupay-webhook-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: webhook_alerts
+      rules:
+        # Alert when more than 20% of webhook deliveries are failing over a 5-minute window
+        - alert: WebhookHighFailureRate
+          expr: |
+            (
+              rate(webhook_deliveries_total{outcome="failure"}[5m])
+              /
+              rate(webhook_deliveries_total[5m])
+            ) > 0.2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High webhook delivery failure rate"
+            description: >
+              More than 20% of webhook deliveries are failing (current rate:
+              {{ printf "%.1f" (mul 100 $value) }}%).
+              Check dead-letter queue and endpoint health.
+
+        # Alert when dead-letter count exceeds 50 for any school
+        - alert: WebhookDeadLetterGrowing
+          expr: webhook_dead_letter_total > 50
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Webhook dead-letter queue growing for school {{ $labels.schoolId }}"
+            description: >
+              School {{ $labels.schoolId }} has {{ $value }} webhook deliveries in the
+              dead-letter queue. Investigate endpoint health and replay failed deliveries
+              via POST /api/webhook-deliveries/:id/replay or the admin DLQ endpoint.
+
+        # Alert when webhook delivery latency p95 exceeds 5 seconds
+        - alert: WebhookHighLatency
+          expr: |
+            histogram_quantile(0.95, rate(webhook_delivery_duration_ms_bucket[5m])) > 5000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Webhook delivery p95 latency is high"
+            description: >
+              The 95th-percentile webhook delivery time has exceeded 5 seconds.
+              Deliveries approaching the 10 s timeout may be failing silently.

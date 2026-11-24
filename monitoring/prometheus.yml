@@ -9,6 +9,14 @@ global:
 rule_files:
   - "alerts/*.yml"
 
+# Send firing alerts to Alertmanager, which routes them to PagerDuty / Slack
+# (#2018). Without this block, alerts only show as "firing" in the Prometheus UI.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+
 scrape_configs:
   - job_name: stellaredupay
     metrics_path: /metrics

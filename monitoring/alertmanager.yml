@@ -1,0 +1,81 @@
+# Alertmanager routing and receivers for the monitoring stack (#2018).
+#
+# Prometheus evaluates the rules in monitoring/alerts/ and forwards firing
+# alerts here. Alertmanager then routes them by `severity`:
+#   critical → PagerDuty (page) + Slack
+#   warning  → Slack
+#   Watchdog → dead-man's-switch webhook (always firing; if it stops arriving,
+#              the alert pipeline itself is broken)
+#
+# Receiver secrets are NOT stored in this file. Each one is read from a file
+# mounted at /etc/alertmanager/secrets/ (see docker-compose.monitoring.yml and
+# monitoring/secrets/README.md). Alertmanager does not expand environment
+# variables in its config, so the *_file options are used instead.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: slack-warnings
+  group_by: ["alertname", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Always-firing heartbeat: send to the dead-man's switch, never to humans.
+    - matchers:
+        - alertname = "Watchdog"
+      receiver: watchdog-heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: false
+
+    - matchers:
+        - severity = "critical"
+      receiver: pagerduty-critical
+      continue: true   # also notify Slack so the channel sees pages
+
+    - matchers:
+        - severity = "critical"
+      receiver: slack-critical
+
+    - matchers:
+        - severity = "warning"
+      receiver: slack-warnings
+
+receivers:
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager/secrets/pagerduty_routing_key
+        send_resolved: true
+
+  - name: slack-critical
+    slack_configs:
+      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+        channel: "#alerts-critical"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+
+  - name: slack-warnings
+    slack_configs:
+      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+        channel: "#alerts-warnings"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+
+  - name: watchdog-heartbeat
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/watchdog_url
+        send_resolved: false
+
+inhibit_rules:
+  # If a critical alert is already firing for an instance, suppress the
+  # warning-level alerts for the same alertname and instance.
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "instance"]
