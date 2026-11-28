@@ -43,7 +43,7 @@ jobs:
       # The "security-and-quality" suite runs the full set of security queries plus
       # quality queries (unused code, dead branches, etc.).
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3
+        uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v3
         with:
           languages: javascript-typescript
           queries: security-and-quality
