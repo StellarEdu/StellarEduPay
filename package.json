@@ -121,7 +121,7 @@
     "bcryptjs": "3.0.3",
     "bullmq": "^6.7.6",
     "decimal.js": "^10.6.0",
-    "ioredis": "^6.0.0",
+    "ioredis": "^6.1.0",
     "node-cache": "^5.1.2"
   }
 }
